@@ -69,3 +69,4 @@ This file tracks current work items and progress.
 - 2026-01-14 22:50: Started design for mono-like context budgeting + compaction (optional modules).
 - 2026-01-14 23:02: Added limits/usage/truncate/budget packages with docs and tests.
 - 2026-01-14 23:28: Added loop helper, adapter helpers, history hook, compat layer, and mono-like example.
+- 2026-01-14 18:59: Updated basic example and streaming docs to show system prompt preservation.
