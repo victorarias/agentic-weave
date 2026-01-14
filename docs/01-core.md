@@ -13,7 +13,9 @@ Register tools and execute tool calls.
 
 ```go
 reg := agentic.NewRegistry()
-reg.Register(MyTool{})
+if err := reg.Register(MyTool{}); err != nil {
+  // handle error
+}
 result, _ := reg.Execute(ctx, agentic.ToolCall{Name: "my_tool", Input: payload})
 ```
 

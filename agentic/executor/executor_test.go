@@ -11,6 +11,7 @@ import (
 type stubExecutor struct {
 	defs    []agentic.ToolDefinition
 	results map[string]agentic.ToolResult
+	errors  map[string]error
 }
 
 func (s stubExecutor) ListTools(ctx context.Context) ([]agentic.ToolDefinition, error) {
@@ -18,6 +19,9 @@ func (s stubExecutor) ListTools(ctx context.Context) ([]agentic.ToolDefinition, 
 }
 
 func (s stubExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+	if err, ok := s.errors[call.Name]; ok {
+		return agentic.ToolResult{}, err
+	}
 	if result, ok := s.results[call.Name]; ok {
 		return result, nil
 	}
@@ -63,5 +67,36 @@ func TestParallelExecutor(t *testing.T) {
 	}
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results")
+	}
+}
+
+func TestParallelExecutorAllowAll(t *testing.T) {
+	inner := stubExecutor{results: map[string]agentic.ToolResult{"a": {Name: "a"}}}
+	p := NewParallel(inner, nil)
+	if _, err := p.ExecuteBatch(context.Background(), []agentic.ToolCall{{Name: "a"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParallelExecutorBatchError(t *testing.T) {
+	boom := agentic.ErrToolNotFound
+	inner := stubExecutor{errors: map[string]error{"b": boom}}
+	p := NewParallel(inner, []string{"a", "b"})
+	_, err := p.ExecuteBatch(context.Background(), []agentic.ToolCall{{Name: "a"}, {Name: "b"}})
+	if err == nil {
+		t.Fatalf("expected batch error")
+	}
+	if _, ok := err.(BatchError); !ok {
+		t.Fatalf("expected BatchError, got %T", err)
+	}
+}
+
+func TestParallelExecutorCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	inner := stubExecutor{results: map[string]agentic.ToolResult{"a": {Name: "a"}}}
+	p := NewParallel(inner, []string{"a"})
+	if _, err := p.ExecuteBatch(ctx, []agentic.ToolCall{{Name: "a"}}); err == nil {
+		t.Fatalf("expected context error")
 	}
 }

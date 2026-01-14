@@ -48,11 +48,11 @@ type message struct {
 }
 
 type contentBlock struct {
-	Type      string
-	Text      string
-	ToolName  string
-	ToolID    string
-	Input     json.RawMessage
+	Type       string
+	Text       string
+	ToolName   string
+	ToolID     string
+	Input      json.RawMessage
 	ToolResult json.RawMessage
 }
 

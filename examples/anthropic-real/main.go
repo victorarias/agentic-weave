@@ -13,13 +13,15 @@ import (
 )
 
 type AddParams struct {
-	A int `json:"a"`
+	A int `json:"a"` // jsonschema_description can be added
 	B int `json:"b"`
 }
 
 type AddResult struct {
 	Sum int `json:"sum"`
 }
+
+var addSchema = generateSchema[AddParams]()
 
 func main() {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
@@ -29,50 +31,71 @@ func main() {
 
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 
-	tool := anthropic.ToolParam{
-		Name:        "add",
-		Description: anthropic.String("Add two integers."),
-		InputSchema: jsonschema.Reflect(AddParams{}),
+	toolParams := []anthropic.ToolParam{
+		{
+			Name:        "add",
+			Description: anthropic.String("Add two integers."),
+			InputSchema: addSchema,
+		},
+	}
+	tools := make([]anthropic.ToolUnionParam, len(toolParams))
+	for i, toolParam := range toolParams {
+		tools[i] = anthropic.ToolUnionParam{OfTool: &toolParam}
 	}
 
 	ctx := context.Background()
-	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model: anthropic.F(anthropic.ModelClaude3_5SonnetLatest),
-		Messages: anthropic.F([]anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock("Add 10 and 32")),
-		}),
-		Tools: anthropic.F([]anthropic.ToolParam{tool}),
-		MaxTokens: anthropic.F(int64(256)),
-	})
-	if err != nil {
-		log.Fatal(err)
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("Add 10 and 32")),
 	}
 
-	for _, block := range msg.Content {
-		if block.Type != "tool_use" {
-			continue
-		}
-		var params AddParams
-		if err := json.Unmarshal(block.Input, &params); err != nil {
-			log.Fatal(err)
-		}
-		result := AddResult{Sum: params.A + params.B}
-		toolResult := anthropic.NewToolResultBlock(block.ID, result, nil)
-
-		followUp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-			Model: anthropic.F(anthropic.ModelClaude3_5SonnetLatest),
-			Messages: anthropic.F([]anthropic.MessageParam{
-				anthropic.NewUserMessage(toolResult),
-			}),
-			MaxTokens: anthropic.F(int64(256)),
+	for {
+		msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+			Model:     anthropic.ModelClaudeSonnet4_5_20250929,
+			MaxTokens: 256,
+			Messages:  messages,
+			Tools:     tools,
 		})
 		if err != nil {
 			log.Fatal(err)
 		}
-		for _, followBlock := range followUp.Content {
-			if followBlock.Type == "text" {
-				fmt.Println(followBlock.Text)
+
+		messages = append(messages, msg.ToParam())
+
+		toolResults := []anthropic.ContentBlockParamUnion{}
+		for _, block := range msg.Content {
+			switch variant := block.AsAny().(type) {
+			case anthropic.TextBlock:
+				fmt.Println(variant.Text)
+			case anthropic.ToolUseBlock:
+				var args AddParams
+				if err := json.Unmarshal([]byte(variant.JSON.Input.Raw()), &args); err != nil {
+					log.Fatal(err)
+				}
+				result := AddResult{Sum: args.A + args.B}
+				b, err := json.Marshal(result)
+				if err != nil {
+					log.Fatal(err)
+				}
+				toolResults = append(toolResults, anthropic.NewToolResultBlock(variant.ID, string(b), false))
 			}
 		}
+
+		if len(toolResults) == 0 {
+			break
+		}
+		messages = append(messages, anthropic.NewUserMessage(toolResults...))
+	}
+}
+
+func generateSchema[T any]() anthropic.ToolInputSchemaParam {
+	reflector := jsonschema.Reflector{
+		AllowAdditionalProperties: false,
+		DoNotReference:            true,
+	}
+	var v T
+	schema := reflector.Reflect(v)
+	return anthropic.ToolInputSchemaParam{
+		Properties: schema.Properties,
+		Required:   schema.Required,
 	}
 }

@@ -1,0 +1,12 @@
+.env
+.env.*
+.DS_Store
+
+# Go
+/bin/
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/

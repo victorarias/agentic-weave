@@ -17,3 +17,16 @@ Thanks for contributing to Agentic Weave.
 ## Reporting Issues
 - Include repro steps, expected behavior, and actual behavior.
 - Add logs or stack traces when possible.
+
+## AI/Vibe-Coded PRs Welcome! 🤖
+
+Built with Codex, Claude, or other AI tools? Awesome - just mark it!
+
+Please include in your PR:
+
+- Mark as AI-assisted in the PR title or description
+- Note the degree of testing (untested / lightly tested / fully tested)
+- Include prompts or session logs if possible (super helpful!)
+- Confirm you understand what the code does
+
+AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
