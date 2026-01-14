@@ -30,11 +30,11 @@
 5) Document advanced tool use feature mapping.
 6) Write implementation guide (package layout, adapters, migration).
 7) Write getting started guide with runnable example.
-8) Provide example app and verify `go test ./...`.
+8) Provide streaming agent example (turn + message events) and verify `go test ./...`.
 9) Add TASKS.md and AGENTS.md instructions for future agents.
 
 ## Deliverables
 - `agentic` core package and `agentic/executor` helpers.
 - Documentation set: `PLAN.md`, `IMPLEMENTATION.md`, `GETTING_STARTED.md`.
-- Runnable example: `examples/basic`.
+- Runnable streaming example: `examples/basic`.
 - TASKS.md workflow instructions for future agents.

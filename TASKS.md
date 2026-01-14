@@ -16,20 +16,20 @@ This file tracks current work items and progress.
 - [x] Add executor helpers (composite, filtered, parallel batch).
 - [x] Add tool search + defer-load interfaces.
 - [x] Add schema hashing helper (optional module).
+- [x] Add typed-tool schema generation helper (optional module).
 - [x] Add event types + EventSink interface (optional module).
-- [ ] Add typed-tool schema generation helper (optional module).
-- [ ] Add skills module with `SkillSource` and file loader.
-- [ ] Add DB-backed skills loader (stub + interface).
-- [ ] Add context module (token counter interface + compaction hook).
-- [ ] Add MCP module (registry + allowlist policy).
-- [ ] Add provider adapter stubs (Anthropic, Gemini) with capability flags.
-- [ ] Add tool search example adapter (stubbed search scoring).
-- [ ] Add defer-load example adapter (lazy fetch stub).
-- [ ] Add tests for registry policy edge cases (schema hash, caller gating).
-- [ ] Add tests for executors (composite, filtered, parallel).
-- [ ] Add documentation for optional modules and adapter responsibilities.
-- [ ] Add detailed extraction/migration checklist from Exsin.
-- [ ] Add README quickstart snippets + badges.
+- [x] Add skills module with `SkillSource` and file loader.
+- [x] Add DB-backed skills loader (stub + interface).
+- [x] Add context module (token counter interface + compaction hook).
+- [x] Add MCP module (registry + allowlist policy).
+- [x] Add provider adapter stubs (Anthropic, Gemini) with capability flags.
+- [x] Add tool search example adapter (stubbed search scoring).
+- [x] Add defer-load example adapter (lazy fetch stub).
+- [x] Add tests for registry policy edge cases (schema hash, caller gating).
+- [x] Add tests for executors (composite, filtered, parallel).
+- [x] Add documentation for optional modules and adapter responsibilities.
+- [x] Add detailed extraction/migration checklist from Exsin.
+- [x] Add README quickstart snippets + badges.
 
 ## Progress Log
 - 2026-01-14 10:18: Created repository structure, AGENTS.md, and TASKS.md.
@@ -41,3 +41,4 @@ This file tracks current work items and progress.
 - 2026-01-14 11:30: Updated example to include agent-style message handling and refreshed Getting Started guide.
 - 2026-01-14 11:33: Added events module and updated example to stream agent events.
 - 2026-01-14 11:38: Added turn events, message IDs, and delta streaming to example.
+- 2026-01-14 11:46: Implemented optional modules, adapters, tests, and docs updates.

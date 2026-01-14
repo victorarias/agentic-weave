@@ -10,6 +10,8 @@ agentic-weave/
     registry.go       # Tool registry and execution
     policy.go         # Allowlist and policy helpers
     errors.go         # Shared errors
+    schema/           # Optional: schema helpers
+    events/           # Optional: event types + sinks
     executor/
       composite.go
       filtered.go
@@ -17,8 +19,7 @@ agentic-weave/
   context/            # Optional: token counting + compaction hooks
   skills/             # Optional: skills loader + SkillSource
   mcp/                # Optional: MCP discovery + allowlist
-  events/             # Optional: event types + EventSink
-  adapters/           # Optional: Anthropic/Gemini adapters (separate module ok)
+  adapters/           # Optional: Anthropic/Gemini adapters
   examples/basic/
 ```
 
@@ -70,13 +71,30 @@ Execute(ctx, call) (ToolResult, error)
 - Use `ToolCall.Caller` for explicit call sources.
 - Executor enforces `AllowedCallers` if set.
 
-## Skills (Optional)
-Add a `SkillSource` interface:
-```
-List(ctx) ([]Skill, error)
-```
-Provide file-based and DB-based implementations. Inject selected skills into
-prompting at the host layer.
+## Optional Modules
+### Schema
+- `schema.HashJSON` for stable schema hashing.
+- `schema.SchemaFromStruct` for basic JSON schema generation from structs.
+
+### Events
+- `events.Event` and `events.Sink` for streaming agent UI updates.
+- Turn-level and message-level events mirror common UI needs.
+
+### Skills
+- `skills.Source` loads skills from file/DB.
+- File source reads markdown with optional frontmatter.
+- DB source is adapter-based for host apps.
+
+### Context
+- `context.Manager` compacts messages with token limits.
+- Uses `TokenCounter` + `CompactionFunc` (host-supplied).
+
+### MCP
+- `mcp.Registry` wraps MCP client tools with allowlist gating.
+
+### Adapters
+- `adapters` provides capability flags and provider stubs.
+- Host apps implement the actual LLM calls.
 
 ## LLM Adapter Responsibilities (Host)
 - Map tool definitions into provider-specific formats.
@@ -84,11 +102,13 @@ prompting at the host layer.
 - Choose tool choice mode (`auto|none|tool`).
 - Decide if tool results enter model context or stay local.
 
-## Migration from Exsin (outline)
-1) Extract `agentic` core and `executor` helpers.
-2) Replace Exsin’s direct registry usage with imported module.
-3) Move optional submodules into separate packages as needed.
-4) Keep gRPC and persistence in Exsin.
+## Migration from Exsin (checklist)
+1) Extract `agentic` core and `executor` helpers into this module.
+2) Swap Exsin imports to `github.com/victorarias/agentic-weave/agentic`.
+3) Move optional helpers (schema, events, skills, context, mcp) as needed.
+4) Keep gRPC adapters and persistence in Exsin.
+5) Update tests to use the new registry/executor types.
+6) Validate tool schema handshake still rejects mismatches.
 
 ## Testing
 - Unit test registry and executor behavior.
