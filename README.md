@@ -14,13 +14,13 @@ Expected output:
 The sum is 42.
 ```
 
-## Start Here
-- `GETTING_STARTED.md` — minimal setup and first tool
-- `docs/01-core.md` — core concepts (tools, registry, calls)
-- `docs/02-streaming.md` — event streaming and turn boundaries
-- `docs/03-optional-modules.md` — skills, context, MCP
-- `docs/04-adapters.md` — provider adapters + capability flags
-- `docs/05-advanced-tool-use.md` — tool search, examples, defer-load, allowed callers
+## Start Here (progressive docs)
+- `docs/00-overview.md` — orientation and principles
+- `docs/01-core.md` — tools, registry, calls
+- `docs/02-streaming.md` — events and turn boundaries
+- `docs/03-optional-modules.md` — schema, skills, context, MCP
+- `docs/04-adapters.md` — provider adapters and capabilities
+- `docs/05-advanced-tool-use.md` — search, examples, defer-load, allowed callers
 
 ## Examples
 - `examples/basic` — streaming agent loop
@@ -29,12 +29,5 @@ The sum is 42.
 - `examples/anthropic-real` — real Anthropic SDK (nested module)
 - `examples/gemini-real` — real Gemini SDK (nested module)
 
-## Docs Map (progressive)
-1) **Core only**: tool definitions, registry, execute
-2) **Streaming**: events, turn boundaries, deltas
-3) **Optional modules**: skills, context, MCP
-4) **Adapters**: Anthropic/Gemini capability flags
-5) **Advanced features**: tool search, examples, defer-load, allowed callers
-
 ## License
-TBD
+MIT

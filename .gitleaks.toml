@@ -1,0 +1,9 @@
+title = "Agentic Weave Gitleaks"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "env-files"
+description = "Prevent accidental .env commits"
+regex = '''(?i)\.env'''

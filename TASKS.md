@@ -15,4 +15,5 @@ This file tracks current work items and progress.
 - 2026-01-14 14:05: Real SDK examples added as nested modules.
 - 2026-01-14 14:24: MIT LICENSE and CONTRIBUTING added.
 - 2026-01-14 14:36: Docs updated for open-source release.
-- 2026-01-14 15:24: Added .gitignore, updated Anthropic real example, and verified with API key.
+- 2026-01-14 15:24: Added .gitignore + Anthropic real example fix verified.
+- 2026-01-14 15:31: Removed PLAN/IMPLEMENTATION/GETTING_STARTED in favor of docs index.
