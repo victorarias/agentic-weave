@@ -113,7 +113,9 @@ func emitAssistantMessage(sink events.Sink, messageID, content string) {
 func main() {
 	ctx := context.Background()
 	reg := agentic.NewRegistry()
-	reg.Register(AddTool{})
+	if err := reg.Register(AddTool{}); err != nil {
+		log.Fatal(err)
+	}
 
 	agent := NewAgent(reg)
 

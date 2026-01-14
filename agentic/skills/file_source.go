@@ -70,7 +70,9 @@ func loadSkillFile(path, fallbackName string) (Skill, error) {
 		inFront     bool
 		doneFront   bool
 	)
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber++
 		line := scanner.Text()
 		if !doneFront && strings.TrimSpace(line) == "---" {
 			if !inFront {
@@ -82,15 +84,22 @@ func loadSkillFile(path, fallbackName string) (Skill, error) {
 			continue
 		}
 		if inFront && !doneFront {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
 			if key, value, ok := parseFrontmatterLine(line); ok {
 				frontmatter[key] = value
+				continue
 			}
-			continue
+			return Skill{}, fmt.Errorf("invalid frontmatter line %d in %s", lineNumber, path)
 		}
 		lines = append(lines, line)
 	}
 	if err := scanner.Err(); err != nil {
 		return Skill{}, err
+	}
+	if inFront && !doneFront {
+		return Skill{}, fmt.Errorf("unterminated frontmatter in %s", path)
 	}
 
 	skill := Skill{

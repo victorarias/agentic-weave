@@ -64,7 +64,9 @@ func main() {
 	fmt.Printf("Gemini capabilities: tool_use=%v batching=%v vision=%v\n", caps.ToolUse, caps.Batching, caps.Vision)
 
 	reg := agentic.NewRegistry()
-	reg.Register(AddTool{})
+	if err := reg.Register(AddTool{}); err != nil {
+		panic(err)
+	}
 
 	ctx := context.Background()
 	messages := []geminiMessage{{Role: "user", Parts: []geminiPart{{Text: "add 10 and 32"}}}}

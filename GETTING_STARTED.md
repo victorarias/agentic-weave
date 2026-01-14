@@ -36,7 +36,9 @@ These examples live in nested Go modules so the core library stays SDK-free.
 ## Minimal Usage
 ```go
 reg := agentic.NewRegistry()
-reg.Register(MyTool{})
+if err := reg.Register(MyTool{}); err != nil {
+  // handle error
+}
 
 call := agentic.ToolCall{
   Name:  "my_tool",

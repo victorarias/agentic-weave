@@ -61,7 +61,9 @@ func main() {
 	fmt.Printf("Anthropic capabilities: tool_use=%v tool_examples=%v tool_search=%v\n", caps.ToolUse, caps.ToolExamples, caps.ToolSearch)
 
 	reg := agentic.NewRegistry()
-	reg.Register(AddTool{})
+	if err := reg.Register(AddTool{}); err != nil {
+		panic(err)
+	}
 
 	ctx := context.Background()
 	messages := []message{{Role: "user", Content: []contentBlock{{Type: "text", Text: "add 10 and 32"}}}}

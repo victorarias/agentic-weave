@@ -32,6 +32,7 @@ This file tracks current work items and progress.
 - [x] Add README quickstart snippets + badges.
 - [x] Add Anthropic and Gemini example loops.
 - [x] Add real Anthropic and Gemini SDK examples in nested modules.
+- [x] Add progressive documentation set for open-source release.
 
 ## Progress Log
 - 2026-01-14 10:18: Created repository structure, AGENTS.md, and TASKS.md.
@@ -46,3 +47,4 @@ This file tracks current work items and progress.
 - 2026-01-14 11:46: Implemented optional modules, adapters, tests, and docs updates.
 - 2026-01-14 12:04: Added Anthropics/Gemini mock examples and updated Getting Started.
 - 2026-01-14 14:05: Added real SDK examples in nested modules and documented usage.
+- 2026-01-14 14:19: Added progressive open-source docs (overview through advanced topics).

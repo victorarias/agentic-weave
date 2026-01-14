@@ -18,7 +18,9 @@ func (e echoTool) Execute(ctx context.Context, call ToolCall) (ToolResult, error
 
 func TestRegistrySchemaMismatch(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(echoTool{def: ToolDefinition{Name: "echo", SchemaHash: "abc"}})
+	if err := reg.Register(echoTool{def: ToolDefinition{Name: "echo", SchemaHash: "abc"}}); err != nil {
+		t.Fatalf("unexpected register error: %v", err)
+	}
 
 	_, err := reg.Execute(context.Background(), ToolCall{Name: "echo", SchemaHash: "def"})
 	if err != ErrSchemaMismatch {
@@ -28,7 +30,9 @@ func TestRegistrySchemaMismatch(t *testing.T) {
 
 func TestRegistryCallerGating(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(echoTool{def: ToolDefinition{Name: "echo", AllowedCallers: []string{"programmatic"}}})
+	if err := reg.Register(echoTool{def: ToolDefinition{Name: "echo", AllowedCallers: []string{"programmatic"}}}); err != nil {
+		t.Fatalf("unexpected register error: %v", err)
+	}
 
 	_, err := reg.Execute(context.Background(), ToolCall{Name: "echo"})
 	if err == nil {
@@ -44,7 +48,9 @@ func TestRegistryCallerGating(t *testing.T) {
 func TestRegistryExecute(t *testing.T) {
 	reg := NewRegistry()
 	payload := json.RawMessage(`{"ok":true}`)
-	reg.Register(echoTool{def: ToolDefinition{Name: "echo"}})
+	if err := reg.Register(echoTool{def: ToolDefinition{Name: "echo"}}); err != nil {
+		t.Fatalf("unexpected register error: %v", err)
+	}
 
 	result, err := reg.Execute(context.Background(), ToolCall{Name: "echo", Input: payload})
 	if err != nil {
@@ -52,5 +58,15 @@ func TestRegistryExecute(t *testing.T) {
 	}
 	if string(result.Output) != string(payload) {
 		t.Fatalf("expected output to echo input")
+	}
+}
+
+func TestRegistryRegisterValidation(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register(nil); err == nil {
+		t.Fatalf("expected error for nil tool")
+	}
+	if err := reg.Register(echoTool{def: ToolDefinition{Name: ""}}); err == nil {
+		t.Fatalf("expected error for empty tool name")
 	}
 }

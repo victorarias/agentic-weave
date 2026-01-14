@@ -39,19 +39,23 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 }
 
 // Register adds tools to the registry.
-func (r *Registry) Register(tools ...Tool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, tool := range tools {
+func (r *Registry) Register(tools ...Tool) error {
+	for i, tool := range tools {
 		if tool == nil {
-			continue
+			return fmt.Errorf("tool at index %d is nil", i)
 		}
 		def := tool.Definition()
 		if def.Name == "" {
-			continue
+			return fmt.Errorf("tool at index %d has empty name", i)
 		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, tool := range tools {
+		def := tool.Definition()
 		r.tools[def.Name] = tool
 	}
+	return nil
 }
 
 // ListTools returns tool definitions in stable order.

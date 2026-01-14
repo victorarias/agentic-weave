@@ -1,0 +1,9 @@
+# Documentation Index
+
+Start here:
+- `00-overview.md`
+- `01-core.md`
+- `02-streaming.md`
+- `03-optional-modules.md`
+- `04-adapters.md`
+- `05-advanced-tool-use.md`
