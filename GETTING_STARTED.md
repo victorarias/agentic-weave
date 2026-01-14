@@ -20,6 +20,19 @@ go run ./examples/gemini
 ```
 These examples show tool-call loops and message shaping without hitting real APIs.
 
+## Provider Examples (real SDKs)
+```
+cd examples/anthropic-real
+
+go run .
+```
+```
+cd examples/gemini-real
+
+go run .
+```
+These examples live in nested Go modules so the core library stays SDK-free.
+
 ## Minimal Usage
 ```go
 reg := agentic.NewRegistry()
