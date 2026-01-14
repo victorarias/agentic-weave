@@ -3,50 +3,15 @@
 This file tracks current work items and progress.
 
 ## Current Initiative: initial-extraction
-- [x] Define public API and package layout (core + optional submodules).
-- [x] Document advanced tool use support (tool search, examples, defer-load, allowed callers).
-- [x] Provide runnable example and ensure `go test ./...` passes.
-- [x] Draft migration notes for extracting from Exsin.
-
-## Implementation Tasks (small chunks)
-- [x] Create repo scaffolding (`AGENTS.md`, `TASKS.md`, `go.mod`).
-- [x] Add core types (`Tool`, `ToolCall`, `ToolResult`, `ToolDefinition`).
-- [x] Implement registry with policy + schema hash + caller gating.
-- [x] Add policy helpers (allow-all + allowlist).
-- [x] Add executor helpers (composite, filtered, parallel batch).
-- [x] Add tool search + defer-load interfaces.
-- [x] Add schema hashing helper (optional module).
-- [x] Add typed-tool schema generation helper (optional module).
-- [x] Add event types + EventSink interface (optional module).
-- [x] Add skills module with `SkillSource` and file loader.
-- [x] Add DB-backed skills loader (stub + interface).
-- [x] Add context module (token counter interface + compaction hook).
-- [x] Add MCP module (registry + allowlist policy).
-- [x] Add provider adapter stubs (Anthropic, Gemini) with capability flags.
-- [x] Add tool search example adapter (stubbed search scoring).
-- [x] Add defer-load example adapter (lazy fetch stub).
-- [x] Add tests for registry policy edge cases (schema hash, caller gating).
-- [x] Add tests for executors (composite, filtered, parallel).
-- [x] Add documentation for optional modules and adapter responsibilities.
-- [x] Add detailed extraction/migration checklist from Exsin.
-- [x] Add README quickstart snippets + badges.
-- [x] Add Anthropic and Gemini example loops.
-- [x] Add real Anthropic and Gemini SDK examples in nested modules.
-- [x] Add progressive documentation set for open-source release.
-- [x] Add LICENSE and CONTRIBUTING guide.
+- [x] Core module + executors implemented.
+- [x] Optional modules (schema, events, skills, context, MCP) added.
+- [x] Adapter stubs + examples (mock + real SDK) added.
+- [x] Tests + docs + OSS readiness (README, LICENSE, CONTRIBUTING).
 
 ## Progress Log
-- 2026-01-14 10:18: Created repository structure, AGENTS.md, and TASKS.md.
-- 2026-01-14 11:08: Added core module skeleton, docs, and runnable example; `go test ./...` and example run pass.
-- 2026-01-14 11:11: Updated module path to github.com/victorarias/agentic-weave and verified `go test ./...`.
-- 2026-01-14 11:12: Updated PLAN.md with one-line task list and succinct advanced feature mapping.
-- 2026-01-14 11:14: Expanded TASKS.md with implementation task breakdown.
-- 2026-01-14 11:26: Added schema hash helper in `agentic/schema`.
-- 2026-01-14 11:30: Updated example to include agent-style message handling and refreshed Getting Started guide.
-- 2026-01-14 11:33: Added events module and updated example to stream agent events.
-- 2026-01-14 11:38: Added turn events, message IDs, and delta streaming to example.
-- 2026-01-14 11:46: Implemented optional modules, adapters, tests, and docs updates.
-- 2026-01-14 12:04: Added Anthropics/Gemini mock examples and updated Getting Started.
-- 2026-01-14 14:05: Added real SDK examples in nested modules and documented usage.
-- 2026-01-14 14:19: Added progressive open-source docs (overview through advanced topics).
-- 2026-01-14 14:24: Added MIT LICENSE and CONTRIBUTING guide.
+- 2026-01-14 10:18: Created repo scaffolding and task tracking.
+- 2026-01-14 11:11: Core module + docs + runnable example complete.
+- 2026-01-14 11:46: Optional modules, adapters, and tests complete.
+- 2026-01-14 14:05: Real SDK examples added as nested modules.
+- 2026-01-14 14:24: MIT LICENSE and CONTRIBUTING added.
+- 2026-01-14 14:36: Docs updated for open-source release.
