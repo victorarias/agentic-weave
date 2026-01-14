@@ -18,3 +18,4 @@ This file tracks current work items and progress.
 - 2026-01-14 15:24: Added .gitignore + Anthropic real example fix verified.
 - 2026-01-14 15:31: Removed PLAN/IMPLEMENTATION/GETTING_STARTED in favor of docs index.
 - 2026-01-14 18:56: Added `CompactWithSystem` helper and tests for system prompt retention.
+- 2026-01-14 18:59: Updated basic example and streaming docs to show system prompt preservation.

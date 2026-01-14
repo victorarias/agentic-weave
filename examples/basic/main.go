@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/victorarias/agentic-weave/agentic"
+	agenticcontext "github.com/victorarias/agentic-weave/agentic/context"
 	"github.com/victorarias/agentic-weave/agentic/events"
 )
 
@@ -50,11 +51,13 @@ func (AddTool) Execute(ctx context.Context, call agentic.ToolCall) (agentic.Tool
 
 // Agent is a tiny rule-based agent that can call tools and stream events.
 type Agent struct {
-	exec agentic.ToolExecutor
+	exec         agentic.ToolExecutor
+	systemPrompt string
+	messages     []agenticcontext.Message
 }
 
-func NewAgent(exec agentic.ToolExecutor) *Agent {
-	return &Agent{exec: exec}
+func NewAgent(exec agentic.ToolExecutor, systemPrompt string) *Agent {
+	return &Agent{exec: exec, systemPrompt: systemPrompt}
 }
 
 // StreamMessage takes a user message, decides on tool usage, and streams events.
@@ -71,6 +74,8 @@ func (a *Agent) StreamMessage(ctx context.Context, message string, sink events.S
 		emitAssistantMessage(sink, "assistant-1", reply)
 		return reply, nil
 	}
+
+	a.messages = append(a.messages, agenticcontext.Message{Role: "user", Content: message})
 
 	if call, ok := parseAddRequest(message); ok {
 		sink.Emit(events.Event{Type: events.ToolStart, ToolCall: &call})
@@ -93,13 +98,21 @@ func (a *Agent) StreamMessage(ctx context.Context, message string, sink events.S
 			return reply, err
 		}
 		reply := fmt.Sprintf("The sum is %d.", output.Sum)
+		a.messages = append(a.messages, agenticcontext.Message{Role: "assistant", Content: reply})
 		emitAssistantMessage(sink, "assistant-1", reply)
 		return reply, nil
 	}
 
 	reply := "I can help with addition. Try: add 10 and 32"
+	a.messages = append(a.messages, agenticcontext.Message{Role: "assistant", Content: reply})
 	emitAssistantMessage(sink, "assistant-1", reply)
 	return reply, nil
+}
+
+// BuildPrompt demonstrates how to keep the system prompt safe during compaction.
+func (a *Agent) BuildPrompt(ctx context.Context, mgr agenticcontext.Manager) ([]agenticcontext.Message, string, error) {
+	system := agenticcontext.Message{Role: "system", Content: a.systemPrompt}
+	return agenticcontext.CompactWithSystem(ctx, system, a.messages, mgr)
 }
 
 func emitAssistantMessage(sink events.Sink, messageID, content string) {
@@ -113,11 +126,9 @@ func emitAssistantMessage(sink events.Sink, messageID, content string) {
 func main() {
 	ctx := context.Background()
 	reg := agentic.NewRegistry()
-	if err := reg.Register(AddTool{}); err != nil {
-		log.Fatal(err)
-	}
+	reg.Register(AddTool{})
 
-	agent := NewAgent(reg)
+	agent := NewAgent(reg, "You are a helpful assistant.")
 
 	_, err := agent.StreamMessage(ctx, "add 10 and 32", events.SinkFunc(func(e events.Event) {
 		switch e.Type {
@@ -130,6 +141,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	_, _, _ = agent.BuildPrompt(ctx, agenticcontext.Manager{})
 }
 
 func parseAddRequest(message string) (agentic.ToolCall, bool) {
