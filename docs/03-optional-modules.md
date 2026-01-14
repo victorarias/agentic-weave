@@ -10,6 +10,7 @@
 
 ## Context
 - `context.Manager` compacts messages using a token counter + compaction hook.
+- `context.CompactWithSystem` preserves the system prompt and inserts the summary after it.
 
 ## MCP
 - `mcp.Registry` wraps an MCP client and gates by allowlist.
