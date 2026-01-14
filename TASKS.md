@@ -30,6 +30,7 @@ This file tracks current work items and progress.
 - [x] Add documentation for optional modules and adapter responsibilities.
 - [x] Add detailed extraction/migration checklist from Exsin.
 - [x] Add README quickstart snippets + badges.
+- [x] Add Anthropic and Gemini example loops.
 
 ## Progress Log
 - 2026-01-14 10:18: Created repository structure, AGENTS.md, and TASKS.md.
@@ -42,3 +43,4 @@ This file tracks current work items and progress.
 - 2026-01-14 11:33: Added events module and updated example to stream agent events.
 - 2026-01-14 11:38: Added turn events, message IDs, and delta streaming to example.
 - 2026-01-14 11:46: Implemented optional modules, adapters, tests, and docs updates.
+- 2026-01-14 12:04: Added Anthropics/Gemini mock examples and updated Getting Started.

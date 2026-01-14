@@ -11,6 +11,15 @@ Expected output:
 The sum is 42.
 ```
 
+## Provider Examples (mocked loops)
+```
+go run ./examples/anthropic
+```
+```
+go run ./examples/gemini
+```
+These examples show tool-call loops and message shaping without hitting real APIs.
+
 ## Minimal Usage
 ```go
 reg := agentic.NewRegistry()
