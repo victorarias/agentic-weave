@@ -15,6 +15,7 @@ Adapters report supported features:
 ## Examples
 - `examples/anthropic` and `examples/anthropic-real`
 - `examples/gemini` and `examples/gemini-real`
+- `adapters/vertex` for Vertex Gemini capability flags.
 
 ## Responsibilities
 - Convert tool definitions to provider formats

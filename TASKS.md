@@ -2,6 +2,10 @@
 
 This file tracks current work items and progress.
 
+## Current Initiative: vertex-provider
+- [x] Add Vertex Gemini provider (ADC-only) under agentic/providers/vertex.
+- [x] Add docs + example usage.
+
 ## Current Initiative: mono-parity-context
 - [x] Design optional, pluggable context budgeting + compaction + truncation modules.
 - [x] Define minimal interfaces for model limits + usage reporting.
@@ -10,6 +14,8 @@ This file tracks current work items and progress.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
 ## Progress Log
+- 2026-01-16 21:12: Added Vertex Gemini provider, adapter stub, and docs.
+- 2026-01-16 21:05: Started Vertex Gemini provider implementation.
 - 2026-01-14 10:18: Created repo scaffolding and task tracking.
 - 2026-01-14 11:11: Core module + docs + runnable example complete.
 - 2026-01-14 11:46: Optional modules, adapters, and tests complete.

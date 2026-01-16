@@ -8,3 +8,4 @@ Start here:
 - `04-adapters.md`
 - `05-advanced-tool-use.md`
 - `06-context-budgets.md`
+- `07-vertex-provider.md`
