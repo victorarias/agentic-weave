@@ -7,3 +7,4 @@ Start here:
 - `03-optional-modules.md`
 - `04-adapters.md`
 - `05-advanced-tool-use.md`
+- `06-context-budgets.md`

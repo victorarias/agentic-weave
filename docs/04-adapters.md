@@ -21,3 +21,8 @@ Adapters report supported features:
 - Enforce tool-use ordering rules
 - Decide tool choice mode
 - Decide which results enter model context
+- Optionally surface model limits and usage (see `limits` and `usage` packages)
+
+## Helper Utilities
+- `adapters.StopReasonFromFinish` maps provider finish reasons to `usage.StopReason`.
+- `adapters.NormalizeUsage` fills missing usage totals.

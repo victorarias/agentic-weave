@@ -12,6 +12,9 @@ const (
 	MessageEnd    = "message_end"
 	ToolStart     = "tool_execution_start"
 	ToolEnd       = "tool_execution_end"
+	ContextCompactionStart = "context_compaction_start"
+	ContextCompactionEnd   = "context_compaction_end"
+	ToolOutputTruncated    = "tool_output_truncated"
 )
 
 // Event captures a simple agent lifecycle update.
