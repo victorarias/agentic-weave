@@ -50,8 +50,8 @@ func Head(content string, opts Options) Result {
 	if totalLines <= maxLines && totalBytes <= maxBytes {
 		return Result{
 			Content:     content,
-			TotalLines: totalLines,
-			TotalBytes: totalBytes,
+			TotalLines:  totalLines,
+			TotalBytes:  totalBytes,
 			OutputLines: totalLines,
 			OutputBytes: totalBytes,
 		}
@@ -59,14 +59,19 @@ func Head(content string, opts Options) Result {
 
 	firstLineBytes := len([]byte(lines[0]))
 	if firstLineBytes > maxBytes {
+		partial := truncateStringToBytes(lines[0], maxBytes)
+		outputLines := 0
+		if partial != "" {
+			outputLines = 1
+		}
 		return Result{
-			Content:            "",
+			Content:            partial,
 			Truncated:          true,
 			TruncatedBy:        "bytes",
 			TotalLines:         totalLines,
 			TotalBytes:         totalBytes,
-			OutputLines:        0,
-			OutputBytes:        0,
+			OutputLines:        outputLines,
+			OutputBytes:        len([]byte(partial)),
 			FirstLineOverLimit: true,
 		}
 	}
@@ -89,7 +94,7 @@ func Head(content string, opts Options) Result {
 		outputBytes += lineBytes
 	}
 
-	if len(outLines) >= maxLines && outputBytes <= maxBytes {
+	if truncatedBy != "bytes" && len(outLines) >= maxLines && outputBytes <= maxBytes {
 		truncatedBy = "lines"
 	}
 
@@ -117,8 +122,8 @@ func Tail(content string, opts Options) Result {
 	if totalLines <= maxLines && totalBytes <= maxBytes {
 		return Result{
 			Content:     content,
-			TotalLines: totalLines,
-			TotalBytes: totalBytes,
+			TotalLines:  totalLines,
+			TotalBytes:  totalBytes,
 			OutputLines: totalLines,
 			OutputBytes: totalBytes,
 		}
@@ -140,6 +145,7 @@ func Tail(content string, opts Options) Result {
 			if len(outLines) == 0 {
 				partial := truncateStringToBytesFromEnd(line, maxBytes)
 				outLines = append(outLines, partial)
+				outputBytes += len([]byte(partial))
 				lastLinePartial = true
 			}
 			break
@@ -148,7 +154,7 @@ func Tail(content string, opts Options) Result {
 		outputBytes += lineBytes
 	}
 
-	if len(outLines) >= maxLines && outputBytes <= maxBytes {
+	if truncatedBy != "bytes" && len(outLines) >= maxLines && outputBytes <= maxBytes {
 		truncatedBy = "lines"
 	}
 
@@ -265,6 +271,24 @@ func truncateStringToBytesFromEnd(value string, maxBytes int) string {
 		return string(raw[len(raw)-size:])
 	}
 	return string(raw[start:])
+}
+
+func truncateStringToBytes(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	raw := []byte(value)
+	if len(raw) <= maxBytes {
+		return value
+	}
+	end := maxBytes
+	for end > 0 && !utf8.Valid(raw[:end]) {
+		end--
+	}
+	if end <= 0 {
+		return ""
+	}
+	return string(raw[:end])
 }
 
 func min(a, b int) int {

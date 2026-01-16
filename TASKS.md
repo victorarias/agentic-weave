@@ -6,6 +6,17 @@ This file tracks current work items and progress.
 - [x] Add Vertex Gemini provider (ADC-only) under agentic/providers/vertex.
 - [x] Add docs + example usage.
 
+## Current Initiative: loop-truncation-fixes
+- [x] Return partial output when head truncation hits first-line byte limit.
+- [x] Preserve byte-based truncation metadata for tail truncation.
+- [x] Avoid appending compaction summaries for history stores without rewrite support.
+
+## Current Initiative: loop-history-rewriter
+- [x] Require history.Rewriter when budget compaction is configured.
+
+## Current Initiative: compat-compactor-guard
+- [x] Preserve no-compaction behavior when legacy CompactFunc is nil.
+
 ## Current Initiative: mono-parity-context
 - [x] Design optional, pluggable context budgeting + compaction + truncation modules.
 - [x] Define minimal interfaces for model limits + usage reporting.
@@ -14,6 +25,9 @@ This file tracks current work items and progress.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
 ## Progress Log
+- 2026-01-16 21:47: Guarded ToBudget so nil legacy compactor stays disabled.
+- 2026-01-16 21:45: Enforced history.Rewriter for configured compaction; added guard test.
+- 2026-01-16 21:36: Fixed truncation edge cases and history compaction persistence behavior.
 - 2026-01-16 21:12: Added Vertex Gemini provider, adapter stub, and docs.
 - 2026-01-16 21:05: Started Vertex Gemini provider implementation.
 - 2026-01-14 10:18: Created repo scaffolding and task tracking.

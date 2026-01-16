@@ -39,6 +39,20 @@ func TestHeadByteLimit(t *testing.T) {
 	}
 }
 
+func TestHeadFirstLineOverLimit(t *testing.T) {
+	input := "abcdefghij\nsecond"
+	res := Head(input, Options{MaxLines: 10, MaxBytes: 4})
+	if !res.Truncated || res.TruncatedBy != "bytes" {
+		t.Fatalf("expected truncation by bytes")
+	}
+	if res.Content != "abcd" {
+		t.Fatalf("unexpected content: %q", res.Content)
+	}
+	if !res.FirstLineOverLimit {
+		t.Fatalf("expected first line over limit flag")
+	}
+}
+
 func TestTailLineLimit(t *testing.T) {
 	input := "one\ntwo\nthree"
 	res := Tail(input, Options{MaxLines: 2, MaxBytes: 100})
@@ -57,6 +71,20 @@ func TestTailByteLimitPartial(t *testing.T) {
 		t.Fatalf("expected truncation by bytes")
 	}
 	if res.Content != "ghij" {
+		t.Fatalf("unexpected content: %q", res.Content)
+	}
+	if !res.LastLinePartial {
+		t.Fatalf("expected partial line flag")
+	}
+}
+
+func TestTailByteLimitWithMaxLines(t *testing.T) {
+	input := "line1\nline2\nline3"
+	res := Tail(input, Options{MaxLines: 1, MaxBytes: 2})
+	if !res.Truncated || res.TruncatedBy != "bytes" {
+		t.Fatalf("expected truncation by bytes")
+	}
+	if res.Content != "e3" {
 		t.Fatalf("unexpected content: %q", res.Content)
 	}
 	if !res.LastLinePartial {

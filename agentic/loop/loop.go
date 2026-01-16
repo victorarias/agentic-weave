@@ -40,15 +40,15 @@ type Decision struct {
 
 // Config controls the loop behavior.
 type Config struct {
-	Decider         Decider
-	Executor        agentic.ToolExecutor
-	HistoryStore    history.Store
-	Budget          *budget.Manager
-	Truncation      *truncate.Options
-	TruncationMode  truncate.Mode
-	Events          events.Sink
-	MaxTurns        int
-	ToolCallerType  string
+	Decider        Decider
+	Executor       agentic.ToolExecutor
+	HistoryStore   history.Store
+	Budget         *budget.Manager
+	Truncation     *truncate.Options
+	TruncationMode truncate.Mode
+	Events         events.Sink
+	MaxTurns       int
+	ToolCallerType string
 }
 
 // Request provides the conversation input.
@@ -92,6 +92,9 @@ func New(cfg Config) *Runner {
 func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if r.cfg.Decider == nil {
 		return Result{}, errors.New("loop: decider is required")
+	}
+	if err := r.validateConfig(); err != nil {
+		return Result{}, err
 	}
 
 	emit := r.cfg.Events
@@ -208,6 +211,19 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 }
 
+func (r *Runner) validateConfig() error {
+	if r.cfg.Budget == nil || r.cfg.HistoryStore == nil {
+		return nil
+	}
+	if r.cfg.Budget.Counter == nil || r.cfg.Budget.Compactor == nil || r.cfg.Budget.Policy.ContextWindow <= 0 {
+		return nil
+	}
+	if _, ok := r.cfg.HistoryStore.(history.Rewriter); !ok {
+		return errors.New("loop: history store must implement history.Rewriter when budget compaction is enabled")
+	}
+	return nil
+}
+
 func (r *Runner) listTools(ctx context.Context) ([]agentic.ToolDefinition, error) {
 	if r.cfg.Executor == nil {
 		return nil, nil
@@ -252,8 +268,6 @@ func (r *Runner) applyCompaction(ctx context.Context, messages []budget.Message)
 	if r.cfg.HistoryStore != nil {
 		if rewriter, ok := r.cfg.HistoryStore.(history.Rewriter); ok {
 			_ = rewriter.Replace(ctx, compacted)
-		} else if summary != "" {
-			_ = r.cfg.HistoryStore.Append(ctx, budget.Message{Role: "system", Content: summary})
 		}
 	}
 

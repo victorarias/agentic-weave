@@ -40,9 +40,13 @@ func (m Manager) ToBudget(policy budget.Policy) budget.Manager {
 	if policy.KeepLast == 0 {
 		policy.KeepLast = m.KeepLast
 	}
+	var compactor budget.Compactor
+	if m.CompactFunc != nil {
+		compactor = compactorFunc{fn: m.CompactFunc}
+	}
 	return budget.Manager{
 		Counter:   m.Counter,
-		Compactor: compactorFunc{fn: m.CompactFunc},
+		Compactor: compactor,
 		Policy:    policy,
 	}
 }

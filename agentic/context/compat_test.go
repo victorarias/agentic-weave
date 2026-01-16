@@ -37,6 +37,24 @@ func TestToBudgetManager(t *testing.T) {
 	}
 }
 
+func TestToBudgetManagerNoCompactor(t *testing.T) {
+	mgr := Manager{
+		MaxTokens: 5,
+		KeepLast:  1,
+		Counter:   charCounter{},
+	}
+
+	budgetMgr := mgr.ToBudget(budget.Policy{})
+	msgs := []budget.Message{{Role: "user", Content: "hello"}, {Role: "assistant", Content: "world"}}
+	out, summary, changed, err := budgetMgr.CompactIfNeeded(stdctx.Background(), msgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed || summary != "" || len(out) != len(msgs) {
+		t.Fatalf("expected no compaction")
+	}
+}
+
 type charCounter struct{}
 
 func (charCounter) Count(text string) int { return len(text) }

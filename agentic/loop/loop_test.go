@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/victorarias/agentic-weave/agentic"
@@ -133,6 +134,34 @@ func TestRunWithCompaction(t *testing.T) {
 	}
 }
 
+func TestRunWithCompactionRequiresRewriter(t *testing.T) {
+	store := &appendOnlyStore{}
+	compactor := &recordingCompactor{summary: "summary"}
+	budgetMgr := &budget.Manager{
+		Counter:   budget.CharCounter{},
+		Compactor: compactor,
+		Policy: budget.Policy{
+			ContextWindow: 4,
+			ReserveTokens: 0,
+			KeepLast:      1,
+		},
+	}
+
+	runner := New(Config{
+		Decider:      &replyDecider{reply: "ok"},
+		HistoryStore: store,
+		Budget:       budgetMgr,
+	})
+
+	_, err := runner.Run(context.Background(), Request{UserMessage: "ping"})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "history.Rewriter") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 type replyDecider struct {
 	reply string
 }
@@ -149,4 +178,19 @@ type recordingCompactor struct {
 func (r *recordingCompactor) Compact(ctx context.Context, messages []budget.Message) (string, error) {
 	r.last = append([]budget.Message(nil), messages...)
 	return r.summary, nil
+}
+
+type appendOnlyStore struct {
+	messages []budget.Message
+}
+
+func (s *appendOnlyStore) Append(ctx context.Context, msg budget.Message) error {
+	s.messages = append(s.messages, msg)
+	return nil
+}
+
+func (s *appendOnlyStore) Load(ctx context.Context) ([]budget.Message, error) {
+	out := make([]budget.Message, len(s.messages))
+	copy(out, s.messages)
+	return out, nil
 }
