@@ -136,7 +136,7 @@ Notes:
 - If `Counter` or `Compactor` is nil, it becomes a no-op (fully optional).
 - This package can wrap or supersede the existing `agentic/context.Manager`, or be added alongside it as `context/budget` for clarity.
 
-### 5) `agentic/context/events` (Optional Integration)
+### 5) `agentic/events` (Optional Integration)
 Use the existing `events` module to emit compaction and truncation events. No core dependency.
 
 ```go
@@ -163,10 +163,12 @@ type Decider interface {
 
 type Input struct {
 	SystemPrompt string
-	Messages     []budget.Message
+	UserMessage  string
+	History      []budget.Message
 	Tools        []agentic.ToolDefinition
 	ToolCalls    []agentic.ToolCall
 	ToolResults  []agentic.ToolResult
+	Turn         int
 }
 
 type Decision struct {
@@ -189,10 +191,11 @@ mgr := budget.Manager{
 trunc := truncate.Options{MaxLines: 2000, MaxBytes: 50 * 1024}
 
 agent := loop.New(loop.Config{
-	Decider: myDecider,
-	ToolExecutor: registry,
-	Budget: mgr,
-	Truncation: trunc,
+	Decider:        myDecider,
+	Executor:       registry,
+	Budget:         &mgr,
+	Truncation:     &trunc,
+	TruncationMode: truncate.ModeTail,
 })
 ```
 
@@ -221,6 +224,7 @@ This lets the loop detect truncation and decide whether to compact or warn the u
 
 ## Storage & Persistence (Optional Hook)
 Define a minimal interface to allow saving compaction summaries and history if needed, but do not mandate a store.
+When using the loop runner with compaction enabled, the history store must also implement `history.Rewriter` so compaction can replace old messages.
 
 ```go
 package history
@@ -242,7 +246,7 @@ type Store interface {
 
 ## Documentation & Examples
 - Add this design doc to the docs index.
-- Provide a new example (future work): `examples/mono-like` showing one-file setup with compaction + truncation.
+- See `examples/mono-like` for a one-file setup with compaction + truncation.
 
 ---
 

@@ -17,6 +17,10 @@ This file tracks current work items and progress.
 ## Current Initiative: compat-compactor-guard
 - [x] Preserve no-compaction behavior when legacy CompactFunc is nil.
 
+## Current Initiative: docs-accuracy
+- [x] Align context budget docs with loop API and history requirements.
+- [x] Add ADC setup note for Vertex provider.
+
 ## Current Initiative: mono-parity-context
 - [x] Design optional, pluggable context budgeting + compaction + truncation modules.
 - [x] Define minimal interfaces for model limits + usage reporting.
@@ -25,6 +29,7 @@ This file tracks current work items and progress.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
 ## Progress Log
+- 2026-01-16 21:53: Updated docs for loop API, history rewriter requirement, and Vertex ADC setup.
 - 2026-01-16 21:47: Guarded ToBudget so nil legacy compactor stays disabled.
 - 2026-01-16 21:45: Enforced history.Rewriter for configured compaction; added guard test.
 - 2026-01-16 21:36: Fixed truncation edge cases and history compaction persistence behavior.

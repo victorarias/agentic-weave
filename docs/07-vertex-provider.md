@@ -39,4 +39,5 @@ fmt.Println(result.Reply)
 ## Notes
 
 - The caller must run with a GCP identity that has `roles/aiplatform.user` on the target project.
+- Use Application Default Credentials via `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account JSON file.
 - Set `VERTEX_LOCATION=global` when using the global Gemini endpoint.
