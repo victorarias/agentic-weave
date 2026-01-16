@@ -249,7 +249,7 @@ func readResponseBody(resp *http.Response) (string, error) {
 		return "<empty body>", nil
 	}
 	if len(body) > 1200 {
-		return body[:1200] + "... (truncated)"
+		return body[:1200] + "... (truncated)", nil
 	}
 	return body, nil
 }
