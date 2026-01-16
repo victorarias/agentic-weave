@@ -25,6 +25,9 @@ This file tracks current work items and progress.
 - [x] Add integration harness covering loop, truncation, and compaction flows.
 - [x] Expand harness coverage across loop behavior, tools, and policies.
 
+## Current Initiative: ci-harness
+- [x] Add GitHub Actions workflow to run all tests (including harness).
+
 ## Current Initiative: mono-parity-context
 - [x] Design optional, pluggable context budgeting + compaction + truncation modules.
 - [x] Define minimal interfaces for model limits + usage reporting.
@@ -33,6 +36,7 @@ This file tracks current work items and progress.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
 ## Progress Log
+- 2026-01-16 22:16: Added CI workflow to run harness tests on push/PR.
 - 2026-01-16 22:10: Fixed harness truncation test output to use raw lines.
 - 2026-01-16 22:09: Expanded harness to cover loop behavior, tool policies, and truncation modes.
 - 2026-01-16 22:01: Stabilized harness tool truncation scenario.
