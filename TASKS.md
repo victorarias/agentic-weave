@@ -25,6 +25,7 @@ This file tracks current work items and progress.
 - [x] Add integration harness covering loop, truncation, and compaction flows.
 - [x] Expand harness coverage across loop behavior, tools, and policies.
 - [x] Add guard, event ordering, byte truncation, and usage passthrough tests.
+- [x] Add MCP integration and Vertex config tests.
 
 ## Current Initiative: ci-harness
 - [x] Add GitHub Actions workflow to run all tests (including harness).
@@ -37,6 +38,7 @@ This file tracks current work items and progress.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
 ## Progress Log
+- 2026-01-16 22:30: Added MCP integration tests and Vertex provider config checks.
 - 2026-01-16 22:26: Added harness tests for budget guards, event ordering, byte truncation, and usage passthrough.
 - 2026-01-16 22:16: Added CI workflow to run harness tests on push/PR.
 - 2026-01-16 22:10: Fixed harness truncation test output to use raw lines.
