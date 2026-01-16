@@ -29,6 +29,7 @@ This file tracks current work items and progress.
 
 ## Current Initiative: ci-harness
 - [x] Add GitHub Actions workflow to run all tests (including harness).
+- [x] Add formatter and linter checks to CI workflow.
 
 ## Current Initiative: mono-parity-context
 - [x] Design optional, pluggable context budgeting + compaction + truncation modules.
@@ -38,6 +39,7 @@ This file tracks current work items and progress.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
 ## Progress Log
+- 2026-01-16 22:33: Added gofmt and golangci-lint checks to CI workflow.
 - 2026-01-16 22:30: Added MCP integration tests and Vertex provider config checks.
 - 2026-01-16 22:26: Added harness tests for budget guards, event ordering, byte truncation, and usage passthrough.
 - 2026-01-16 22:16: Added CI workflow to run harness tests on push/PR.
