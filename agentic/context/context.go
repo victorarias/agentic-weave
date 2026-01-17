@@ -18,10 +18,10 @@ type CompactionFunc func(ctx context.Context, messages []Message) (string, error
 
 // Manager handles compaction based on token limits.
 type Manager struct {
-	Counter      TokenCounter
-	MaxTokens    int
-	KeepLast     int
-	CompactFunc  CompactionFunc
+	Counter     TokenCounter
+	MaxTokens   int
+	KeepLast    int
+	CompactFunc CompactionFunc
 }
 
 // CompactIfNeeded returns compacted messages and summary (if any).

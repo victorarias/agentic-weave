@@ -40,6 +40,7 @@ This file tracks current work items and progress.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
 ## Progress Log
+- 2026-01-17 11:39: Applied gofmt to repo files to satisfy CI formatting check.
 - 2026-01-16 22:39: Switched CI linter to staticcheck to avoid golangci-lint module detection issues.
 - 2026-01-16 22:33: Added gofmt and golangci-lint checks to CI workflow.
 - 2026-01-16 22:30: Added MCP integration tests and Vertex provider config checks.
