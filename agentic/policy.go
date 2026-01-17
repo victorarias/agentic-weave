@@ -11,7 +11,7 @@ type Policy interface {
 // AllowAllPolicy is the default permissive policy.
 type AllowAllPolicy struct{}
 
-func (AllowAllPolicy) AllowTool(ToolDefinition) error { return nil }
+func (AllowAllPolicy) AllowTool(ToolDefinition) error           { return nil }
 func (AllowAllPolicy) AllowCall(ToolDefinition, ToolCall) error { return nil }
 
 // AllowlistPolicy permits only explicit tool names.

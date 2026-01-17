@@ -21,6 +21,17 @@ This file tracks current work items and progress.
 - [x] Align context budget docs with loop API and history requirements.
 - [x] Add ADC setup note for Vertex provider.
 
+## Current Initiative: test-harness
+- [x] Add integration harness covering loop, truncation, and compaction flows.
+- [x] Expand harness coverage across loop behavior, tools, and policies.
+- [x] Add guard, event ordering, byte truncation, and usage passthrough tests.
+- [x] Add MCP integration and Vertex config tests.
+
+## Current Initiative: ci-harness
+- [x] Add GitHub Actions workflow to run all tests (including harness).
+- [x] Add formatter and linter checks to CI workflow.
+- [x] Switch CI linter to staticcheck (latest) for reliable module coverage.
+
 ## Current Initiative: mono-parity-context
 - [x] Design optional, pluggable context budgeting + compaction + truncation modules.
 - [x] Define minimal interfaces for model limits + usage reporting.
@@ -29,6 +40,17 @@ This file tracks current work items and progress.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
 ## Progress Log
+- 2026-01-17 13:06: Removed unused test helper to satisfy staticcheck.
+- 2026-01-17 11:39: Applied gofmt to repo files to satisfy CI formatting check.
+- 2026-01-16 22:39: Switched CI linter to staticcheck to avoid golangci-lint module detection issues.
+- 2026-01-16 22:33: Added gofmt and golangci-lint checks to CI workflow.
+- 2026-01-16 22:30: Added MCP integration tests and Vertex provider config checks.
+- 2026-01-16 22:26: Added harness tests for budget guards, event ordering, byte truncation, and usage passthrough.
+- 2026-01-16 22:16: Added CI workflow to run harness tests on push/PR.
+- 2026-01-16 22:10: Fixed harness truncation test output to use raw lines.
+- 2026-01-16 22:09: Expanded harness to cover loop behavior, tool policies, and truncation modes.
+- 2026-01-16 22:01: Stabilized harness tool truncation scenario.
+- 2026-01-16 22:00: Added integration test harness for loop scenarios.
 - 2026-01-16 21:53: Updated docs for loop API, history rewriter requirement, and Vertex ADC setup.
 - 2026-01-16 21:47: Guarded ToBudget so nil legacy compactor stays disabled.
 - 2026-01-16 21:45: Enforced history.Rewriter for configured compaction; added guard test.
