@@ -30,12 +30,6 @@ func runScenario(t *testing.T, cfg loop.Config, req loop.Request) (loop.Result, 
 	return result, recorder.events, err
 }
 
-type deciderFunc func(context.Context, loop.Input) (loop.Decision, error)
-
-func (f deciderFunc) Decide(ctx context.Context, in loop.Input) (loop.Decision, error) {
-	return f(ctx, in)
-}
-
 type scriptedDecider struct {
 	script []loop.Decision
 	inputs []loop.Input
