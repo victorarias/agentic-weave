@@ -17,6 +17,12 @@ This file tracks current work items and progress.
 ## Current Initiative: compat-compactor-guard
 - [x] Preserve no-compaction behavior when legacy CompactFunc is nil.
 
+## Current Initiative: toolscope-history
+- [x] Add shared `agentic/toolscope` package.
+- [x] Persist tool calls/results via `history.ToolRecorder` and load via `history.ToolLoader`.
+- [x] Add coverage for tool history persistence and tool scope helpers.
+- [x] Document tool history persistence in loop docs.
+
 ## Current Initiative: docs-accuracy
 - [x] Align context budget docs with loop API and history requirements.
 - [x] Add ADC setup note for Vertex provider.
@@ -40,6 +46,8 @@ This file tracks current work items and progress.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
 ## Progress Log
+- 2026-01-18 10:11: Started toolscope + tool history persistence work.
+- 2026-01-18 10:20: Added toolscope, tool history persistence, tests, and docs update.
 - 2026-01-17 13:06: Removed unused test helper to satisfy staticcheck.
 - 2026-01-17 11:39: Applied gofmt to repo files to satisfy CI formatting check.
 - 2026-01-16 22:39: Switched CI linter to staticcheck to avoid golangci-lint module detection issues.

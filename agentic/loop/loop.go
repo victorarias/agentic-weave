@@ -127,6 +127,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 	toolCalls := make([]agentic.ToolCall, 0)
 	toolResults := make([]agentic.ToolResult, 0)
+	if r.cfg.HistoryStore != nil {
+		if loader, ok := r.cfg.HistoryStore.(history.ToolLoader); ok {
+			calls, err := loader.LoadToolCalls(ctx)
+			if err != nil {
+				return Result{}, err
+			}
+			results, err := loader.LoadToolResults(ctx)
+			if err != nil {
+				return Result{}, err
+			}
+			toolCalls = append(toolCalls, calls...)
+			toolResults = append(toolResults, results...)
+		}
+	}
 
 	turn := 0
 	for {
@@ -172,6 +186,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			if call.Caller == nil {
 				call.Caller = &agentic.ToolCaller{Type: r.cfg.ToolCallerType}
 			}
+			r.appendToolCall(ctx, call)
 			if emit != nil {
 				emit.Emit(events.Event{Type: events.ToolStart, ToolCall: &call})
 			}
@@ -183,6 +198,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 					Name:  call.Name,
 					Error: &agentic.ToolError{Message: err.Error()},
 				}
+			}
+			if result.ID == "" {
+				result.ID = call.ID
+			}
+			if result.Name == "" {
+				result.Name = call.Name
 			}
 
 			if r.cfg.Truncation != nil {
@@ -205,6 +226,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			toolCalls = append(toolCalls, call)
 			toolResults = append(toolResults, result)
 			historyMessages = append(historyMessages, toolResultMessage(result))
+			r.appendToolResult(ctx, result)
 			r.appendHistory(ctx, toolResultMessage(result))
 		}
 		turn++
@@ -243,6 +265,24 @@ func (r *Runner) appendHistory(ctx context.Context, msg budget.Message) {
 		return
 	}
 	_ = r.cfg.HistoryStore.Append(ctx, msg)
+}
+
+func (r *Runner) appendToolCall(ctx context.Context, call agentic.ToolCall) {
+	if r.cfg.HistoryStore == nil {
+		return
+	}
+	if recorder, ok := r.cfg.HistoryStore.(history.ToolRecorder); ok {
+		_ = recorder.AppendToolCall(ctx, call)
+	}
+}
+
+func (r *Runner) appendToolResult(ctx context.Context, result agentic.ToolResult) {
+	if r.cfg.HistoryStore == nil {
+		return
+	}
+	if recorder, ok := r.cfg.HistoryStore.(history.ToolRecorder); ok {
+		_ = recorder.AppendToolResult(ctx, result)
+	}
 }
 
 func (r *Runner) applyCompaction(ctx context.Context, messages []budget.Message) (string, []budget.Message, error) {

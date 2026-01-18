@@ -199,6 +199,9 @@ agent := loop.New(loop.Config{
 })
 ```
 
+If your provider requires full tool-use history, implement `history.ToolRecorder` and `history.ToolLoader` on
+your `HistoryStore` to persist tool calls and results between turns.
+
 ---
 
 ## Context Budgeting Behavior
