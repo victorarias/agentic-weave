@@ -65,6 +65,7 @@ This file tracks current work items and progress.
 - 2026-01-14 14:36: Docs updated for open-source release.
 - 2026-01-14 15:24: Added .gitignore + Anthropic real example fix verified.
 - 2026-01-14 15:31: Removed PLAN/IMPLEMENTATION/GETTING_STARTED in favor of docs index.
+- 2026-01-14 18:56: Added `CompactWithSystem` helper and tests for system prompt retention.
 - 2026-01-14 22:50: Started design for mono-like context budgeting + compaction (optional modules).
 - 2026-01-14 23:02: Added limits/usage/truncate/budget packages with docs and tests.
 - 2026-01-14 23:28: Added loop helper, adapter helpers, history hook, compat layer, and mono-like example.
