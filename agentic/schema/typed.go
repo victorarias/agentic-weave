@@ -29,11 +29,11 @@ func SchemaFromStruct(value any) (json.RawMessage, error) {
 }
 
 type jsonSchema struct {
-	Type       string                 `json:"type,omitempty"`
-	Properties map[string]jsonSchema  `json:"properties,omitempty"`
-	Required   []string               `json:"required,omitempty"`
-	Items      *jsonSchema            `json:"items,omitempty"`
-	Format     string                 `json:"format,omitempty"`
+	Type        string                `json:"type,omitempty"`
+	Properties  map[string]jsonSchema `json:"properties,omitempty"`
+	Required    []string              `json:"required,omitempty"`
+	Items       *jsonSchema           `json:"items,omitempty"`
+	Format      string                `json:"format,omitempty"`
 	Description string                `json:"description,omitempty"`
 }
 

@@ -15,9 +15,15 @@ Adapters report supported features:
 ## Examples
 - `examples/anthropic` and `examples/anthropic-real`
 - `examples/gemini` and `examples/gemini-real`
+- `adapters/vertex` for Vertex Gemini capability flags.
 
 ## Responsibilities
 - Convert tool definitions to provider formats
 - Enforce tool-use ordering rules
 - Decide tool choice mode
 - Decide which results enter model context
+- Optionally surface model limits and usage (see `limits` and `usage` packages)
+
+## Helper Utilities
+- `adapters.StopReasonFromFinish` maps provider finish reasons to `usage.StopReason`.
+- `adapters.NormalizeUsage` fills missing usage totals.

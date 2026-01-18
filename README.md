@@ -21,6 +21,7 @@ The sum is 42.
 - `docs/03-optional-modules.md` — schema, skills, context, MCP
 - `docs/04-adapters.md` — provider adapters and capabilities
 - `docs/05-advanced-tool-use.md` — search, examples, defer-load, allowed callers
+- `docs/06-context-budgets.md` — design for optional context budgets + compaction
 
 ## Examples
 - `examples/basic` — streaming agent loop
@@ -28,6 +29,7 @@ The sum is 42.
 - `examples/gemini` — mocked Gemini-style tool loop
 - `examples/anthropic-real` — real Anthropic SDK (nested module)
 - `examples/gemini-real` — real Gemini SDK (nested module)
+- `examples/mono-like` — mono-style loop with compaction + truncation
 
 ## License
 MIT
