@@ -11,9 +11,9 @@ func (f fixedCounter) Count(text string) int { return f.count }
 
 func TestCompactWithSystemPreservesSystem(t *testing.T) {
 	mgr := Manager{
-		Counter:     fixedCounter{count: 10},
-		MaxTokens:   5,
-		KeepLast:    1,
+		Counter:   fixedCounter{count: 10},
+		MaxTokens: 5,
+		KeepLast:  1,
 		CompactFunc: func(ctx context.Context, messages []Message) (string, error) {
 			return "summary", nil
 		},
