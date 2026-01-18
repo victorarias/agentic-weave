@@ -24,3 +24,7 @@ agent.StreamMessage(ctx, "add 10 and 32", events.SinkFunc(func(e events.Event) {
 
 ## Turn Boundaries
 Turns group one LLM response and its tool calls. Use turn events to separate UI sections or logs.
+
+## System Prompt Safety
+Keep the system prompt out of compaction and re-prepend it when building LLM context.
+Use `context.CompactWithSystem` to guarantee the system prompt survives compaction.

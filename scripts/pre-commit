@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+# Format staged Go files.
+staged_go_files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.go$' || true)
+if [[ -n "$staged_go_files" ]]; then
+  echo "Formatting Go files..."
+  gofmt -w $staged_go_files
+  git add $staged_go_files
+fi
+
+# Run tests.
+echo "Running tests..."
+go test ./...
+
+# Run gitleaks if available.
+if command -v gitleaks >/dev/null 2>&1; then
+  echo "Running gitleaks..."
+  gitleaks protect --staged --redact
+else
+  echo "gitleaks not installed; skipping secret scan."
+fi

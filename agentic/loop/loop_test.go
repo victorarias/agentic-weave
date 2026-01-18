@@ -162,6 +162,41 @@ func TestRunWithCompactionRequiresRewriter(t *testing.T) {
 	}
 }
 
+func TestRunPersistsToolHistory(t *testing.T) {
+	store := &recordingToolStore{
+		toolCalls: []agentic.ToolCall{{ID: "prior-1", Name: "prior"}},
+		toolResults: []agentic.ToolResult{{
+			ID:     "prior-1",
+			Name:   "prior",
+			Output: []byte("ok"),
+		}},
+	}
+
+	decider := &historyAssertingDecider{t: t}
+	runner := New(Config{
+		Decider:      decider,
+		Executor:     stubExecutor{},
+		HistoryStore: store,
+	})
+
+	_, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(store.toolCalls) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(store.toolCalls))
+	}
+	if store.toolCalls[1].ID != "call-0-0" {
+		t.Fatalf("expected generated call id, got %q", store.toolCalls[1].ID)
+	}
+	if len(store.toolResults) != 2 {
+		t.Fatalf("expected 2 tool results, got %d", len(store.toolResults))
+	}
+	if store.toolResults[1].ID != "call-0-0" {
+		t.Fatalf("expected tool result id to match call, got %q", store.toolResults[1].ID)
+	}
+}
+
 type replyDecider struct {
 	reply string
 }
@@ -192,5 +227,65 @@ func (s *appendOnlyStore) Append(ctx context.Context, msg budget.Message) error 
 func (s *appendOnlyStore) Load(ctx context.Context) ([]budget.Message, error) {
 	out := make([]budget.Message, len(s.messages))
 	copy(out, s.messages)
+	return out, nil
+}
+
+type historyAssertingDecider struct {
+	t     *testing.T
+	calls int
+}
+
+func (d *historyAssertingDecider) Decide(ctx context.Context, in Input) (Decision, error) {
+	if d.calls == 0 {
+		d.calls++
+		if len(in.ToolCalls) != 1 || in.ToolCalls[0].Name != "prior" {
+			d.t.Fatalf("expected prior tool call, got %#v", in.ToolCalls)
+		}
+		if len(in.ToolResults) != 1 || in.ToolResults[0].Name != "prior" {
+			d.t.Fatalf("expected prior tool result, got %#v", in.ToolResults)
+		}
+		return Decision{
+			ToolCalls: []agentic.ToolCall{{Name: "echo"}},
+		}, nil
+	}
+	return Decision{Reply: "done"}, nil
+}
+
+type recordingToolStore struct {
+	messages    []budget.Message
+	toolCalls   []agentic.ToolCall
+	toolResults []agentic.ToolResult
+}
+
+func (s *recordingToolStore) Append(ctx context.Context, msg budget.Message) error {
+	s.messages = append(s.messages, msg)
+	return nil
+}
+
+func (s *recordingToolStore) Load(ctx context.Context) ([]budget.Message, error) {
+	out := make([]budget.Message, len(s.messages))
+	copy(out, s.messages)
+	return out, nil
+}
+
+func (s *recordingToolStore) AppendToolCall(ctx context.Context, call agentic.ToolCall) error {
+	s.toolCalls = append(s.toolCalls, call)
+	return nil
+}
+
+func (s *recordingToolStore) AppendToolResult(ctx context.Context, result agentic.ToolResult) error {
+	s.toolResults = append(s.toolResults, result)
+	return nil
+}
+
+func (s *recordingToolStore) LoadToolCalls(ctx context.Context) ([]agentic.ToolCall, error) {
+	out := make([]agentic.ToolCall, len(s.toolCalls))
+	copy(out, s.toolCalls)
+	return out, nil
+}
+
+func (s *recordingToolStore) LoadToolResults(ctx context.Context) ([]agentic.ToolResult, error) {
+	out := make([]agentic.ToolResult, len(s.toolResults))
+	copy(out, s.toolResults)
 	return out, nil
 }

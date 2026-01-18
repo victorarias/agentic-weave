@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/context/budget"
 )
 
@@ -26,5 +27,26 @@ func TestMemoryStore(t *testing.T) {
 	msgs, _ = store.Load(context.Background())
 	if len(msgs) != 1 || msgs[0].Role != "system" {
 		t.Fatalf("unexpected messages after replace: %#v", msgs)
+	}
+
+	if err := store.AppendToolCall(context.Background(), agentic.ToolCall{Name: "echo"}); err != nil {
+		t.Fatalf("append tool call failed: %v", err)
+	}
+	if err := store.AppendToolResult(context.Background(), agentic.ToolResult{Name: "echo"}); err != nil {
+		t.Fatalf("append tool result failed: %v", err)
+	}
+	calls, err := store.LoadToolCalls(context.Background())
+	if err != nil {
+		t.Fatalf("load tool calls failed: %v", err)
+	}
+	results, err := store.LoadToolResults(context.Background())
+	if err != nil {
+		t.Fatalf("load tool results failed: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "echo" {
+		t.Fatalf("unexpected tool calls: %#v", calls)
+	}
+	if len(results) != 1 || results[0].Name != "echo" {
+		t.Fatalf("unexpected tool results: %#v", results)
 	}
 }
