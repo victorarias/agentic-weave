@@ -301,8 +301,9 @@ func (s *staticTokenSource) Token() (*oauth2.Token, error) {
 	return s.token, nil
 }
 
-func TestDecideAttachesThoughtSignatureToFirstToolCall(t *testing.T) {
-	// Create a mock server that returns a response with thought_signature
+func TestDecideCapturesThoughtSignatureFromEachPart(t *testing.T) {
+	// Per Vertex AI docs: for parallel function calls, only the first
+	// functionCall part contains the thought_signature.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		response := `{
 			"candidates": [{
