@@ -66,7 +66,6 @@ type Client struct {
 	maxTokens   int
 	client      *http.Client
 	cred        oauth2.TokenSource
-	pendingSig  string
 }
 
 // New constructs a Vertex Gemini client from config.
@@ -189,20 +188,20 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 	toolCalls := make([]agentic.ToolCall, 0)
 	var reply strings.Builder
 	var reasoning strings.Builder
-	pendingSig := ""
 	for i, part := range parts {
 		if part.FunctionCall != nil {
 			args, err := json.Marshal(part.FunctionCall.Args)
 			if err != nil {
 				args = []byte("{}")
 			}
-			if pendingSig == "" && part.ThoughtSignature != "" {
-				pendingSig = part.ThoughtSignature
-			}
+			// Capture signature directly from each part. Per Vertex AI docs:
+			// - Parallel calls: only first functionCall part has signature
+			// - Sequential calls: each step has its own signature
 			toolCalls = append(toolCalls, agentic.ToolCall{
-				ID:    fmt.Sprintf("call-%d", i),
-				Name:  part.FunctionCall.Name,
-				Input: json.RawMessage(args),
+				ID:               fmt.Sprintf("call-%d", i),
+				Name:             part.FunctionCall.Name,
+				Input:            json.RawMessage(args),
+				ThoughtSignature: part.ThoughtSignature,
 			})
 			continue
 		}
@@ -211,9 +210,6 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 			continue
 		}
 		reply.WriteString(part.Text)
-	}
-	if pendingSig != "" {
-		c.pendingSig = pendingSig
 	}
 
 	if len(toolCalls) > 0 {
@@ -272,10 +268,9 @@ func (c *Client) buildRequest(input Input) ([]byte, error) {
 
 	for i, call := range input.ToolCalls {
 		args := decodeArgs(call.Input)
-		sig := ""
-		if i == 0 && c.pendingSig != "" {
-			sig = c.pendingSig
-		}
+		// Include signature exactly as stored on each tool call.
+		// Per Vertex AI docs: "include the part containing the functionCall
+		// and its thought_signature exactly as it was returned by the model"
 		contents = append(contents, vertexContent{
 			Role: "model",
 			Parts: []vertexPart{{
@@ -283,7 +278,7 @@ func (c *Client) buildRequest(input Input) ([]byte, error) {
 					Name: call.Name,
 					Args: args,
 				},
-				ThoughtSignature: sig,
+				ThoughtSignature: call.ThoughtSignature,
 			}},
 		})
 
@@ -297,9 +292,6 @@ func (c *Client) buildRequest(input Input) ([]byte, error) {
 				},
 			}},
 		})
-	}
-	if c.pendingSig != "" {
-		c.pendingSig = ""
 	}
 
 	functions := make([]vertexFunctionDeclaration, 0, len(input.Tools))
@@ -342,7 +334,7 @@ func appendHistory(contents []vertexContent, history []HistoryTurn) []vertexCont
 			})
 		}
 		if len(turn.ToolCalls) > 0 {
-			for i, call := range turn.ToolCalls {
+			for idx, call := range turn.ToolCalls {
 				contents = append(contents, vertexContent{
 					Role: "model",
 					Parts: []vertexPart{{
@@ -350,10 +342,11 @@ func appendHistory(contents []vertexContent, history []HistoryTurn) []vertexCont
 							Name: call.Name,
 							Args: decodeArgs(call.Input),
 						},
+						ThoughtSignature: call.ThoughtSignature,
 					}},
 				})
 
-				response := toolResultPayload(turn.ToolResults, i)
+				response := toolResultPayload(turn.ToolResults, idx)
 				contents = append(contents, vertexContent{
 					Role: "user",
 					Parts: []vertexPart{{
