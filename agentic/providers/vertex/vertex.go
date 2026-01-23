@@ -444,11 +444,11 @@ type vertexPart struct {
 	Thought          string                  `json:"thought,omitempty"`
 	FunctionCall     *vertexFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *vertexFunctionResponse `json:"functionResponse,omitempty"`
-	ThoughtSignature string                  `json:"thought_signature,omitempty"`
+	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
 }
 
-// UnmarshalJSON handles both snake_case (thought_signature) and camelCase
-// (thoughtSignature) variants that Vertex AI may return.
+// UnmarshalJSON handles both camelCase (thoughtSignature) and snake_case
+// (thought_signature) variants that Vertex AI may return in responses.
 func (p *vertexPart) UnmarshalJSON(data []byte) error {
 	type alias vertexPart
 	var raw map[string]json.RawMessage
@@ -461,7 +461,7 @@ func (p *vertexPart) UnmarshalJSON(data []byte) error {
 	}
 	*p = vertexPart(base)
 	if p.ThoughtSignature == "" {
-		if v, ok := raw["thoughtSignature"]; ok {
+		if v, ok := raw["thought_signature"]; ok {
 			_ = json.Unmarshal(v, &p.ThoughtSignature)
 		}
 	}
