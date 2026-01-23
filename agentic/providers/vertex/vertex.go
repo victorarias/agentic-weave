@@ -66,7 +66,6 @@ type Client struct {
 	maxTokens   int
 	client      *http.Client
 	cred        oauth2.TokenSource
-	pendingSig  string
 }
 
 // New constructs a Vertex Gemini client from config.
@@ -212,8 +211,9 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 		}
 		reply.WriteString(part.Text)
 	}
-	if pendingSig != "" {
-		c.pendingSig = pendingSig
+	// Attach signature to first tool call so it can be persisted and restored
+	if pendingSig != "" && len(toolCalls) > 0 {
+		toolCalls[0].ThoughtSignature = pendingSig
 	}
 
 	if len(toolCalls) > 0 {
@@ -272,9 +272,10 @@ func (c *Client) buildRequest(input Input) ([]byte, error) {
 
 	for i, call := range input.ToolCalls {
 		args := decodeArgs(call.Input)
+		// Use the signature stored on the tool call (first call has it)
 		sig := ""
-		if i == 0 && c.pendingSig != "" {
-			sig = c.pendingSig
+		if i == 0 {
+			sig = call.ThoughtSignature
 		}
 		contents = append(contents, vertexContent{
 			Role: "model",
@@ -297,9 +298,6 @@ func (c *Client) buildRequest(input Input) ([]byte, error) {
 				},
 			}},
 		})
-	}
-	if c.pendingSig != "" {
-		c.pendingSig = ""
 	}
 
 	functions := make([]vertexFunctionDeclaration, 0, len(input.Tools))
@@ -343,6 +341,11 @@ func appendHistory(contents []vertexContent, history []HistoryTurn) []vertexCont
 		}
 		if len(turn.ToolCalls) > 0 {
 			for i, call := range turn.ToolCalls {
+				// Include signature from first tool call if present
+				sig := ""
+				if i == 0 {
+					sig = call.ThoughtSignature
+				}
 				contents = append(contents, vertexContent{
 					Role: "model",
 					Parts: []vertexPart{{
@@ -350,6 +353,7 @@ func appendHistory(contents []vertexContent, history []HistoryTurn) []vertexCont
 							Name: call.Name,
 							Args: decodeArgs(call.Input),
 						},
+						ThoughtSignature: sig,
 					}},
 				})
 

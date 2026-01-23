@@ -31,11 +31,12 @@ type ToolCaller struct {
 
 // ToolCall is a request to invoke a tool.
 type ToolCall struct {
-	ID         string          `json:"id,omitempty"`
-	Name       string          `json:"name"`
-	Input      json.RawMessage `json:"input"`
-	SchemaHash string          `json:"schema_hash,omitempty"`
-	Caller     *ToolCaller     `json:"caller,omitempty"`
+	ID               string          `json:"id,omitempty"`
+	Name             string          `json:"name"`
+	Input            json.RawMessage `json:"input"`
+	SchemaHash       string          `json:"schema_hash,omitempty"`
+	Caller           *ToolCaller     `json:"caller,omitempty"`
+	ThoughtSignature string          `json:"thought_signature,omitempty"`
 }
 
 // ToolResult is the tool execution output.
