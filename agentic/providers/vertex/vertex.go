@@ -447,6 +447,27 @@ type vertexPart struct {
 	ThoughtSignature string                  `json:"thought_signature,omitempty"`
 }
 
+// UnmarshalJSON handles both snake_case (thought_signature) and camelCase
+// (thoughtSignature) variants that Vertex AI may return.
+func (p *vertexPart) UnmarshalJSON(data []byte) error {
+	type alias vertexPart
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var base alias
+	if err := json.Unmarshal(data, &base); err != nil {
+		return err
+	}
+	*p = vertexPart(base)
+	if p.ThoughtSignature == "" {
+		if v, ok := raw["thoughtSignature"]; ok {
+			_ = json.Unmarshal(v, &p.ThoughtSignature)
+		}
+	}
+	return nil
+}
+
 type vertexFunctionCall struct {
 	Name string         `json:"name"`
 	Args map[string]any `json:"args"`
