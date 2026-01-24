@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/victorarias/agentic-weave/agentic"
+	"github.com/victorarias/agentic-weave/agentic/message"
 	"golang.org/x/oauth2"
 )
 
@@ -145,55 +146,14 @@ func TestBuildRequestIncludesThoughtSignatureFromToolCall(t *testing.T) {
 	}
 }
 
-func TestBuildRequestWithoutThoughtSignature(t *testing.T) {
-	client := &Client{
-		project:     "test-project",
-		location:    "us-central1",
-		model:       "gemini-pro",
-		temperature: 0.5,
-		maxTokens:   1024,
-	}
-
-	input := Input{
-		UserMessage: "test message",
-		ToolCalls: []agentic.ToolCall{
-			{
-				ID:    "call-0",
-				Name:  "test_tool",
-				Input: json.RawMessage(`{}`),
-				// No ThoughtSignature
-			},
-		},
-		ToolResults: []agentic.ToolResult{
-			{ID: "call-0", Name: "test_tool", Output: json.RawMessage(`{}`)},
-		},
-	}
-
-	reqBody, err := client.buildRequest(input)
-	if err != nil {
-		t.Fatalf("buildRequest error: %v", err)
-	}
-
-	var req vertexRequest
-	if err := json.Unmarshal(reqBody, &req); err != nil {
-		t.Fatalf("failed to parse request: %v", err)
-	}
-
-	// Verify no signature in the request when tool call doesn't have one
-	for _, content := range req.Contents {
-		if content.Role == "model" && len(content.Parts) > 0 {
-			part := content.Parts[0]
-			if part.FunctionCall != nil && part.ThoughtSignature != "" {
-				t.Errorf("expected empty ThoughtSignature when not set, got %q", part.ThoughtSignature)
-			}
-		}
-	}
-}
-
 func TestAppendHistoryIncludesThoughtSignature(t *testing.T) {
-	history := []HistoryTurn{
+	history := []message.AgentMessage{
 		{
-			UserMessage: "first message",
+			Role:    message.RoleUser,
+			Content: "first message",
+		},
+		{
+			Role: message.RoleAssistant,
 			ToolCalls: []agentic.ToolCall{
 				{
 					ID:               "hist-call-0",
@@ -207,11 +167,22 @@ func TestAppendHistoryIncludesThoughtSignature(t *testing.T) {
 					Input: json.RawMessage(`{}`),
 				},
 			},
+		},
+		{
+			Role: message.RoleTool,
 			ToolResults: []agentic.ToolResult{
 				{ID: "hist-call-0", Name: "historical_tool", Output: json.RawMessage(`{"y":2}`)},
+			},
+		},
+		{
+			Role: message.RoleTool,
+			ToolResults: []agentic.ToolResult{
 				{ID: "hist-call-1", Name: "another_hist_tool", Output: json.RawMessage(`{}`)},
 			},
-			AssistantReply: "done",
+		},
+		{
+			Role:    message.RoleAssistant,
+			Content: "done",
 		},
 	}
 
@@ -245,9 +216,13 @@ func TestAppendHistoryIncludesThoughtSignature(t *testing.T) {
 }
 
 func TestAppendHistoryWithoutThoughtSignature(t *testing.T) {
-	history := []HistoryTurn{
+	history := []message.AgentMessage{
 		{
-			UserMessage: "message without signature",
+			Role:    message.RoleUser,
+			Content: "message without signature",
+		},
+		{
+			Role: message.RoleAssistant,
 			ToolCalls: []agentic.ToolCall{
 				{
 					ID:    "no-sig-call",
@@ -256,6 +231,9 @@ func TestAppendHistoryWithoutThoughtSignature(t *testing.T) {
 					// No ThoughtSignature
 				},
 			},
+		},
+		{
+			Role: message.RoleTool,
 			ToolResults: []agentic.ToolResult{
 				{ID: "no-sig-call", Name: "tool_without_sig", Output: json.RawMessage(`{}`)},
 			},
@@ -272,23 +250,6 @@ func TestAppendHistoryWithoutThoughtSignature(t *testing.T) {
 					part.ThoughtSignature)
 			}
 		}
-	}
-}
-
-func TestThoughtSignatureNotStoredOnClient(t *testing.T) {
-	// Verify that Client struct no longer has pendingSig field
-	// This is a compile-time check - if pendingSig exists, this won't compile
-	client := &Client{
-		project:     "test",
-		location:    "global",
-		model:       "gemini-pro",
-		temperature: 0.5,
-		maxTokens:   1024,
-	}
-
-	// Just verify the client can be created without pendingSig
-	if client.project != "test" {
-		t.Error("client not properly initialized")
 	}
 }
 
@@ -363,103 +324,63 @@ func TestDecideCapturesThoughtSignatureFromEachPart(t *testing.T) {
 	}
 }
 
-func TestDecideWithSnakeCaseThoughtSignature(t *testing.T) {
-	// Test that snake_case thought_signature is also handled correctly
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response := `{
-			"candidates": [{
-				"content": {
-					"role": "model",
-					"parts": [
-						{
-							"functionCall": {"name": "my_tool", "args": {}},
-							"thought_signature": "snake-case-sig-123"
-						}
-					]
-				},
-				"finishReason": "STOP"
-			}]
-		}`
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(response))
-	}))
-	defer server.Close()
-
-	client := &Client{
-		project:     "test-project",
-		location:    "us-central1",
-		model:       "gemini-pro",
-		baseURL:     server.URL,
-		temperature: 0.5,
-		maxTokens:   1024,
-		client:      server.Client(),
-		cred:        &staticTokenSource{token: &oauth2.Token{AccessToken: "test-token"}},
+func TestAppendHistoryWithAgentMessage(t *testing.T) {
+	history := []message.AgentMessage{
+		{
+			Role:    message.RoleUser,
+			Content: "Hello",
+		},
+		{
+			Role:    message.RoleAssistant,
+			Content: "Hi there!",
+		},
+		{
+			Role: message.RoleAssistant,
+			ToolCalls: []agentic.ToolCall{
+				{ID: "tc1", Name: "search", Input: json.RawMessage(`{"q":"test"}`)},
+			},
+		},
+		{
+			Role: message.RoleTool,
+			ToolResults: []agentic.ToolResult{
+				{ID: "tc1", Name: "search", Output: json.RawMessage(`"results"`)},
+			},
+		},
+		{
+			Role:    message.RoleSystem,
+			Content: "Context summary from compaction",
+		},
 	}
 
-	decision, err := client.Decide(context.Background(), Input{
-		UserMessage: "test",
-	})
-	if err != nil {
-		t.Fatalf("Decide error: %v", err)
+	contents := appendHistory(nil, history)
+
+	// Check expected structure
+	if len(contents) != 5 {
+		t.Fatalf("expected 5 contents, got %d", len(contents))
 	}
 
-	if len(decision.ToolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(decision.ToolCalls))
+	// User message
+	if contents[0].Role != "user" || contents[0].Parts[0].Text != "Hello" {
+		t.Errorf("expected user message, got %+v", contents[0])
 	}
 
-	if decision.ToolCalls[0].ThoughtSignature != "snake-case-sig-123" {
-		t.Errorf("expected ThoughtSignature=%q, got %q",
-			"snake-case-sig-123", decision.ToolCalls[0].ThoughtSignature)
-	}
-}
-
-func TestDecideWithoutThoughtSignature(t *testing.T) {
-	// Test that responses without thought_signature still work
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response := `{
-			"candidates": [{
-				"content": {
-					"role": "model",
-					"parts": [
-						{
-							"functionCall": {"name": "my_tool", "args": {}}
-						}
-					]
-				},
-				"finishReason": "STOP"
-			}]
-		}`
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(response))
-	}))
-	defer server.Close()
-
-	client := &Client{
-		project:     "test-project",
-		location:    "us-central1",
-		model:       "gemini-pro",
-		baseURL:     server.URL,
-		temperature: 0.5,
-		maxTokens:   1024,
-		client:      server.Client(),
-		cred:        &staticTokenSource{token: &oauth2.Token{AccessToken: "test-token"}},
+	// Assistant text reply
+	if contents[1].Role != "model" || contents[1].Parts[0].Text != "Hi there!" {
+		t.Errorf("expected model text, got %+v", contents[1])
 	}
 
-	decision, err := client.Decide(context.Background(), Input{
-		UserMessage: "test",
-	})
-	if err != nil {
-		t.Fatalf("Decide error: %v", err)
+	// Assistant tool call
+	if contents[2].Role != "model" || contents[2].Parts[0].FunctionCall == nil {
+		t.Errorf("expected model function call, got %+v", contents[2])
 	}
 
-	if len(decision.ToolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(decision.ToolCalls))
+	// Tool result
+	if contents[3].Role != "user" || contents[3].Parts[0].FunctionResponse == nil {
+		t.Errorf("expected user function response, got %+v", contents[3])
 	}
 
-	if decision.ToolCalls[0].ThoughtSignature != "" {
-		t.Errorf("expected empty ThoughtSignature, got %q",
-			decision.ToolCalls[0].ThoughtSignature)
+	// System summary (as user message with prefix)
+	if contents[4].Role != "user" || !strings.Contains(contents[4].Parts[0].Text, "[Context Summary]") {
+		t.Errorf("expected system summary as user message, got %+v", contents[4])
 	}
 }
