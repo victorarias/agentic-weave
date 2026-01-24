@@ -8,6 +8,7 @@ import (
 	"github.com/victorarias/agentic-weave/agentic/events"
 	"github.com/victorarias/agentic-weave/agentic/history"
 	"github.com/victorarias/agentic-weave/agentic/loop"
+	"github.com/victorarias/agentic-weave/agentic/message"
 )
 
 type recordingCompactor struct {
@@ -20,8 +21,8 @@ func (r recordingCompactor) Compact(ctx context.Context, messages []budget.Messa
 
 func TestLoopCompactionInjectedHistory(t *testing.T) {
 	store := history.NewMemoryStore()
-	_ = store.Append(context.Background(), budget.Message{Role: "user", Content: "hello"})
-	_ = store.Append(context.Background(), budget.Message{Role: "assistant", Content: "world"})
+	_ = store.Append(context.Background(), message.AgentMessage{Role: message.RoleUser, Content: "hello"})
+	_ = store.Append(context.Background(), message.AgentMessage{Role: message.RoleAssistant, Content: "world"})
 
 	budgetMgr := &budget.Manager{
 		Counter:   budget.CharCounter{},
@@ -50,7 +51,7 @@ func TestLoopCompactionInjectedHistory(t *testing.T) {
 	if len(decider.inputs) == 0 || len(decider.inputs[0].History) == 0 {
 		t.Fatalf("expected decider history")
 	}
-	if decider.inputs[0].History[0].Role != "system" || decider.inputs[0].History[0].Content != "summary" {
+	if decider.inputs[0].History[0].Role != message.RoleSystem || decider.inputs[0].History[0].Content != "summary" {
 		t.Fatalf("expected compaction summary in history")
 	}
 	foundStart := false

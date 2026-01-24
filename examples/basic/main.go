@@ -10,8 +10,9 @@ import (
 	"strings"
 
 	"github.com/victorarias/agentic-weave/agentic"
-	agenticcontext "github.com/victorarias/agentic-weave/agentic/context"
+	"github.com/victorarias/agentic-weave/agentic/context/budget"
 	"github.com/victorarias/agentic-weave/agentic/events"
+	"github.com/victorarias/agentic-weave/agentic/message"
 )
 
 type AddTool struct{}
@@ -53,7 +54,7 @@ func (AddTool) Execute(ctx context.Context, call agentic.ToolCall) (agentic.Tool
 type Agent struct {
 	exec         agentic.ToolExecutor
 	systemPrompt string
-	messages     []agenticcontext.Message
+	messages     []message.AgentMessage
 }
 
 func NewAgent(exec agentic.ToolExecutor, systemPrompt string) *Agent {
@@ -61,23 +62,23 @@ func NewAgent(exec agentic.ToolExecutor, systemPrompt string) *Agent {
 }
 
 // StreamMessage takes a user message, decides on tool usage, and streams events.
-func (a *Agent) StreamMessage(ctx context.Context, message string, sink events.Sink) (string, error) {
+func (a *Agent) StreamMessage(ctx context.Context, msg string, sink events.Sink) (string, error) {
 	sink.Emit(events.Event{Type: events.AgentStart})
 	defer sink.Emit(events.Event{Type: events.AgentEnd})
 
 	sink.Emit(events.Event{Type: events.TurnStart})
 	defer sink.Emit(events.Event{Type: events.TurnEnd})
 
-	message = strings.TrimSpace(message)
-	if message == "" {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
 		reply := "Say something like: add 10 and 32"
 		emitAssistantMessage(sink, "assistant-1", reply)
 		return reply, nil
 	}
 
-	a.messages = append(a.messages, agenticcontext.Message{Role: "user", Content: message})
+	a.messages = append(a.messages, message.AgentMessage{Role: message.RoleUser, Content: msg})
 
-	if call, ok := parseAddRequest(message); ok {
+	if call, ok := parseAddRequest(msg); ok {
 		sink.Emit(events.Event{Type: events.ToolStart, ToolCall: &call})
 		result, err := a.exec.Execute(ctx, call)
 		sink.Emit(events.Event{Type: events.ToolEnd, ToolResult: &result})
@@ -98,21 +99,32 @@ func (a *Agent) StreamMessage(ctx context.Context, message string, sink events.S
 			return reply, err
 		}
 		reply := fmt.Sprintf("The sum is %d.", output.Sum)
-		a.messages = append(a.messages, agenticcontext.Message{Role: "assistant", Content: reply})
+		a.messages = append(a.messages, message.AgentMessage{Role: message.RoleAssistant, Content: reply})
 		emitAssistantMessage(sink, "assistant-1", reply)
 		return reply, nil
 	}
 
 	reply := "I can help with addition. Try: add 10 and 32"
-	a.messages = append(a.messages, agenticcontext.Message{Role: "assistant", Content: reply})
+	a.messages = append(a.messages, message.AgentMessage{Role: message.RoleAssistant, Content: reply})
 	emitAssistantMessage(sink, "assistant-1", reply)
 	return reply, nil
 }
 
-// BuildPrompt demonstrates how to keep the system prompt safe during compaction.
-func (a *Agent) BuildPrompt(ctx context.Context, mgr agenticcontext.Manager) ([]agenticcontext.Message, string, error) {
-	system := agenticcontext.Message{Role: "system", Content: a.systemPrompt}
-	return agenticcontext.CompactWithSystem(ctx, system, a.messages, mgr)
+// BuildPrompt demonstrates how to use compaction with system prompts.
+func (a *Agent) BuildPrompt(ctx context.Context, mgr budget.Manager) ([]message.AgentMessage, string, error) {
+	compacted, summary, _, err := message.CompactIfNeeded(ctx, mgr, a.messages)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Prepend system prompt
+	if a.systemPrompt != "" {
+		withSystem := make([]message.AgentMessage, 0, len(compacted)+1)
+		withSystem = append(withSystem, message.AgentMessage{Role: message.RoleSystem, Content: a.systemPrompt})
+		withSystem = append(withSystem, compacted...)
+		return withSystem, summary, nil
+	}
+	return compacted, summary, nil
 }
 
 func emitAssistantMessage(sink events.Sink, messageID, content string) {
@@ -142,12 +154,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	_, _, _ = agent.BuildPrompt(ctx, agenticcontext.Manager{})
+	_, _, _ = agent.BuildPrompt(ctx, budget.Manager{})
 }
 
-func parseAddRequest(message string) (agentic.ToolCall, bool) {
+func parseAddRequest(msg string) (agentic.ToolCall, bool) {
 	re := regexp.MustCompile(`(?i)add\s+(-?\d+)\s*(and|\+)\s*(-?\d+)`)
-	matches := re.FindStringSubmatch(message)
+	matches := re.FindStringSubmatch(msg)
 	if len(matches) != 4 {
 		return agentic.ToolCall{}, false
 	}

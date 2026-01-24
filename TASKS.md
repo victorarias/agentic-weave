@@ -45,7 +45,51 @@ This file tracks current work items and progress.
 - [x] Implement budget + truncation packages with tests.
 - [x] Add loop helper, adapter utilities, history hook, and context compatibility.
 
+## Current Initiative: phase-3a-message-architecture
+Adopt pi-mono pattern: rich internal message type with structured tool calls, adapter-level conversion.
+
+### Completed
+- [x] Create AgentMessage type in `agentic/message/message.go` with Role, Content, ToolCalls, ToolResults, Timestamp
+- [x] Update loop types (Request, Result, Input) to use `[]message.AgentMessage`
+- [x] Remove `toolResultMessage()` function - no more text flattening of tool results
+- [x] Update history Store interface to use AgentMessage
+- [x] Remove ToolRecorder/ToolLoader interfaces (tool data now embedded in AgentMessage)
+- [x] Update Vertex provider - replace HistoryTurn with AgentMessage, update `appendHistory()`
+- [x] Add ToolCalls field to Event struct for MessageEnd events
+- [x] Delete legacy files: context.go, compat.go, compat_test.go, with_system.go, with_system_test.go
+- [x] Update examples/basic/main.go to use new message types
+- [x] Update tests/harness/* to use AgentMessage
+
+### Completed: Test Cleanup
+- [x] Remove low-value tests:
+  - [x] `message_test.go`: TestForBudget, TestForBudgetSlice (trivial field mapping)
+  - [x] `history_test.go`: TestMemoryStore (basic slice operations)
+  - [x] `vertex_test.go`: TestBuildRequestWithoutThoughtSignature, TestDecideWithoutThoughtSignature, TestDecideWithSnakeCaseThoughtSignature, TestThoughtSignatureNotStoredOnClient
+  - [x] `harness/`: TestLoopDefaultReplyWhenEmpty, TestLoopBudgetNoOpPaths
+
+### Completed: Missing Test Coverage
+- [x] Add error recovery tests (compaction fails mid-loop) - TestLoopCompactionFailure
+- [x] Add boundary condition tests (empty histories, single-message, max-sized) - TestLoopEmptyHistory, TestLoopSingleMessageHistory, TestLoopEmptyUserMessage
+- [x] Add complex tool interaction tests (multiple tools in sequence, failures mid-sequence) - TestLoopMultipleToolsInSequence, TestLoopToolFailureMidSequence, TestLoopParallelToolCalls, TestLoopMaxTurnsReachedWithPendingTools
+
+### Completed: Refactoring - High Priority
+- [x] Extract `emit()` helper in loop.go (consolidated 8 `if emit != nil` checks)
+- [x] Document Event struct design (added usage comments explaining ToolCall vs ToolCalls)
+- [N/A] Config validation returns nil for incomplete configs by design (allows partial configuration)
+
+### Completed: Refactoring - Medium Priority
+- [N/A] Budget conversion stays in message package (avoids circular dependency, follows usage patterns)
+- [N/A] Slice utilities are idiomatic Go patterns, no extraction needed
+- [x] Simplified compaction logic in message.go (using builtin max())
+
+### Completed: Refactoring - Low Priority
+- [N/A] Single-use functions in loop.go provide meaningful abstraction, kept as-is
+- [x] Added envTrimmed() helper in vertex.go for cleaner env parsing
+- [N/A] Tool result payload functions are correctly factored (index guard + single handler)
+
 ## Progress Log
+- 2026-01-24: Completed Phase 3A cleanup: removed low-value tests, added high-value edge case tests (loop_edge_cases_test.go), extracted emit() helper in loop.go, simplified compaction logic, added envTrimmed() helper in vertex.go.
+- 2026-01-24: Completed Phase 3A message architecture refactoring. Created AgentMessage type, updated loop/history/vertex to use structured messages, removed legacy context files.
 - 2026-01-18 10:11: Started toolscope + tool history persistence work.
 - 2026-01-18 10:20: Added toolscope, tool history persistence, tests, and docs update.
 - 2026-01-17 13:06: Removed unused test helper to satisfy staticcheck.
