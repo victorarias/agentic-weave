@@ -2,135 +2,91 @@
 
 This file tracks current work items and progress.
 
-## Current Initiative: vertex-provider
-- [x] Add Vertex Gemini provider (ADC-only) under agentic/providers/vertex.
-- [x] Add docs + example usage.
+## Current State
 
-## Current Initiative: loop-truncation-fixes
-- [x] Return partial output when head truncation hits first-line byte limit.
-- [x] Preserve byte-based truncation metadata for tail truncation.
-- [x] Avoid appending compaction summaries for history stores without rewrite support.
+**Status:** Phase 3A complete. PR #6 open for review.
 
-## Current Initiative: loop-history-rewriter
-- [x] Require history.Rewriter when budget compaction is configured.
+**Branch:** `feat/phase-3a-message-cleanup`
+**PR:** https://github.com/victorarias/agentic-weave/pull/6
 
-## Current Initiative: compat-compactor-guard
-- [x] Preserve no-compaction behavior when legacy CompactFunc is nil.
+### What Was Done (Phase 3A)
+- Created `AgentMessage` type with structured tool calls/results (no more text flattening)
+- Updated entire codebase: loop, history, vertex provider, events, examples, tests
+- Deleted legacy context files (context.go, compat.go, with_system.go + tests)
+- Removed low-value tests, added 8 high-value edge case tests
+- Refactored: `emit()` helper, `envTrimmed()` helper, simplified compaction with `max()`
+- Updated docs for new architecture
 
-## Current Initiative: toolscope-history
-- [x] Add shared `agentic/toolscope` package.
-- [x] ~~Persist tool calls/results via `history.ToolRecorder` and load via `history.ToolLoader`.~~ (Superseded by AgentMessage - tool data now embedded in message)
-- [x] Add coverage for tool history persistence and tool scope helpers.
-- [x] ~~Document tool history persistence in loop docs.~~ (Superseded by AgentMessage architecture)
+### Next Steps
+- [ ] Merge PR #6
+- [ ] Tag release (if appropriate)
 
-## Current Initiative: docs-accuracy
-- [x] Align context budget docs with loop API and history requirements.
-- [x] Add ADC setup note for Vertex provider.
+---
 
-## Current Initiative: test-harness
-- [x] Add integration harness covering loop, truncation, and compaction flows.
-- [x] Expand harness coverage across loop behavior, tools, and policies.
-- [x] Add guard, event ordering, byte truncation, and usage passthrough tests.
-- [x] Add MCP integration and Vertex config tests.
+## Completed Initiatives
 
-## Current Initiative: ci-harness
-- [x] Add GitHub Actions workflow to run all tests (including harness).
-- [x] Add formatter and linter checks to CI workflow.
-- [x] Switch CI linter to staticcheck (latest) for reliable module coverage.
-
-## Current Initiative: mono-parity-context
-- [x] Design optional, pluggable context budgeting + compaction + truncation modules.
-- [x] Define minimal interfaces for model limits + usage reporting.
-- [x] Provide seamless integration example for agent loop usage.
-- [x] Implement budget + truncation packages with tests.
-- [x] Add loop helper, adapter utilities, history hook, and context compatibility.
-
-## Current Initiative: phase-3a-message-architecture
+### phase-3a-message-architecture ✅
 Adopt pi-mono pattern: rich internal message type with structured tool calls, adapter-level conversion.
 
-### Completed
-- [x] Create AgentMessage type in `agentic/message/message.go` with Role, Content, ToolCalls, ToolResults, Timestamp
+- [x] Create AgentMessage type in `agentic/message/message.go`
 - [x] Update loop types (Request, Result, Input) to use `[]message.AgentMessage`
-- [x] Remove `toolResultMessage()` function - no more text flattening of tool results
+- [x] Remove `toolResultMessage()` function - no more text flattening
 - [x] Update history Store interface to use AgentMessage
-- [x] Remove ToolRecorder/ToolLoader interfaces (tool data now embedded in AgentMessage)
-- [x] Update Vertex provider - replace HistoryTurn with AgentMessage, update `appendHistory()`
+- [x] Remove ToolRecorder/ToolLoader interfaces (tool data now embedded)
+- [x] Update Vertex provider - replace HistoryTurn with AgentMessage
 - [x] Add ToolCalls field to Event struct for MessageEnd events
 - [x] Delete legacy files: context.go, compat.go, compat_test.go, with_system.go, with_system_test.go
-- [x] Update examples/basic/main.go to use new message types
-- [x] Update tests/harness/* to use AgentMessage
+- [x] Update examples/basic/main.go
+- [x] Update tests/harness/*
+- [x] Remove low-value tests (6 tests across message, history, vertex, harness)
+- [x] Add edge case tests (8 new tests in loop_edge_cases_test.go)
+- [x] Extract `emit()` helper in loop.go
+- [x] Add `envTrimmed()` helper in vertex.go
+- [x] Simplify compaction logic with `max()` builtin
+- [x] Update docs/06-context-budgets.md for AgentMessage
 
-### Completed: Test Cleanup
-- [x] Remove low-value tests:
-  - [x] `message_test.go`: TestForBudget, TestForBudgetSlice (trivial field mapping)
-  - [x] `history_test.go`: TestMemoryStore (basic slice operations)
-  - [x] `vertex_test.go`: TestBuildRequestWithoutThoughtSignature, TestDecideWithoutThoughtSignature, TestDecideWithSnakeCaseThoughtSignature, TestThoughtSignatureNotStoredOnClient
-  - [x] `harness/`: TestLoopDefaultReplyWhenEmpty, TestLoopBudgetNoOpPaths
+### docs-agentmessage-update ✅
+- [x] Update `loop.Input.History` type in docs
+- [x] Update `history.Store` interface in docs
+- [x] Remove ToolRecorder/ToolLoader references
+- [x] Add notes about AgentMessage preserving structured tool data
 
-### Completed: Missing Test Coverage
-- [x] Add error recovery tests (compaction fails mid-loop) - TestLoopCompactionFailure
-- [x] Add boundary condition tests (empty histories, single-message, max-sized) - TestLoopEmptyHistory, TestLoopSingleMessageHistory, TestLoopEmptyUserMessage
-- [x] Add complex tool interaction tests (multiple tools in sequence, failures mid-sequence) - TestLoopMultipleToolsInSequence, TestLoopToolFailureMidSequence, TestLoopParallelToolCalls, TestLoopMaxTurnsReachedWithPendingTools
+### vertex-provider ✅
+- [x] Add Vertex Gemini provider (ADC-only)
+- [x] Add docs + example usage
 
-### Completed: Refactoring - High Priority
-- [x] Extract `emit()` helper in loop.go (consolidated 8 `if emit != nil` checks)
-- [x] Document Event struct design (added usage comments explaining ToolCall vs ToolCalls)
-- [N/A] Config validation returns nil for incomplete configs by design (allows partial configuration)
+### loop-truncation-fixes ✅
+- [x] Return partial output when head truncation hits first-line byte limit
+- [x] Preserve byte-based truncation metadata for tail truncation
+- [x] Avoid appending compaction summaries for history stores without rewrite support
 
-### Completed: Refactoring - Medium Priority
-- [N/A] Budget conversion stays in message package (avoids circular dependency, follows usage patterns)
-- [N/A] Slice utilities are idiomatic Go patterns, no extraction needed
-- [x] Simplified compaction logic in message.go (using builtin max())
+### loop-history-rewriter ✅
+- [x] Require history.Rewriter when budget compaction is configured
 
-### Completed: Refactoring - Low Priority
-- [N/A] Single-use functions in loop.go provide meaningful abstraction, kept as-is
-- [x] Added envTrimmed() helper in vertex.go for cleaner env parsing
-- [N/A] Tool result payload functions are correctly factored (index guard + single handler)
+### test-harness ✅
+- [x] Add integration harness covering loop, truncation, and compaction flows
+- [x] Expand harness coverage across loop behavior, tools, and policies
+- [x] Add guard, event ordering, byte truncation, and usage passthrough tests
+- [x] Add MCP integration and Vertex config tests
 
-## Current Initiative: docs-agentmessage-update
-Update documentation to reflect AgentMessage architecture (Phase 3A).
+### ci-harness ✅
+- [x] Add GitHub Actions workflow to run all tests
+- [x] Add formatter and linter checks to CI workflow
+- [x] Switch CI linter to staticcheck
 
-### Completed
-- [x] Update `docs/06-context-budgets.md`:
-  - [x] Change `loop.Input.History` from `[]budget.Message` to `[]message.AgentMessage`
-  - [x] Remove reference to `history.ToolRecorder` and `history.ToolLoader` (tool data now in AgentMessage)
-  - [x] Update `history.Store` interface to use `message.AgentMessage`
-  - [x] Add note explaining AgentMessage preserves structured tool calls/results
+### mono-parity-context ✅
+- [x] Design optional, pluggable context budgeting + compaction + truncation modules
+- [x] Define minimal interfaces for model limits + usage reporting
+- [x] Implement budget + truncation packages with tests
+- [x] Add loop helper, adapter utilities, history hook
+
+---
 
 ## Progress Log
-- 2026-01-24: Updated docs/06-context-budgets.md for AgentMessage architecture (loop.Input.History, history.Store interface, removed ToolRecorder/ToolLoader references).
-- 2026-01-24: Completed Phase 3A cleanup: removed low-value tests, added high-value edge case tests (loop_edge_cases_test.go), extracted emit() helper in loop.go, simplified compaction logic, added envTrimmed() helper in vertex.go.
-- 2026-01-24: Completed Phase 3A message architecture refactoring. Created AgentMessage type, updated loop/history/vertex to use structured messages, removed legacy context files.
-- 2026-01-18 10:11: Started toolscope + tool history persistence work.
-- 2026-01-18 10:20: Added toolscope, tool history persistence, tests, and docs update.
-- 2026-01-17 13:06: Removed unused test helper to satisfy staticcheck.
-- 2026-01-17 11:39: Applied gofmt to repo files to satisfy CI formatting check.
-- 2026-01-16 22:39: Switched CI linter to staticcheck to avoid golangci-lint module detection issues.
-- 2026-01-16 22:33: Added gofmt and golangci-lint checks to CI workflow.
-- 2026-01-16 22:30: Added MCP integration tests and Vertex provider config checks.
-- 2026-01-16 22:26: Added harness tests for budget guards, event ordering, byte truncation, and usage passthrough.
-- 2026-01-16 22:16: Added CI workflow to run harness tests on push/PR.
-- 2026-01-16 22:10: Fixed harness truncation test output to use raw lines.
-- 2026-01-16 22:09: Expanded harness to cover loop behavior, tool policies, and truncation modes.
-- 2026-01-16 22:01: Stabilized harness tool truncation scenario.
-- 2026-01-16 22:00: Added integration test harness for loop scenarios.
-- 2026-01-16 21:53: Updated docs for loop API, history rewriter requirement, and Vertex ADC setup.
-- 2026-01-16 21:47: Guarded ToBudget so nil legacy compactor stays disabled.
-- 2026-01-16 21:45: Enforced history.Rewriter for configured compaction; added guard test.
-- 2026-01-16 21:36: Fixed truncation edge cases and history compaction persistence behavior.
-- 2026-01-16 21:12: Added Vertex Gemini provider, adapter stub, and docs.
-- 2026-01-16 21:05: Started Vertex Gemini provider implementation.
-- 2026-01-14 10:18: Created repo scaffolding and task tracking.
-- 2026-01-14 11:11: Core module + docs + runnable example complete.
-- 2026-01-14 11:46: Optional modules, adapters, and tests complete.
-- 2026-01-14 14:05: Real SDK examples added as nested modules.
-- 2026-01-14 14:24: MIT LICENSE and CONTRIBUTING added.
-- 2026-01-14 14:36: Docs updated for open-source release.
-- 2026-01-14 15:24: Added .gitignore + Anthropic real example fix verified.
-- 2026-01-14 15:31: Removed PLAN/IMPLEMENTATION/GETTING_STARTED in favor of docs index.
-- 2026-01-14 18:56: Added `CompactWithSystem` helper and tests for system prompt retention.
-- 2026-01-14 22:50: Started design for mono-like context budgeting + compaction (optional modules).
-- 2026-01-14 23:02: Added limits/usage/truncate/budget packages with docs and tests.
-- 2026-01-14 23:28: Added loop helper, adapter helpers, history hook, compat layer, and mono-like example.
-- 2026-01-14 18:59: Updated basic example and streaming docs to show system prompt preservation.
-- 2026-01-14 19:01: Added pre-commit hook script to format, test, and scan secrets.
+- 2026-01-24: Updated docs/06-context-budgets.md for AgentMessage architecture.
+- 2026-01-24: Completed Phase 3A cleanup: tests, refactoring, docs. PR #6 created.
+- 2026-01-24: Completed Phase 3A message architecture refactoring.
+- 2026-01-18: Added toolscope, tool history persistence, tests, and docs.
+- 2026-01-17: Applied gofmt, removed unused test helper for staticcheck.
+- 2026-01-16: Added Vertex Gemini provider, CI workflow, harness tests.
+- 2026-01-14: Initial scaffolding, core module, docs, examples, LICENSE.
