@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/victorarias/agentic-weave/agentic"
+	"github.com/victorarias/agentic-weave/agentic/message"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -22,18 +23,10 @@ import (
 type Input struct {
 	SystemPrompt string
 	UserMessage  string
-	History      []HistoryTurn
+	History      []message.AgentMessage
 	Tools        []agentic.ToolDefinition
 	ToolCalls    []agentic.ToolCall
 	ToolResults  []agentic.ToolResult
-}
-
-// HistoryTurn is a minimal chat history record used for request construction.
-type HistoryTurn struct {
-	UserMessage    string
-	ToolCalls      []agentic.ToolCall
-	ToolResults    []agentic.ToolResult
-	AssistantReply string
 }
 
 // Decision is the output from a single model call.
@@ -124,22 +117,26 @@ func New(cfg Config) (*Client, error) {
 // NewFromEnv builds a Vertex Gemini client from environment variables.
 func NewFromEnv() (*Client, error) {
 	cfg := Config{
-		Project:  strings.TrimSpace(os.Getenv("VERTEX_PROJECT")),
-		Location: strings.TrimSpace(os.Getenv("VERTEX_LOCATION")),
-		Model:    strings.TrimSpace(os.Getenv("VERTEX_MODEL")),
-		BaseURL:  strings.TrimSpace(os.Getenv("VERTEX_API_BASE")),
+		Project:  envTrimmed("VERTEX_PROJECT"),
+		Location: envTrimmed("VERTEX_LOCATION"),
+		Model:    envTrimmed("VERTEX_MODEL"),
+		BaseURL:  envTrimmed("VERTEX_API_BASE"),
 	}
-	if temp := strings.TrimSpace(os.Getenv("VERTEX_TEMPERATURE")); temp != "" {
+	if temp := envTrimmed("VERTEX_TEMPERATURE"); temp != "" {
 		if v, err := strconv.ParseFloat(temp, 64); err == nil {
 			cfg.Temperature = v
 		}
 	}
-	if max := strings.TrimSpace(os.Getenv("VERTEX_MAX_TOKENS")); max != "" {
+	if max := envTrimmed("VERTEX_MAX_TOKENS"); max != "" {
 		if v, err := strconv.Atoi(max); err == nil {
 			cfg.MaxTokens = v
 		}
 	}
 	return New(cfg)
+}
+
+func envTrimmed(key string) string {
+	return strings.TrimSpace(os.Getenv(key))
 }
 
 // Decide calls Vertex AI generateContent.
@@ -323,48 +320,71 @@ func (c *Client) buildRequest(input Input) ([]byte, error) {
 	return json.Marshal(request)
 }
 
-func appendHistory(contents []vertexContent, history []HistoryTurn) []vertexContent {
-	for _, turn := range history {
-		if strings.TrimSpace(turn.UserMessage) != "" {
-			contents = append(contents, vertexContent{
-				Role: "user",
-				Parts: []vertexPart{{
-					Text: turn.UserMessage,
-				}},
-			})
-		}
-		if len(turn.ToolCalls) > 0 {
-			for idx, call := range turn.ToolCalls {
+// appendHistory converts AgentMessage history to Vertex AI content format.
+func appendHistory(contents []vertexContent, history []message.AgentMessage) []vertexContent {
+	for _, msg := range history {
+		switch msg.Role {
+		case message.RoleUser:
+			if strings.TrimSpace(msg.Content) != "" {
+				contents = append(contents, vertexContent{
+					Role: "user",
+					Parts: []vertexPart{{
+						Text: msg.Content,
+					}},
+				})
+			}
+
+		case message.RoleAssistant:
+			// Handle assistant messages with tool calls
+			if len(msg.ToolCalls) > 0 {
+				for _, call := range msg.ToolCalls {
+					contents = append(contents, vertexContent{
+						Role: "model",
+						Parts: []vertexPart{{
+							FunctionCall: &vertexFunctionCall{
+								Name: call.Name,
+								Args: decodeArgs(call.Input),
+							},
+							ThoughtSignature: call.ThoughtSignature,
+						}},
+					})
+				}
+			}
+			// Handle assistant text replies
+			if strings.TrimSpace(msg.Content) != "" && len(msg.ToolCalls) == 0 {
 				contents = append(contents, vertexContent{
 					Role: "model",
 					Parts: []vertexPart{{
-						FunctionCall: &vertexFunctionCall{
-							Name: call.Name,
-							Args: decodeArgs(call.Input),
-						},
-						ThoughtSignature: call.ThoughtSignature,
+						Text: msg.Content,
 					}},
 				})
+			}
 
-				response := toolResultPayload(turn.ToolResults, idx)
+		case message.RoleTool:
+			// Tool results become function responses
+			for _, result := range msg.ToolResults {
+				response := singleToolResultPayload(result)
 				contents = append(contents, vertexContent{
 					Role: "user",
 					Parts: []vertexPart{{
 						FunctionResponse: &vertexFunctionResponse{
-							Name:     call.Name,
+							Name:     result.Name,
 							Response: response,
 						},
 					}},
 				})
 			}
-		}
-		if strings.TrimSpace(turn.AssistantReply) != "" {
-			contents = append(contents, vertexContent{
-				Role: "model",
-				Parts: []vertexPart{{
-					Text: turn.AssistantReply,
-				}},
-			})
+
+		case message.RoleSystem:
+			// System messages in history are typically summaries from compaction
+			if strings.TrimSpace(msg.Content) != "" {
+				contents = append(contents, vertexContent{
+					Role: "user",
+					Parts: []vertexPart{{
+						Text: "[Context Summary] " + msg.Content,
+					}},
+				})
+			}
 		}
 	}
 	return contents
@@ -385,7 +405,10 @@ func toolResultPayload(results []agentic.ToolResult, idx int) map[string]any {
 	if idx >= len(results) {
 		return map[string]any{"result": nil}
 	}
-	result := results[idx]
+	return singleToolResultPayload(results[idx])
+}
+
+func singleToolResultPayload(result agentic.ToolResult) map[string]any {
 	if result.Error != nil {
 		return map[string]any{"error": result.Error.Message}
 	}
