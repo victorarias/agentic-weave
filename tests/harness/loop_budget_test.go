@@ -15,7 +15,7 @@ type recordingCompactor struct {
 	summary string
 }
 
-func (r recordingCompactor) Compact(ctx context.Context, messages []budget.Message) (string, error) {
+func (r recordingCompactor) Compact(ctx context.Context, messages []budget.Budgetable) (string, error) {
 	return r.summary, nil
 }
 

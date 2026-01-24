@@ -285,11 +285,11 @@ func (r *replyDecider) Decide(ctx context.Context, in Input) (Decision, error) {
 
 type recordingCompactor struct {
 	summary string
-	last    []budget.Message
+	last    []budget.Budgetable
 }
 
-func (r *recordingCompactor) Compact(ctx context.Context, messages []budget.Message) (string, error) {
-	r.last = append([]budget.Message(nil), messages...)
+func (r *recordingCompactor) Compact(ctx context.Context, messages []budget.Budgetable) (string, error) {
+	r.last = append([]budget.Budgetable(nil), messages...)
 	return r.summary, nil
 }
 

@@ -27,41 +27,32 @@ type AgentMessage struct {
 	Timestamp   time.Time
 }
 
-// ForBudget converts to minimal budget.Message for token counting.
-func (m AgentMessage) ForBudget() budget.Message {
+// BudgetRole implements budget.Budgetable.
+func (m AgentMessage) BudgetRole() string {
+	return m.Role
+}
+
+// BudgetContent implements budget.Budgetable.
+// Returns all content concatenated for token estimation.
+func (m AgentMessage) BudgetContent() string {
 	content := m.Content
 	for _, tc := range m.ToolCalls {
 		content += tc.Name + string(tc.Input)
 	}
 	for _, tr := range m.ToolResults {
 		content += string(tr.Output)
+		if tr.Error != nil {
+			content += tr.Error.Message
+		}
 	}
-	return budget.Message{Role: m.Role, Content: content}
+	return content
 }
 
-// ForBudgetSlice converts a slice of AgentMessage for token counting.
-func ForBudgetSlice(msgs []AgentMessage) []budget.Message {
-	out := make([]budget.Message, len(msgs))
-	for i, m := range msgs {
-		out[i] = m.ForBudget()
-	}
-	return out
-}
-
-// FromBudget creates an AgentMessage from a budget.Message.
-// This is useful for loading legacy history or summaries.
-func FromBudget(msg budget.Message) AgentMessage {
-	return AgentMessage{
-		Role:    msg.Role,
-		Content: msg.Content,
-	}
-}
-
-// FromBudgetSlice converts a slice of budget.Message to AgentMessage.
-func FromBudgetSlice(msgs []budget.Message) []AgentMessage {
-	out := make([]AgentMessage, len(msgs))
-	for i, m := range msgs {
-		out[i] = FromBudget(m)
+// ToBudgetable converts a slice of AgentMessage to []budget.Budgetable.
+func ToBudgetable(messages []AgentMessage) []budget.Budgetable {
+	out := make([]budget.Budgetable, len(messages))
+	for i, m := range messages {
+		out[i] = m
 	}
 	return out
 }
@@ -74,18 +65,16 @@ func CompactIfNeeded(ctx context.Context, mgr budget.Manager, messages []AgentMe
 		return messages, "", false, nil
 	}
 
-	budgetMsgs := ForBudgetSlice(messages)
-	compacted, summary, changed, err := mgr.CompactIfNeeded(ctx, budgetMsgs)
+	budgetable := ToBudgetable(messages)
+	summary, keepCount, changed, err := mgr.CompactIfNeeded(ctx, budgetable)
 	if err != nil || !changed {
 		return messages, summary, changed, err
 	}
 
-	// Compacted result: [summary, kept_msg_1, kept_msg_2, ...]
-	// Keep original AgentMessages (with tool data) from the end of the input.
-	keptCount := max(0, len(compacted)-1)
-	startIdx := max(0, len(messages)-keptCount)
+	// Keep original AgentMessages (with tool data) from the end
+	startIdx := max(0, len(messages)-keepCount)
 
-	result := make([]AgentMessage, 0, keptCount+1)
+	result := make([]AgentMessage, 0, keepCount+1)
 	result = append(result, AgentMessage{
 		Role:      RoleSystem,
 		Content:   summary,

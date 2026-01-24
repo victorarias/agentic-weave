@@ -20,7 +20,7 @@ type failingCompactor struct {
 	failAfter int
 }
 
-func (c *failingCompactor) Compact(ctx context.Context, messages []budget.Message) (string, error) {
+func (c *failingCompactor) Compact(ctx context.Context, messages []budget.Budgetable) (string, error) {
 	c.callCount++
 	if c.callCount > c.failAfter {
 		return "", errors.New("compaction failed")
