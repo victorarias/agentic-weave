@@ -97,6 +97,30 @@ func (r *Runner) emit(e events.Event) {
 	}
 }
 
+// recordAssistantMessage stores an assistant message in history and emits MessageEnd.
+func (r *Runner) recordAssistantMessage(ctx context.Context, turn int, reply string, toolCalls []agentic.ToolCall, history *[]message.AgentMessage, isFinal bool) {
+	msg := message.AgentMessage{
+		Role:      message.RoleAssistant,
+		Content:   reply,
+		ToolCalls: toolCalls,
+		Timestamp: time.Now(),
+	}
+	*history = append(*history, msg)
+	r.appendHistory(ctx, msg)
+
+	msgID := fmt.Sprintf("msg-%d", turn)
+	if isFinal {
+		msgID = fmt.Sprintf("msg-final-%d", turn)
+	}
+	r.emit(events.Event{
+		Type:      events.MessageEnd,
+		MessageID: msgID,
+		Role:      message.RoleAssistant,
+		Content:   reply,
+		ToolCalls: toolCalls,
+	})
+}
+
 // Run executes the loop for a single user request.
 func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if r.cfg.Decider == nil {
@@ -155,28 +179,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		if len(decision.ToolCalls) == 0 || turn >= r.cfg.MaxTurns {
-			reply := strings.TrimSpace(decision.Reply)
-			if reply == "" {
-				reply = "I am here. Tell me what you need."
-			}
-
-			assistantMsg := message.AgentMessage{
-				Role:      message.RoleAssistant,
-				Content:   reply,
-				Timestamp: time.Now(),
-			}
-			historyMessages = append(historyMessages, assistantMsg)
-			r.appendHistory(ctx, assistantMsg)
-
-			r.emit(events.Event{
-				Type:      events.MessageEnd,
-				MessageID: fmt.Sprintf("msg-final-%d", turn),
-				Role:      message.RoleAssistant,
-				Content:   reply,
-			})
+			r.recordAssistantMessage(ctx, turn, decision.Reply, nil, &historyMessages, true)
 
 			return Result{
-				Reply:       reply,
+				Reply:       decision.Reply,
 				History:     historyMessages,
 				Summary:     summary,
 				ToolCalls:   toolCalls,
@@ -190,24 +196,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{}, errors.New("loop: tool calls requested but no executor configured")
 		}
 
-		// Emit MessageEnd for assistant message with tool calls
-		r.emit(events.Event{
-			Type:      events.MessageEnd,
-			MessageID: fmt.Sprintf("msg-%d", turn),
-			Role:      message.RoleAssistant,
-			Content:   decision.Reply,
-			ToolCalls: decision.ToolCalls,
-		})
-
-		// Add assistant message with tool calls to history
-		assistantMsg := message.AgentMessage{
-			Role:      message.RoleAssistant,
-			Content:   decision.Reply,
-			ToolCalls: decision.ToolCalls,
-			Timestamp: time.Now(),
-		}
-		historyMessages = append(historyMessages, assistantMsg)
-		r.appendHistory(ctx, assistantMsg)
+		r.recordAssistantMessage(ctx, turn, decision.Reply, decision.ToolCalls, &historyMessages, false)
 
 		for i, call := range decision.ToolCalls {
 			if call.ID == "" {

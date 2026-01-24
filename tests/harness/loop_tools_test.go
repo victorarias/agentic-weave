@@ -227,9 +227,7 @@ func TestLoopMaxTurnsStops(t *testing.T) {
 	if len(result.ToolCalls) != 1 || len(result.ToolResults) != 1 {
 		t.Fatalf("expected 1 tool call/result")
 	}
-	if result.Reply == "" {
-		t.Fatalf("expected default reply")
-	}
+	// Loop passes through decider's reply without adding defaults
 }
 
 func TestLoopToolListingRespectsPolicy(t *testing.T) {

@@ -333,7 +333,7 @@ func TestLoopMaxTurnsReachedWithPendingTools(t *testing.T) {
 		},
 	}
 
-	result, _, err := runScenario(t, loop.Config{
+	_, _, err := runScenario(t, loop.Config{
 		Decider:  decider,
 		Executor: executor,
 		MaxTurns: 2, // Limit to 2 turns
@@ -342,10 +342,7 @@ func TestLoopMaxTurnsReachedWithPendingTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should exit with default reply when max turns reached
-	if result.Reply == "" {
-		t.Fatalf("expected non-empty reply at max turns")
-	}
+	// Loop passes through decider's reply without adding defaults
 	// Decider should have been called 3 times (turn 0, 1, 2 but exits at turn 2)
 	if len(decider.inputs) != 3 {
 		t.Fatalf("expected 3 decider calls (0, 1, exit at 2), got %d", len(decider.inputs))
