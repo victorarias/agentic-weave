@@ -4,26 +4,70 @@ This file tracks current work items and progress.
 
 ## Current State
 
-**Status:** Phase 3A complete. PR #6 open for review.
+**Status:** Phase 3B complete. PR #6 open for review.
 
 **Branch:** `feat/phase-3a-message-cleanup`
 **PR:** https://github.com/victorarias/agentic-weave/pull/6
 
-### What Was Done (Phase 3A)
+### What Was Done
+
+**Phase 3A - Message Architecture:**
 - Created `AgentMessage` type with structured tool calls/results (no more text flattening)
 - Updated entire codebase: loop, history, vertex provider, events, examples, tests
 - Deleted legacy context files (context.go, compat.go, with_system.go + tests)
 - Removed low-value tests, added 8 high-value edge case tests
-- Refactored: `emit()` helper, `envTrimmed()` helper, simplified compaction with `max()`
-- Updated docs for new architecture
+
+**Phase 3B - Loop & Budget Refactoring:**
+- Extracted `recordAssistantMessage()` helper - consolidates history storage + event emission
+- Removed default reply fallback from loop - providers handle empty replies
+- Removed reply trimming from loop - providers handle formatting
+- Replaced `budget.Message` with `Budgetable` interface (pi-mono pattern)
+- `AgentMessage` implements `Budgetable` directly - no conversion needed
+- `BudgetContent()` now includes tool errors in token estimation
+- Removed `ForBudget`, `ForBudgetSlice`, `FromBudget`, `FromBudgetSlice` functions
+- Updated docs with new architecture
 
 ### Next Steps
 - [ ] Merge PR #6
 - [ ] Tag release (if appropriate)
 
+### Key Files
+- `agentic/message/message.go` - AgentMessage type, implements Budgetable
+- `agentic/context/budget/budget.go` - Budgetable interface, Manager, compaction logic
+- `agentic/loop/loop.go` - Main agent loop with recordAssistantMessage helper
+- `agentic/providers/vertex/vertex.go` - Vertex Gemini provider
+- `docs/06-context-budgets.md` - Architecture documentation
+
+### Architecture Decisions
+- **Budgetable interface** - Follows pi-mono: work directly with rich AgentMessage, no separate "budget message" type. Avoids conversion bugs.
+- **No default reply in loop** - Providers (Vertex) handle empty replies. Loop passes through what it gets.
+- **No trimming in loop** - Providers handle formatting. Loop is a thin orchestrator.
+- **Tool errors in BudgetContent()** - Fixes bug where large error messages bypassed compaction.
+
+### PR #6 Commits
+```
+refactor(budget): replace Message type with Budgetable interface
+refactor(loop): extract recordAssistantMessage helper
+docs: update TASKS.md with Phase 3B completion
++ earlier Phase 3A commits (AgentMessage, legacy cleanup, tests)
+```
+
 ---
 
 ## Completed Initiatives
+
+### phase-3b-loop-budget-refactoring ✅
+Simplify loop and budget code, follow pi-mono pattern more closely.
+
+- [x] Extract `recordAssistantMessage()` helper in loop.go
+- [x] Remove default reply fallback (providers handle this)
+- [x] Remove reply trimming (providers handle formatting)
+- [x] Replace `budget.Message` with `Budgetable` interface
+- [x] `AgentMessage` implements `Budgetable` directly
+- [x] Include tool errors in `BudgetContent()` for accurate token estimation
+- [x] Remove conversion functions (ForBudget, FromBudget, etc.)
+- [x] Update all Compactor implementations to use `[]Budgetable`
+- [x] Update docs/06-context-budgets.md
 
 ### phase-3a-message-architecture ✅
 Adopt pi-mono pattern: rich internal message type with structured tool calls, adapter-level conversion.
@@ -44,12 +88,6 @@ Adopt pi-mono pattern: rich internal message type with structured tool calls, ad
 - [x] Add `envTrimmed()` helper in vertex.go
 - [x] Simplify compaction logic with `max()` builtin
 - [x] Update docs/06-context-budgets.md for AgentMessage
-
-### docs-agentmessage-update ✅
-- [x] Update `loop.Input.History` type in docs
-- [x] Update `history.Store` interface in docs
-- [x] Remove ToolRecorder/ToolLoader references
-- [x] Add notes about AgentMessage preserving structured tool data
 
 ### vertex-provider ✅
 - [x] Add Vertex Gemini provider (ADC-only)
@@ -83,6 +121,7 @@ Adopt pi-mono pattern: rich internal message type with structured tool calls, ad
 ---
 
 ## Progress Log
+- 2026-01-25: Phase 3B complete: loop refactoring, Budgetable interface, tool error counting.
 - 2026-01-24: Updated docs/06-context-budgets.md for AgentMessage architecture.
 - 2026-01-24: Completed Phase 3A cleanup: tests, refactoring, docs. PR #6 created.
 - 2026-01-24: Completed Phase 3A message architecture refactoring.
