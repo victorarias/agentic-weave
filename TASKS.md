@@ -19,9 +19,9 @@ This file tracks current work items and progress.
 
 ## Current Initiative: toolscope-history
 - [x] Add shared `agentic/toolscope` package.
-- [x] Persist tool calls/results via `history.ToolRecorder` and load via `history.ToolLoader`.
+- [x] ~~Persist tool calls/results via `history.ToolRecorder` and load via `history.ToolLoader`.~~ (Superseded by AgentMessage - tool data now embedded in message)
 - [x] Add coverage for tool history persistence and tool scope helpers.
-- [x] Document tool history persistence in loop docs.
+- [x] ~~Document tool history persistence in loop docs.~~ (Superseded by AgentMessage architecture)
 
 ## Current Initiative: docs-accuracy
 - [x] Align context budget docs with loop API and history requirements.
@@ -87,7 +87,18 @@ Adopt pi-mono pattern: rich internal message type with structured tool calls, ad
 - [x] Added envTrimmed() helper in vertex.go for cleaner env parsing
 - [N/A] Tool result payload functions are correctly factored (index guard + single handler)
 
+## Current Initiative: docs-agentmessage-update
+Update documentation to reflect AgentMessage architecture (Phase 3A).
+
+### Completed
+- [x] Update `docs/06-context-budgets.md`:
+  - [x] Change `loop.Input.History` from `[]budget.Message` to `[]message.AgentMessage`
+  - [x] Remove reference to `history.ToolRecorder` and `history.ToolLoader` (tool data now in AgentMessage)
+  - [x] Update `history.Store` interface to use `message.AgentMessage`
+  - [x] Add note explaining AgentMessage preserves structured tool calls/results
+
 ## Progress Log
+- 2026-01-24: Updated docs/06-context-budgets.md for AgentMessage architecture (loop.Input.History, history.Store interface, removed ToolRecorder/ToolLoader references).
 - 2026-01-24: Completed Phase 3A cleanup: removed low-value tests, added high-value edge case tests (loop_edge_cases_test.go), extracted emit() helper in loop.go, simplified compaction logic, added envTrimmed() helper in vertex.go.
 - 2026-01-24: Completed Phase 3A message architecture refactoring. Created AgentMessage type, updated loop/history/vertex to use structured messages, removed legacy context files.
 - 2026-01-18 10:11: Started toolscope + tool history persistence work.

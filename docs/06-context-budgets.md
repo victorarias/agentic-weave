@@ -164,7 +164,7 @@ type Decider interface {
 type Input struct {
 	SystemPrompt string
 	UserMessage  string
-	History      []budget.Message
+	History      []message.AgentMessage // rich message type with structured tool calls
 	Tools        []agentic.ToolDefinition
 	ToolCalls    []agentic.ToolCall
 	ToolResults  []agentic.ToolResult
@@ -199,8 +199,8 @@ agent := loop.New(loop.Config{
 })
 ```
 
-If your provider requires full tool-use history, implement `history.ToolRecorder` and `history.ToolLoader` on
-your `HistoryStore` to persist tool calls and results between turns.
+Tool calls and results are automatically preserved in `message.AgentMessage` - no separate interfaces needed.
+Each message stores structured `ToolCalls` and `ToolResults` fields, which are persisted via the history store.
 
 ---
 
@@ -232,11 +232,15 @@ When using the loop runner with compaction enabled, the history store must also 
 ```go
 package history
 
+import "github.com/victorarias/agentic-weave/agentic/message"
+
 type Store interface {
-	Append(ctx context.Context, msg budget.Message) error
-	Load(ctx context.Context) ([]budget.Message, error)
+	Append(ctx context.Context, msg message.AgentMessage) error
+	Load(ctx context.Context) ([]message.AgentMessage, error)
 }
 ```
+
+`AgentMessage` preserves structured tool calls and results, eliminating the need for separate tool history interfaces.
 
 ---
 
