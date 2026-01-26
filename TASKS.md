@@ -4,7 +4,7 @@ This file tracks current work items and progress.
 
 ## Current State
 
-**Status:** Phase 3B complete. PR #6 open for review.
+**Status:** Phase 3C implemented locally (capabilities rename + Anthropic provider + e2e). PR #6 open for review.
 
 **Branch:** `feat/phase-3a-message-cleanup`
 **PR:** https://github.com/victorarias/agentic-weave/pull/6
@@ -27,13 +27,16 @@ This file tracks current work items and progress.
 - Removed `ForBudget`, `ForBudgetSlice`, `FromBudget`, `FromBudgetSlice` functions
 - Updated docs with new architecture
 
+**Phase 3C - Capabilities Rename + Anthropic Provider:**
+- Renamed `adapters` package to `capabilities` with doc updates
+- Added Anthropic provider (`agentic/providers/anthropic`)
+- Added Anthropic e2e test mirroring Vertex flow
+- Added Anthropic provider docs
+
 ### Next Steps
 - [ ] Merge PR #6
 - [ ] Tag release (if appropriate)
-- [ ] Fix: persist user messages via HistoryStore in loop
-- [ ] Fix: normalize tool call IDs/caller before recording assistant message
-- [ ] Fix: preserve assistant text + tool calls in Vertex history conversion
-- [ ] Fix: pair compaction start/end events (no dangling start)
+- [ ] Decide whether to ship the capabilities rename + Anthropic provider as a separate PR or fold into an existing one
 
 ### Key Files
 - `agentic/message/message.go` - AgentMessage type, implements Budgetable
@@ -47,6 +50,7 @@ This file tracks current work items and progress.
 - **No default reply in loop** - Providers (Vertex) handle empty replies. Loop passes through what it gets.
 - **No trimming in loop** - Providers handle formatting. Loop is a thin orchestrator.
 - **Tool errors in BudgetContent()** - Fixes bug where large error messages bypassed compaction.
+- **Capabilities vs adapters** - Capabilities provide feature flags; provider packages own message conversion.
 
 ### PR #6 Commits
 ```
@@ -59,6 +63,14 @@ docs: update TASKS.md with Phase 3B completion
 ---
 
 ## Completed Initiatives
+
+### phase-3c-capabilities-anthropic-provider ✅
+Rename adapters to capabilities and add Anthropic provider + e2e coverage.
+
+- [x] Rename `adapters` package to `capabilities` across code and docs
+- [x] Add `agentic/providers/anthropic` provider (SDK-based)
+- [x] Add Anthropic e2e test (tool-call roundtrip)
+- [x] Document Anthropic provider usage
 
 ### phase-3b-loop-budget-refactoring ✅
 Simplify loop and budget code, follow pi-mono pattern more closely.
@@ -190,7 +202,9 @@ emit.Emit(events.Event{
 
 Each adapter converts `[]AgentMessage` to provider-specific format.
 
-**File:** `adapters/vertex/vertex.go`
+_Note: In the current codebase, conversion helpers live in provider packages; capabilities expose flags only._
+
+**File:** `capabilities/vertex/vertex.go`
 
 ```go
 func convertToVertexFormat(messages []message.AgentMessage) []vertexContent {
@@ -199,7 +213,7 @@ func convertToVertexFormat(messages []message.AgentMessage) []vertexContent {
 }
 ```
 
-**File:** `adapters/anthropic/anthropic.go`
+**File:** `capabilities/anthropic/anthropic.go`
 
 ```go
 func convertToAnthropicFormat(messages []message.AgentMessage) []anthropicMessage {
@@ -230,6 +244,7 @@ func FromAgentMessages(msgs []message.AgentMessage) []Message {
 ---
 
 ## Progress Log
+- 2026-01-26: Renamed adapters to capabilities; added Anthropic provider, e2e test, and docs.
 - 2026-01-26: Implemented loop history persistence, tool call normalization, Vertex text+tool call preservation, and paired compaction events with tests.
 - 2026-01-26: Added follow-up fixes list for loop/history/Vertex/event pairing.
 - 2026-01-26: Removed Conductor app task definitions from TASKS.md (external service).

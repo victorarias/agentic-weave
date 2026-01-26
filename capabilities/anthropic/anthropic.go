@@ -1,12 +1,12 @@
 package anthropic
 
-import "github.com/victorarias/agentic-weave/adapters"
+import "github.com/victorarias/agentic-weave/capabilities"
 
 // Adapter is a stub for Anthropic-specific capabilities.
 type Adapter struct{}
 
-func (Adapter) Capabilities() adapters.Capabilities {
-	return adapters.Capabilities{
+func (Adapter) Capabilities() capabilities.Capabilities {
+	return capabilities.Capabilities{
 		ToolUse:        true,
 		ToolChoiceNone: true,
 		ToolSearch:     true,

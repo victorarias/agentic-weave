@@ -5,7 +5,7 @@ This document proposes optional, pluggable context budgeting + compaction + trun
 ## Goals
 - Optional modules only; core remains unchanged and LLM-agnostic.
 - Seamless usability: a few lines of setup to get safe context budgets, compaction, and tool output truncation.
-- Pluggable policy: allow custom token counters, compaction strategies, and provider adapters.
+- Pluggable policy: allow custom token counters, compaction strategies, and provider capability adapters.
 - Clear, testable interfaces with minimal surface area.
 
 ## Non-goals
@@ -39,7 +39,7 @@ type Provider interface {
 }
 ```
 
-Use: adapters can expose limits; callers can inject constants.
+Use: capabilities can expose limits; callers can inject constants.
 
 ### 2) `agentic/usage`
 Standardize usage/stop-reason reporting without locking to a provider.
@@ -62,7 +62,7 @@ const (
 )
 ```
 
-Adapters can map provider responses to this shape. This keeps context budget logic decoupled from any SDK.
+Capabilities (or providers) can map responses to this shape. This keeps context budget logic decoupled from any SDK.
 
 ### 3) `agentic/truncate`
 Shared truncation helpers for tool outputs, with predictable guarantees.
@@ -252,8 +252,8 @@ This mirrors mono's "reserve + keep recent + summary" model, but remains pluggab
 
 ---
 
-## Provider Adapters
-Adapters can (optionally) expose:
+## Provider Capabilities
+Capabilities can (optionally) expose:
 - `limits.ModelLimits` for context + max output
 - `usage.Usage` + `usage.StopReason`
 - Finish-reason mapping (e.g., `max_tokens`)
@@ -304,4 +304,4 @@ type Store interface {
 1) Add `limits`, `usage`, `truncate`, and `context/budget` packages (all optional).
 2) Add compaction + truncation tests.
 3) Add `loop` package with reference implementation.
-4) Document adapters + example usage.
+4) Document capabilities + example usage.

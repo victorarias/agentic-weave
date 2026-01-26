@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/victorarias/agentic-weave/adapters/anthropic"
 	"github.com/victorarias/agentic-weave/agentic"
+	"github.com/victorarias/agentic-weave/capabilities/anthropic"
 )
 
 type AddTool struct{}

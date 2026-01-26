@@ -1,4 +1,4 @@
-package adapters
+package capabilities
 
 // Capabilities describe optional adapter features.
 type Capabilities struct {
