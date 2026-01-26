@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/victorarias/agentic-weave/adapters/gemini"
 	"github.com/victorarias/agentic-weave/agentic"
+	"github.com/victorarias/agentic-weave/capabilities/gemini"
 )
 
 type AddTool struct{}

@@ -19,9 +19,11 @@ The sum is 42.
 - `docs/01-core.md` — tools, registry, calls
 - `docs/02-streaming.md` — events and turn boundaries
 - `docs/03-optional-modules.md` — schema, skills, context, MCP
-- `docs/04-adapters.md` — provider adapters and capabilities
+- `docs/04-capabilities.md` — provider capabilities
 - `docs/05-advanced-tool-use.md` — search, examples, defer-load, allowed callers
 - `docs/06-context-budgets.md` — design for optional context budgets + compaction
+- `docs/07-vertex-provider.md` — Vertex Gemini provider
+- `docs/08-anthropic-provider.md` — Anthropic Claude provider
 
 ## Examples
 - `examples/basic` — streaming agent loop

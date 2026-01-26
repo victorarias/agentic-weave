@@ -1,12 +1,12 @@
 package vertex
 
-import "github.com/victorarias/agentic-weave/adapters"
+import "github.com/victorarias/agentic-weave/capabilities"
 
 // Adapter reports Vertex Gemini capabilities.
 type Adapter struct{}
 
-func (Adapter) Capabilities() adapters.Capabilities {
-	return adapters.Capabilities{
+func (Adapter) Capabilities() capabilities.Capabilities {
+	return capabilities.Capabilities{
 		ToolUse:        true,
 		ToolChoiceNone: true,
 		ToolSearch:     false,
