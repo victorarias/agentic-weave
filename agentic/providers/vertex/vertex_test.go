@@ -404,6 +404,37 @@ func TestAppendHistoryWithAgentMessage(t *testing.T) {
 	}
 }
 
+func TestAppendHistoryPreservesAssistantTextWithToolCalls(t *testing.T) {
+	history := []message.AgentMessage{
+		{
+			Role:    message.RoleAssistant,
+			Content: "Hello",
+			ToolCalls: []agentic.ToolCall{
+				{ID: "tc1", Name: "search", Input: json.RawMessage(`{"q":"test"}`)},
+			},
+		},
+	}
+
+	contents := appendHistory(nil, history)
+
+	hasText := false
+	hasCall := false
+	for _, content := range contents {
+		for _, part := range content.Parts {
+			if part.Text == "Hello" {
+				hasText = true
+			}
+			if part.FunctionCall != nil && part.FunctionCall.Name == "search" {
+				hasCall = true
+			}
+		}
+	}
+
+	if !hasText || !hasCall {
+		t.Fatalf("expected both assistant text and tool call, got text=%v call=%v", hasText, hasCall)
+	}
+}
+
 func TestBuildRequestHistorySerializesToolCallsOnce(t *testing.T) {
 	// History is the canonical source for tool calls. Verify tool calls from history
 	// are serialized exactly once in the request.

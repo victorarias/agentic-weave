@@ -68,3 +68,40 @@ func TestLoopCompactionInjectedHistory(t *testing.T) {
 		t.Fatalf("expected compaction events")
 	}
 }
+
+func TestLoopCompactionEventsPairedWhenNoCompaction(t *testing.T) {
+	budgetMgr := &budget.Manager{
+		Counter:   budget.CharCounter{},
+		Compactor: recordingCompactor{summary: "summary"},
+		Policy: budget.Policy{
+			ContextWindow: 1000,
+			KeepLast:      1,
+		},
+	}
+
+	decider := &scriptedDecider{
+		script: []loop.Decision{{Reply: "ok"}},
+	}
+
+	_, eventsSeen, err := runScenario(t, loop.Config{
+		Decider: decider,
+		Budget:  budgetMgr,
+	}, loop.Request{UserMessage: "ping"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundStart := false
+	foundEnd := false
+	for _, event := range eventsSeen {
+		if event.Type == events.ContextCompactionStart {
+			foundStart = true
+		}
+		if event.Type == events.ContextCompactionEnd {
+			foundEnd = true
+		}
+	}
+	if foundStart && !foundEnd {
+		t.Fatalf("expected compaction start/end pairing (start=%v end=%v)", foundStart, foundEnd)
+	}
+}

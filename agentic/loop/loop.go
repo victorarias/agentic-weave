@@ -148,6 +148,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			Timestamp: time.Now(),
 		}
 		historyMessages = append(historyMessages, userMsg)
+		r.appendHistory(ctx, userMsg)
 	}
 
 	summary, historyMessages, err := r.applyCompaction(ctx, historyMessages)
@@ -196,16 +197,18 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{}, errors.New("loop: tool calls requested but no executor configured")
 		}
 
+		for i := range decision.ToolCalls {
+			if decision.ToolCalls[i].ID == "" {
+				decision.ToolCalls[i].ID = fmt.Sprintf("call-%d-%d", turn, i)
+			}
+			if decision.ToolCalls[i].Caller == nil {
+				decision.ToolCalls[i].Caller = &agentic.ToolCaller{Type: r.cfg.ToolCallerType}
+			}
+		}
+
 		r.recordAssistantMessage(ctx, turn, decision.Reply, decision.ToolCalls, &historyMessages, false)
 
-		for i, call := range decision.ToolCalls {
-			if call.ID == "" {
-				call.ID = fmt.Sprintf("call-%d-%d", turn, i)
-			}
-			if call.Caller == nil {
-				call.Caller = &agentic.ToolCaller{Type: r.cfg.ToolCallerType}
-			}
-
+		for _, call := range decision.ToolCalls {
 			r.emit(events.Event{Type: events.ToolStart, ToolCall: &call})
 
 			result, err := r.cfg.Executor.Execute(ctx, call)
@@ -296,9 +299,11 @@ func (r *Runner) applyCompaction(ctx context.Context, messages []message.AgentMe
 
 	compacted, summary, changed, err := message.CompactIfNeeded(ctx, *r.cfg.Budget, messages)
 	if err != nil {
+		r.emit(events.Event{Type: events.ContextCompactionEnd})
 		return "", messages, err
 	}
 	if !changed {
+		r.emit(events.Event{Type: events.ContextCompactionEnd})
 		return "", messages, nil
 	}
 

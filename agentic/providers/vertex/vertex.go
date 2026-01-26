@@ -340,6 +340,15 @@ func appendHistory(contents []vertexContent, history []message.AgentMessage) []v
 			}
 
 		case message.RoleAssistant:
+			// Handle assistant text replies
+			if strings.TrimSpace(msg.Content) != "" {
+				contents = append(contents, vertexContent{
+					Role: "model",
+					Parts: []vertexPart{{
+						Text: msg.Content,
+					}},
+				})
+			}
 			// Handle assistant messages with tool calls
 			if len(msg.ToolCalls) > 0 {
 				for _, call := range msg.ToolCalls {
@@ -354,15 +363,6 @@ func appendHistory(contents []vertexContent, history []message.AgentMessage) []v
 						}},
 					})
 				}
-			}
-			// Handle assistant text replies
-			if strings.TrimSpace(msg.Content) != "" && len(msg.ToolCalls) == 0 {
-				contents = append(contents, vertexContent{
-					Role: "model",
-					Parts: []vertexPart{{
-						Text: msg.Content,
-					}},
-				})
 			}
 
 		case message.RoleTool:

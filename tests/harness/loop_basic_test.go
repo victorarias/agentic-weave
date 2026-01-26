@@ -67,3 +67,30 @@ func TestLoopHistoryStoreOverridesRequest(t *testing.T) {
 		t.Fatalf("expected result history from store")
 	}
 }
+
+func TestLoopPersistsUserMessageInHistoryStore(t *testing.T) {
+	store := history.NewMemoryStore()
+	_ = store.Append(context.Background(), message.AgentMessage{Role: message.RoleSystem, Content: "seed"})
+
+	decider := &scriptedDecider{
+		script: []loop.Decision{{Reply: "ok"}},
+	}
+
+	_, _, err := runScenario(t, loop.Config{
+		Decider:      decider,
+		HistoryStore: store,
+	}, loop.Request{
+		UserMessage: "hi",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msgs, _ := store.Load(context.Background())
+	if len(msgs) < 2 {
+		t.Fatalf("expected at least 2 messages in store, got %d", len(msgs))
+	}
+	if msgs[1].Role != message.RoleUser || msgs[1].Content != "hi" {
+		t.Fatalf("expected user message persisted in store, got role=%q content=%q", msgs[1].Role, msgs[1].Content)
+	}
+}

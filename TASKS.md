@@ -30,6 +30,10 @@ This file tracks current work items and progress.
 ### Next Steps
 - [ ] Merge PR #6
 - [ ] Tag release (if appropriate)
+- [ ] Fix: persist user messages via HistoryStore in loop
+- [ ] Fix: normalize tool call IDs/caller before recording assistant message
+- [ ] Fix: preserve assistant text + tool calls in Vertex history conversion
+- [ ] Fix: pair compaction start/end events (no dangling start)
 
 ### Key Files
 - `agentic/message/message.go` - AgentMessage type, implements Budgetable
@@ -226,6 +230,8 @@ func FromAgentMessages(msgs []message.AgentMessage) []Message {
 ---
 
 ## Progress Log
+- 2026-01-26: Implemented loop history persistence, tool call normalization, Vertex text+tool call preservation, and paired compaction events with tests.
+- 2026-01-26: Added follow-up fixes list for loop/history/Vertex/event pairing.
 - 2026-01-26: Removed Conductor app task definitions from TASKS.md (external service).
 - 2026-01-25: Phase 3B complete: loop refactoring, Budgetable interface, tool error counting.
 - 2026-01-24: Updated docs/06-context-budgets.md for AgentMessage architecture.
