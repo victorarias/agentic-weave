@@ -120,6 +120,228 @@ Adopt pi-mono pattern: rich internal message type with structured tool calls, ad
 
 ---
 
+## Task Definitions (from conductor-bot)
+
+### Phase 3A: agentic-weave Message Architecture (pi-mono Pattern)
+
+**Why:** Fixes Issue 1 ([tool_call] echo) by preserving tool call structure. Adopts proven pi-mono pattern.
+
+**Approach:** Rich internal message type + adapter-level conversion. No backward compatibility, clean API.
+
+#### Task 3A.1: Create AgentMessage Type
+
+**New file:** `agentic/message/message.go`
+
+```go
+package message
+
+// AgentMessage is the rich internal representation (pi-mono pattern)
+type AgentMessage struct {
+    Role        string           // "user", "assistant", "tool"
+    Content     string           // text content
+    ToolCalls   []ToolCall       // structured tool calls (not text!)
+    ToolResults []ToolResult     // structured tool results (not text!)
+    Timestamp   time.Time
+}
+
+// Standard roles
+const (
+    RoleUser      = "user"
+    RoleAssistant = "assistant"
+    RoleTool      = "tool"
+)
+```
+
+#### Task 3A.2: Update Loop to Use AgentMessage
+
+**File:** `agentic/loop/loop.go`
+
+**Changes:**
+- Replace `[]budget.Message` with `[]message.AgentMessage` for history
+- When appending tool calls: `AgentMessage{Role: "assistant", ToolCalls: calls}`
+- When appending tool results: `AgentMessage{Role: "tool", ToolResults: results}`
+- Remove text flattening helpers (`toolResultMessage()` etc.)
+
+#### Task 3A.3: Add Message Events
+
+**File:** `agentic/events/events.go`
+
+**Changes:**
+- `MessageEnd` - always emitted when LLM response complete (has full content)
+- `MessageStart` - only emitted by streaming providers (signals LLM call started)
+- `MessageUpdate` - only emitted by streaming providers (delta content)
+
+```go
+// MessageEnd is always emitted, even for non-streaming
+emit.Emit(events.Event{
+    Type:      events.MessageEnd,
+    MessageID: msgID,
+    Role:      "assistant",
+    Content:   decision.Reply,
+    ToolCalls: decision.ToolCalls,
+})
+```
+
+#### Task 3A.4: Add Adapter Conversion Functions
+
+Each adapter converts `[]AgentMessage` to provider-specific format.
+
+**File:** `adapters/vertex/vertex.go`
+
+```go
+func convertToVertexFormat(messages []message.AgentMessage) []vertexContent {
+    // Convert structured tool calls to Vertex function call format
+    // No text flattening - preserve structure
+}
+```
+
+**File:** `adapters/anthropic/anthropic.go`
+
+```go
+func convertToAnthropicFormat(messages []message.AgentMessage) []anthropicMessage {
+    // Convert to Anthropic format with tool_use blocks
+}
+```
+
+#### Task 3A.5: Keep budget.Message Minimal
+
+**File:** `agentic/context/budget/budget.go`
+
+Keep `budget.Message` for token counting only:
+```go
+type Message struct {
+    Role    string
+    Content string
+    // NO tool calls - budget just needs text for token estimation
+}
+```
+
+Add conversion helper:
+```go
+func FromAgentMessages(msgs []message.AgentMessage) []Message {
+    // Flatten for token counting only
+}
+```
+
+---
+
+### Phase 3B: Reply Tool Architecture (conductor-bot)
+
+**Why:** Consistent Slack output via tools. Enables multi-message responses. Fallback for safety.
+
+#### Task 3B.1: Create reply_to_user Tool
+
+**New file:** `internal/tools/reply_to_user.go`
+
+Context-aware tool for conversation replies:
+
+```go
+type ReplyToUserTool struct {
+    slack    ports.SlackPort
+    channel  string  // injected per-activation
+    threadTS string  // injected per-activation
+}
+
+func (t *ReplyToUserTool) Name() string { return "reply_to_user" }
+
+func (t *ReplyToUserTool) Description() string {
+    return "Send a message to the user. Write in your natural voice as Conductor."
+}
+
+func (t *ReplyToUserTool) Parameters() map[string]ParameterSpec {
+    return map[string]ParameterSpec{
+        "message": {Type: "string", Description: "The message to send", Required: true},
+    }
+}
+
+// WithContext creates a copy with channel/thread for this activation
+func (t *ReplyToUserTool) WithContext(channel, threadTS string) *ReplyToUserTool
+```
+
+**Keep post_to_slack** for explicit channel posting (standup briefs, announcements).
+
+#### Task 3B.2: Wire Reply Tool in ConductorFlow
+
+**File:** `internal/commands/conductor_flow.go`
+
+- Add `replyTool` field
+- In `Run()`: create context-aware copy with `req.ChannelID`/`req.ThreadTS`
+- Add to tools list for this activation
+
+**File:** `cmd/conductor/main.go`
+
+- Create base tool, pass to ConductorFlow
+
+#### Task 3B.3: Add Fallback Auto-Post (clawdbot pattern)
+
+**File:** `internal/server/socketmode.go`
+
+If LLM returns text in `result.Reply` but didn't call `reply_to_user`, auto-post it as fallback:
+
+```go
+func (s *SocketModeServer) runMentionFlow(ctx context.Context, req commands.CommandRequest) error {
+    result, err := s.mentionFlow.Run(ctx, req)
+    if err != nil {
+        return err
+    }
+
+    payload := result.Payload.(commands.ConductorResult)
+
+    // Check if reply_to_user was called (track via tool results or flag)
+    if !payload.RepliedViaTool && payload.Reply != "" {
+        // Fallback: auto-post if LLM forgot to use the tool
+        log.Warn().Str("activation_id", req.ActivationID).
+            Msg("LLM returned text without calling reply_to_user, auto-posting as fallback")
+        s.slack.PostMessageInThread(ctx, req.ChannelID, payload.Reply, req.ThreadTS)
+    }
+    return nil
+}
+```
+
+#### Task 3B.4: Remove assistant_reply Storage
+
+**File:** `internal/commands/session.go`
+
+- Remove `AssistantReply` field from `ConversationTurn` and `BrainHistoryTurn`
+
+**File:** `internal/session/migrations.go`
+
+- Add migration v4 to drop `assistant_reply` column
+
+**File:** `internal/session/sqlite_store.go`
+
+- Remove `assistant_reply` from SELECT/INSERT queries
+
+**File:** `internal/commands/conductor_flow.go`
+
+- Update `saveTurn()` - no reply parameter
+- Remove `formatToolCall()`, `historyToBudgetMessages()` text flattening
+- Update to use new `[]message.AgentMessage` from agentic-weave
+
+---
+
+### Phase 3C: Increase Max Turns
+
+**Why:** Allow more tool calls per conversation turn.
+
+#### Task 3C.1: Make max turns configurable
+
+**File:** `internal/commands/conductor_flow.go:66`
+
+```go
+func NewConductorFlow(...) *ConductorFlow {
+    maxTurns := 10
+    if v := os.Getenv("CONDUCTOR_MAX_TURNS"); v != "" {
+        if n, err := strconv.Atoi(v); err == nil && n > 0 {
+            maxTurns = n
+        }
+    }
+    // ...
+}
+```
+
+---
+
 ## Progress Log
 - 2026-01-25: Phase 3B complete: loop refactoring, Budgetable interface, tool error counting.
 - 2026-01-24: Updated docs/06-context-budgets.md for AgentMessage architecture.
