@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/victorarias/agentic-weave/agentic"
-	"github.com/victorarias/agentic-weave/agentic/context/budget"
 	"github.com/victorarias/agentic-weave/agentic/events"
 	"github.com/victorarias/agentic-weave/agentic/loop"
+	"github.com/victorarias/agentic-weave/agentic/message"
 )
 
 type eventRecorder struct {
@@ -88,16 +88,16 @@ func (e executorFunc) Execute(ctx context.Context, call agentic.ToolCall) (agent
 }
 
 type appendOnlyStore struct {
-	messages []budget.Message
+	messages []message.AgentMessage
 }
 
-func (s *appendOnlyStore) Append(ctx context.Context, msg budget.Message) error {
+func (s *appendOnlyStore) Append(ctx context.Context, msg message.AgentMessage) error {
 	s.messages = append(s.messages, msg)
 	return nil
 }
 
-func (s *appendOnlyStore) Load(ctx context.Context) ([]budget.Message, error) {
-	out := make([]budget.Message, len(s.messages))
+func (s *appendOnlyStore) Load(ctx context.Context) ([]message.AgentMessage, error) {
+	out := make([]message.AgentMessage, len(s.messages))
 	copy(out, s.messages)
 	return out, nil
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/victorarias/agentic-weave/agentic/context/budget"
 	"github.com/victorarias/agentic-weave/agentic/events"
 	"github.com/victorarias/agentic-weave/agentic/history"
+	"github.com/victorarias/agentic-weave/agentic/message"
 	"github.com/victorarias/agentic-weave/agentic/truncate"
 )
 
@@ -80,8 +81,8 @@ func TestRunWithToolAndTruncation(t *testing.T) {
 
 func TestRunWithCompaction(t *testing.T) {
 	store := history.NewMemoryStore()
-	_ = store.Append(context.Background(), budget.Message{Role: "user", Content: "hello there"})
-	_ = store.Append(context.Background(), budget.Message{Role: "assistant", Content: "general kenobi"})
+	_ = store.Append(context.Background(), message.AgentMessage{Role: "user", Content: "hello there"})
+	_ = store.Append(context.Background(), message.AgentMessage{Role: "assistant", Content: "general kenobi"})
 
 	compactor := &recordingCompactor{summary: "summary"}
 	budgetMgr := &budget.Manager{
@@ -163,14 +164,21 @@ func TestRunWithCompactionRequiresRewriter(t *testing.T) {
 }
 
 func TestRunPersistsToolHistory(t *testing.T) {
-	store := &recordingToolStore{
-		toolCalls: []agentic.ToolCall{{ID: "prior-1", Name: "prior"}},
-		toolResults: []agentic.ToolResult{{
-			ID:     "prior-1",
-			Name:   "prior",
-			Output: []byte("ok"),
-		}},
-	}
+	store := history.NewMemoryStore()
+	// Pre-populate with an assistant message containing a prior tool call
+	_ = store.Append(context.Background(), message.AgentMessage{
+		Role: message.RoleAssistant,
+		ToolCalls: []agentic.ToolCall{
+			{ID: "prior-1", Name: "prior"},
+		},
+	})
+	// And a tool result message
+	_ = store.Append(context.Background(), message.AgentMessage{
+		Role: message.RoleTool,
+		ToolResults: []agentic.ToolResult{
+			{ID: "prior-1", Name: "prior", Output: []byte("ok")},
+		},
+	})
 
 	decider := &historyAssertingDecider{t: t}
 	runner := New(Config{
@@ -179,21 +187,91 @@ func TestRunPersistsToolHistory(t *testing.T) {
 		HistoryStore: store,
 	})
 
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Result should have 2 tool calls (prior + new)
+	if len(result.ToolCalls) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].Name != "prior" {
+		t.Fatalf("expected prior tool call first, got %q", result.ToolCalls[0].Name)
+	}
+	if result.ToolCalls[1].ID != "call-0-0" {
+		t.Fatalf("expected generated call id, got %q", result.ToolCalls[1].ID)
+	}
+
+	// Check messages in store include tool calls and results as structured data
+	msgs, _ := store.Load(context.Background())
+	var foundToolCallInAssistant, foundToolResultInTool bool
+	for _, m := range msgs {
+		if m.Role == message.RoleAssistant && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if tc.Name == "echo" {
+					foundToolCallInAssistant = true
+				}
+			}
+		}
+		if m.Role == message.RoleTool && len(m.ToolResults) > 0 {
+			for _, tr := range m.ToolResults {
+				if tr.Name == "echo" {
+					foundToolResultInTool = true
+				}
+			}
+		}
+	}
+	if !foundToolCallInAssistant {
+		t.Fatal("expected tool call to be stored in assistant message")
+	}
+	if !foundToolResultInTool {
+		t.Fatal("expected tool result to be stored in tool message")
+	}
+}
+
+func TestMessageEndEventWithToolCalls(t *testing.T) {
+	var evts []events.Event
+	sink := events.SinkFunc(func(e events.Event) {
+		evts = append(evts, e)
+	})
+
+	runner := New(Config{
+		Decider:  &stepDecider{},
+		Executor: stubExecutor{},
+		Events:   sink,
+	})
+
 	_, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(store.toolCalls) != 2 {
-		t.Fatalf("expected 2 tool calls, got %d", len(store.toolCalls))
+
+	var messageEndEvents []events.Event
+	for _, e := range evts {
+		if e.Type == events.MessageEnd {
+			messageEndEvents = append(messageEndEvents, e)
+		}
 	}
-	if store.toolCalls[1].ID != "call-0-0" {
-		t.Fatalf("expected generated call id, got %q", store.toolCalls[1].ID)
+
+	if len(messageEndEvents) != 2 {
+		t.Fatalf("expected 2 MessageEnd events, got %d", len(messageEndEvents))
 	}
-	if len(store.toolResults) != 2 {
-		t.Fatalf("expected 2 tool results, got %d", len(store.toolResults))
+
+	// First MessageEnd should have tool calls
+	if len(messageEndEvents[0].ToolCalls) != 1 {
+		t.Fatalf("expected tool calls in first MessageEnd event, got %d", len(messageEndEvents[0].ToolCalls))
 	}
-	if store.toolResults[1].ID != "call-0-0" {
-		t.Fatalf("expected tool result id to match call, got %q", store.toolResults[1].ID)
+	if messageEndEvents[0].ToolCalls[0].Name != "echo" {
+		t.Fatalf("expected echo tool call, got %q", messageEndEvents[0].ToolCalls[0].Name)
+	}
+
+	// Second MessageEnd is the final reply (no tool calls)
+	if len(messageEndEvents[1].ToolCalls) != 0 {
+		t.Fatalf("expected no tool calls in final MessageEnd event")
+	}
+	if messageEndEvents[1].Content != "done" {
+		t.Fatalf("expected final content 'done', got %q", messageEndEvents[1].Content)
 	}
 }
 
@@ -207,25 +285,25 @@ func (r *replyDecider) Decide(ctx context.Context, in Input) (Decision, error) {
 
 type recordingCompactor struct {
 	summary string
-	last    []budget.Message
+	last    []budget.Budgetable
 }
 
-func (r *recordingCompactor) Compact(ctx context.Context, messages []budget.Message) (string, error) {
-	r.last = append([]budget.Message(nil), messages...)
+func (r *recordingCompactor) Compact(ctx context.Context, messages []budget.Budgetable) (string, error) {
+	r.last = append([]budget.Budgetable(nil), messages...)
 	return r.summary, nil
 }
 
 type appendOnlyStore struct {
-	messages []budget.Message
+	messages []message.AgentMessage
 }
 
-func (s *appendOnlyStore) Append(ctx context.Context, msg budget.Message) error {
+func (s *appendOnlyStore) Append(ctx context.Context, msg message.AgentMessage) error {
 	s.messages = append(s.messages, msg)
 	return nil
 }
 
-func (s *appendOnlyStore) Load(ctx context.Context) ([]budget.Message, error) {
-	out := make([]budget.Message, len(s.messages))
+func (s *appendOnlyStore) Load(ctx context.Context) ([]message.AgentMessage, error) {
+	out := make([]message.AgentMessage, len(s.messages))
 	copy(out, s.messages)
 	return out, nil
 }
@@ -249,43 +327,4 @@ func (d *historyAssertingDecider) Decide(ctx context.Context, in Input) (Decisio
 		}, nil
 	}
 	return Decision{Reply: "done"}, nil
-}
-
-type recordingToolStore struct {
-	messages    []budget.Message
-	toolCalls   []agentic.ToolCall
-	toolResults []agentic.ToolResult
-}
-
-func (s *recordingToolStore) Append(ctx context.Context, msg budget.Message) error {
-	s.messages = append(s.messages, msg)
-	return nil
-}
-
-func (s *recordingToolStore) Load(ctx context.Context) ([]budget.Message, error) {
-	out := make([]budget.Message, len(s.messages))
-	copy(out, s.messages)
-	return out, nil
-}
-
-func (s *recordingToolStore) AppendToolCall(ctx context.Context, call agentic.ToolCall) error {
-	s.toolCalls = append(s.toolCalls, call)
-	return nil
-}
-
-func (s *recordingToolStore) AppendToolResult(ctx context.Context, result agentic.ToolResult) error {
-	s.toolResults = append(s.toolResults, result)
-	return nil
-}
-
-func (s *recordingToolStore) LoadToolCalls(ctx context.Context) ([]agentic.ToolCall, error) {
-	out := make([]agentic.ToolCall, len(s.toolCalls))
-	copy(out, s.toolCalls)
-	return out, nil
-}
-
-func (s *recordingToolStore) LoadToolResults(ctx context.Context) ([]agentic.ToolResult, error) {
-	out := make([]agentic.ToolResult, len(s.toolResults))
-	copy(out, s.toolResults)
-	return out, nil
 }

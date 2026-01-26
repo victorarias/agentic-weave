@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+// testMessage implements Budgetable for tests.
+type testMessage struct {
+	role    string
+	content string
+}
+
+func (m testMessage) BudgetRole() string    { return m.role }
+func (m testMessage) BudgetContent() string { return m.content }
+
 type charCounter struct{}
 
 func (charCounter) Count(text string) int {
@@ -13,27 +22,27 @@ func (charCounter) Count(text string) int {
 
 type recordingCompactor struct {
 	summary string
-	last    []Message
+	last    []Budgetable
 }
 
-func (r *recordingCompactor) Compact(ctx context.Context, messages []Message) (string, error) {
-	r.last = append([]Message(nil), messages...)
+func (r *recordingCompactor) Compact(ctx context.Context, messages []Budgetable) (string, error) {
+	r.last = append([]Budgetable(nil), messages...)
 	return r.summary, nil
 }
 
 func TestNoOpWithoutDependencies(t *testing.T) {
-	msgs := []Message{{Role: "user", Content: "hello"}}
+	msgs := []Budgetable{testMessage{role: "user", content: "hello"}}
 	mgr := Manager{Policy: Policy{ContextWindow: 10}}
 
-	out, summary, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
+	summary, keepCount, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if changed || summary != "" {
 		t.Fatalf("expected no changes")
 	}
-	if len(out) != len(msgs) {
-		t.Fatalf("expected messages unchanged")
+	if keepCount != len(msgs) {
+		t.Fatalf("expected keepCount %d, got %d", len(msgs), keepCount)
 	}
 }
 
@@ -48,7 +57,7 @@ func TestCharCounterDefault(t *testing.T) {
 }
 
 func TestEstimateTokens(t *testing.T) {
-	msgs := []Message{{Content: "abcd"}, {Content: "efgh"}}
+	msgs := []testMessage{{content: "abcd"}, {content: "efgh"}}
 	total := EstimateTokens(msgs, CharCounter{})
 	if total != 2 {
 		t.Fatalf("expected 2 tokens, got %d", total)
@@ -56,7 +65,7 @@ func TestEstimateTokens(t *testing.T) {
 }
 
 func TestNoCompactionBelowThreshold(t *testing.T) {
-	msgs := []Message{{Role: "user", Content: "hello"}}
+	msgs := []Budgetable{testMessage{role: "user", content: "hello"}}
 	compactor := &recordingCompactor{summary: "summary"}
 	mgr := Manager{
 		Counter:   charCounter{},
@@ -64,24 +73,24 @@ func TestNoCompactionBelowThreshold(t *testing.T) {
 		Policy:    Policy{ContextWindow: 10, ReserveTokens: 2},
 	}
 
-	out, summary, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
+	summary, keepCount, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if changed || summary != "" {
 		t.Fatalf("expected no changes")
 	}
-	if len(out) != len(msgs) {
-		t.Fatalf("expected messages unchanged")
+	if keepCount != len(msgs) {
+		t.Fatalf("expected keepCount %d, got %d", len(msgs), keepCount)
 	}
 }
 
 func TestCompactionKeepsRecentTokens(t *testing.T) {
-	msgs := []Message{
-		{Role: "user", Content: "aaa"},
-		{Role: "assistant", Content: "bbbb"},
-		{Role: "user", Content: "cc"},
-		{Role: "assistant", Content: "ddddd"},
+	msgs := []Budgetable{
+		testMessage{role: "user", content: "aaa"},
+		testMessage{role: "assistant", content: "bbbb"},
+		testMessage{role: "user", content: "cc"},
+		testMessage{role: "assistant", content: "ddddd"},
 	}
 	compactor := &recordingCompactor{summary: "summary"}
 	mgr := Manager{
@@ -94,7 +103,7 @@ func TestCompactionKeepsRecentTokens(t *testing.T) {
 		},
 	}
 
-	out, summary, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
+	summary, keepCount, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,11 +113,8 @@ func TestCompactionKeepsRecentTokens(t *testing.T) {
 	if summary != "summary" {
 		t.Fatalf("unexpected summary: %q", summary)
 	}
-	if len(out) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(out))
-	}
-	if out[0].Role != "system" || out[0].Content != "summary" {
-		t.Fatalf("expected summary system message")
+	if keepCount != 2 {
+		t.Fatalf("expected keepCount 2, got %d", keepCount)
 	}
 	if len(compactor.last) != 2 {
 		t.Fatalf("expected 2 compacted messages, got %d", len(compactor.last))
@@ -116,10 +122,10 @@ func TestCompactionKeepsRecentTokens(t *testing.T) {
 }
 
 func TestCompactionKeepLastFallback(t *testing.T) {
-	msgs := []Message{
-		{Role: "user", Content: "aaa"},
-		{Role: "assistant", Content: "bbbb"},
-		{Role: "user", Content: "cc"},
+	msgs := []Budgetable{
+		testMessage{role: "user", content: "aaa"},
+		testMessage{role: "assistant", content: "bbbb"},
+		testMessage{role: "user", content: "cc"},
 	}
 	compactor := &recordingCompactor{summary: "summary"}
 	mgr := Manager{
@@ -132,15 +138,15 @@ func TestCompactionKeepLastFallback(t *testing.T) {
 		},
 	}
 
-	out, summary, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
+	summary, keepCount, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !changed || summary == "" {
 		t.Fatalf("expected compaction")
 	}
-	if len(out) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(out))
+	if keepCount != 1 {
+		t.Fatalf("expected keepCount 1, got %d", keepCount)
 	}
 	if len(compactor.last) != 2 {
 		t.Fatalf("expected 2 compacted messages, got %d", len(compactor.last))
@@ -148,9 +154,9 @@ func TestCompactionKeepLastFallback(t *testing.T) {
 }
 
 func TestNoCompactionWhenKeepRecentTooLarge(t *testing.T) {
-	msgs := []Message{
-		{Role: "user", Content: "aaa"},
-		{Role: "assistant", Content: "bbbb"},
+	msgs := []Budgetable{
+		testMessage{role: "user", content: "aaa"},
+		testMessage{role: "assistant", content: "bbbb"},
 	}
 	compactor := &recordingCompactor{summary: "summary"}
 	mgr := Manager{
@@ -163,14 +169,14 @@ func TestNoCompactionWhenKeepRecentTooLarge(t *testing.T) {
 		},
 	}
 
-	out, summary, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
+	summary, keepCount, changed, err := mgr.CompactIfNeeded(context.Background(), msgs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if changed || summary != "" {
 		t.Fatalf("expected no changes")
 	}
-	if len(out) != len(msgs) {
-		t.Fatalf("expected messages unchanged")
+	if keepCount != len(msgs) {
+		t.Fatalf("expected keepCount %d, got %d", len(msgs), keepCount)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"github.com/victorarias/agentic-weave/agentic/loop"
 )
 
+// Note: appendOnlyStore is defined in helpers_test.go
+
 func TestLoopCompactionRequiresRewriter(t *testing.T) {
 	store := &appendOnlyStore{}
 	budgetMgr := &budget.Manager{

@@ -60,7 +60,7 @@ func (SimpleDecider) Decide(ctx context.Context, in loop.Input) (loop.Decision, 
 
 type SimpleCompactor struct{}
 
-func (SimpleCompactor) Compact(ctx context.Context, messages []budget.Message) (string, error) {
+func (SimpleCompactor) Compact(ctx context.Context, messages []budget.Budgetable) (string, error) {
 	return fmt.Sprintf("Summary: compacted %d messages.", len(messages)), nil
 }
 

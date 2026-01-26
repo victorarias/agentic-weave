@@ -2,10 +2,10 @@ package budget
 
 import "context"
 
-// Message represents a minimal conversational message for budgeting.
-type Message struct {
-	Role    string
-	Content string
+// Budgetable represents a message that can be counted for token budgeting.
+type Budgetable interface {
+	BudgetRole() string
+	BudgetContent() string
 }
 
 // TokenCounter estimates token usage.
@@ -15,7 +15,7 @@ type TokenCounter interface {
 
 // Compactor produces a summary for messages that will be compacted away.
 type Compactor interface {
-	Compact(ctx context.Context, messages []Message) (string, error)
+	Compact(ctx context.Context, messages []Budgetable) (string, error)
 }
 
 // Policy configures compaction thresholds.
@@ -51,56 +51,55 @@ func (c CharCounter) Count(text string) int {
 }
 
 // EstimateTokens sums token estimates for the message list.
-func EstimateTokens(messages []Message, counter TokenCounter) int {
+func EstimateTokens[T Budgetable](messages []T, counter TokenCounter) int {
 	if counter == nil {
 		return 0
 	}
 	total := 0
 	for _, msg := range messages {
-		total += counter.Count(msg.Content)
+		total += counter.Count(msg.BudgetContent())
 	}
 	return total
 }
 
 // CompactIfNeeded compacts messages when budget thresholds are exceeded.
-func (m Manager) CompactIfNeeded(ctx context.Context, messages []Message) ([]Message, string, bool, error) {
+// Returns the summary, number of messages to keep from the end, whether compaction occurred, and any error.
+func (m Manager) CompactIfNeeded(ctx context.Context, messages []Budgetable) (summary string, keepCount int, changed bool, err error) {
 	if m.Counter == nil || m.Compactor == nil || m.Policy.ContextWindow <= 0 {
-		return messages, "", false, nil
+		return "", len(messages), false, nil
 	}
 
 	total := EstimateTokens(messages, m.Counter)
 	threshold := m.Policy.ContextWindow - max(m.Policy.ReserveTokens, 0)
 	if total <= threshold {
-		return messages, "", false, nil
+		return "", len(messages), false, nil
 	}
 
 	start := m.cutPoint(messages)
 	if start <= 0 || start >= len(messages) {
-		return messages, "", false, nil
+		return "", len(messages), false, nil
 	}
 
 	toCompact := messages[:start]
 	if len(toCompact) == 0 {
-		return messages, "", false, nil
+		return "", len(messages), false, nil
 	}
 
-	summary, err := m.Compactor.Compact(ctx, toCompact)
+	summary, err = m.Compactor.Compact(ctx, toCompact)
 	if err != nil {
-		return messages, "", false, err
+		return "", len(messages), false, err
 	}
 
-	compacted := make([]Message, 0, len(messages)-len(toCompact)+1)
-	compacted = append(compacted, Message{Role: "system", Content: summary})
-	compacted = append(compacted, messages[start:]...)
-	return compacted, summary, true, nil
+	keepCount = len(messages) - start
+	return summary, keepCount, true, nil
 }
 
-func (m Manager) cutPoint(messages []Message) int {
+func (m Manager) cutPoint(messages []Budgetable) int {
 	keepTokens := m.Policy.KeepRecentTokens
 	if keepTokens > 0 && m.Counter != nil {
 		acc := 0
 		for i := len(messages) - 1; i >= 0; i-- {
-			acc += m.Counter.Count(messages[i].Content)
+			acc += m.Counter.Count(messages[i].BudgetContent())
 			if acc >= keepTokens {
 				return i
 			}

@@ -4,16 +4,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/victorarias/agentic-weave/agentic/context/budget"
 	"github.com/victorarias/agentic-weave/agentic/history"
 	"github.com/victorarias/agentic-weave/agentic/loop"
+	"github.com/victorarias/agentic-weave/agentic/message"
 )
 
 func TestLoopBasicReplyHistory(t *testing.T) {
 	decider := &scriptedDecider{
 		script: []loop.Decision{{Reply: "ok"}},
 	}
-	reqHistory := []budget.Message{{Role: "system", Content: "seed"}}
+	reqHistory := []message.AgentMessage{{Role: message.RoleSystem, Content: "seed"}}
 	result, _, err := runScenario(t, loop.Config{
 		Decider: decider,
 	}, loop.Request{
@@ -40,24 +40,9 @@ func TestLoopBasicReplyHistory(t *testing.T) {
 	}
 }
 
-func TestLoopDefaultReplyWhenEmpty(t *testing.T) {
-	decider := &scriptedDecider{
-		script: []loop.Decision{{Reply: "  "}},
-	}
-	result, _, err := runScenario(t, loop.Config{
-		Decider: decider,
-	}, loop.Request{UserMessage: "hi"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Reply == "" {
-		t.Fatalf("expected default reply")
-	}
-}
-
 func TestLoopHistoryStoreOverridesRequest(t *testing.T) {
 	store := history.NewMemoryStore()
-	_ = store.Append(context.Background(), budget.Message{Role: "system", Content: "from-store"})
+	_ = store.Append(context.Background(), message.AgentMessage{Role: message.RoleSystem, Content: "from-store"})
 
 	decider := &scriptedDecider{
 		script: []loop.Decision{{Reply: "ok"}},
@@ -67,7 +52,7 @@ func TestLoopHistoryStoreOverridesRequest(t *testing.T) {
 		HistoryStore: store,
 	}, loop.Request{
 		UserMessage: "hi",
-		History:     []budget.Message{{Role: "system", Content: "from-request"}},
+		History:     []message.AgentMessage{{Role: message.RoleSystem, Content: "from-request"}},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -80,5 +65,32 @@ func TestLoopHistoryStoreOverridesRequest(t *testing.T) {
 	}
 	if len(result.History) == 0 || result.History[0].Content != "from-store" {
 		t.Fatalf("expected result history from store")
+	}
+}
+
+func TestLoopPersistsUserMessageInHistoryStore(t *testing.T) {
+	store := history.NewMemoryStore()
+	_ = store.Append(context.Background(), message.AgentMessage{Role: message.RoleSystem, Content: "seed"})
+
+	decider := &scriptedDecider{
+		script: []loop.Decision{{Reply: "ok"}},
+	}
+
+	_, _, err := runScenario(t, loop.Config{
+		Decider:      decider,
+		HistoryStore: store,
+	}, loop.Request{
+		UserMessage: "hi",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msgs, _ := store.Load(context.Background())
+	if len(msgs) < 2 {
+		t.Fatalf("expected at least 2 messages in store, got %d", len(msgs))
+	}
+	if msgs[1].Role != message.RoleUser || msgs[1].Content != "hi" {
+		t.Fatalf("expected user message persisted in store, got role=%q content=%q", msgs[1].Role, msgs[1].Content)
 	}
 }

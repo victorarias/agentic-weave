@@ -18,14 +18,21 @@ const (
 )
 
 // Event captures a simple agent lifecycle update.
+//
+// Field usage varies by event type:
+//   - ToolStart/ToolEnd: ToolCall contains the single tool being executed
+//   - MessageEnd: ToolCalls contains all tool calls in the assistant message (may be empty)
+//   - ToolOutputTruncated: ToolResult contains the pre-truncation result, Content has summary
+//   - ContextCompactionEnd: Content contains the compaction summary
 type Event struct {
 	Type       string
 	MessageID  string
 	Role       string
 	Content    string
 	Delta      string
-	ToolCall   *agentic.ToolCall
-	ToolResult *agentic.ToolResult
+	ToolCall   *agentic.ToolCall   // single tool call (ToolStart/ToolEnd events)
+	ToolCalls  []agentic.ToolCall  // all tool calls in message (MessageEnd events)
+	ToolResult *agentic.ToolResult // tool execution result or pre-truncation data
 }
 
 // Sink consumes events (streaming, logging, UI).

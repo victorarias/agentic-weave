@@ -9,6 +9,7 @@ import (
 
 	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/loop"
+	"github.com/victorarias/agentic-weave/agentic/message"
 )
 
 func TestLoopToolDefaults(t *testing.T) {
@@ -129,6 +130,53 @@ func TestLoopToolExecutorError(t *testing.T) {
 	}
 }
 
+func TestLoopToolCallDefaultsPersistInHistory(t *testing.T) {
+	reg := agentic.NewRegistry()
+	if err := reg.Register(staticTool{
+		def: agentic.ToolDefinition{
+			Name:           "echo",
+			Description:    "echo",
+			AllowedCallers: []string{"llm"},
+		},
+		output: json.RawMessage(`"ok"`),
+	}); err != nil {
+		t.Fatalf("register tool: %v", err)
+	}
+
+	decider := &scriptedDecider{
+		script: []loop.Decision{
+			{ToolCalls: []agentic.ToolCall{{Name: "echo", Input: json.RawMessage(`{}`)}}},
+			{Reply: "done"},
+		},
+	}
+
+	result, _, err := runScenario(t, loop.Config{
+		Decider:  decider,
+		Executor: reg,
+	}, loop.Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var toolMsg *message.AgentMessage
+	for i := range result.History {
+		msg := &result.History[i]
+		if msg.Role == message.RoleAssistant && len(msg.ToolCalls) > 0 {
+			toolMsg = msg
+			break
+		}
+	}
+	if toolMsg == nil {
+		t.Fatalf("expected assistant tool call message in history")
+	}
+	if toolMsg.ToolCalls[0].ID != "call-0-0" {
+		t.Fatalf("expected tool call id in history, got %q", toolMsg.ToolCalls[0].ID)
+	}
+	if toolMsg.ToolCalls[0].Caller == nil || toolMsg.ToolCalls[0].Caller.Type != "llm" {
+		t.Fatalf("expected tool caller in history, got %#v", toolMsg.ToolCalls[0].Caller)
+	}
+}
+
 func TestLoopToolSchemaMismatch(t *testing.T) {
 	reg := agentic.NewRegistry()
 	if err := reg.Register(staticTool{
@@ -227,9 +275,7 @@ func TestLoopMaxTurnsStops(t *testing.T) {
 	if len(result.ToolCalls) != 1 || len(result.ToolResults) != 1 {
 		t.Fatalf("expected 1 tool call/result")
 	}
-	if result.Reply == "" {
-		t.Fatalf("expected default reply")
-	}
+	// Loop passes through decider's reply without adding defaults
 }
 
 func TestLoopToolListingRespectsPolicy(t *testing.T) {

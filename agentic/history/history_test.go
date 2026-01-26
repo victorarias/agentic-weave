@@ -2,51 +2,47 @@ package history
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/victorarias/agentic-weave/agentic"
-	"github.com/victorarias/agentic-weave/agentic/context/budget"
+	"github.com/victorarias/agentic-weave/agentic/message"
 )
 
-func TestMemoryStore(t *testing.T) {
+func TestMemoryStoreWithToolCalls(t *testing.T) {
 	store := NewMemoryStore()
-	if err := store.Append(context.Background(), budget.Message{Role: "user", Content: "hi"}); err != nil {
-		t.Fatalf("append failed: %v", err)
+
+	// Store assistant message with tool calls
+	assistantMsg := message.AgentMessage{
+		Role:    message.RoleAssistant,
+		Content: "I'll search for that.",
+		ToolCalls: []agentic.ToolCall{
+			{ID: "tc1", Name: "search", Input: json.RawMessage(`{"q":"test"}`)},
+		},
 	}
-	msgs, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatalf("load failed: %v", err)
-	}
-	if len(msgs) != 1 || msgs[0].Content != "hi" {
-		t.Fatalf("unexpected messages: %#v", msgs)
+	if err := store.Append(context.Background(), assistantMsg); err != nil {
+		t.Fatalf("append assistant failed: %v", err)
 	}
 
-	if err := store.Replace(context.Background(), []budget.Message{{Role: "system", Content: "summary"}}); err != nil {
-		t.Fatalf("replace failed: %v", err)
+	// Store tool result message
+	toolMsg := message.AgentMessage{
+		Role: message.RoleTool,
+		ToolResults: []agentic.ToolResult{
+			{ID: "tc1", Name: "search", Output: json.RawMessage(`"found 10 results"`)},
+		},
 	}
-	msgs, _ = store.Load(context.Background())
-	if len(msgs) != 1 || msgs[0].Role != "system" {
-		t.Fatalf("unexpected messages after replace: %#v", msgs)
-	}
-
-	if err := store.AppendToolCall(context.Background(), agentic.ToolCall{Name: "echo"}); err != nil {
-		t.Fatalf("append tool call failed: %v", err)
-	}
-	if err := store.AppendToolResult(context.Background(), agentic.ToolResult{Name: "echo"}); err != nil {
+	if err := store.Append(context.Background(), toolMsg); err != nil {
 		t.Fatalf("append tool result failed: %v", err)
 	}
-	calls, err := store.LoadToolCalls(context.Background())
-	if err != nil {
-		t.Fatalf("load tool calls failed: %v", err)
+
+	msgs, _ := store.Load(context.Background())
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
-	results, err := store.LoadToolResults(context.Background())
-	if err != nil {
-		t.Fatalf("load tool results failed: %v", err)
+	if len(msgs[0].ToolCalls) != 1 || msgs[0].ToolCalls[0].Name != "search" {
+		t.Fatalf("tool call not preserved: %#v", msgs[0])
 	}
-	if len(calls) != 1 || calls[0].Name != "echo" {
-		t.Fatalf("unexpected tool calls: %#v", calls)
-	}
-	if len(results) != 1 || results[0].Name != "echo" {
-		t.Fatalf("unexpected tool results: %#v", results)
+	if len(msgs[1].ToolResults) != 1 || msgs[1].ToolResults[0].Name != "search" {
+		t.Fatalf("tool result not preserved: %#v", msgs[1])
 	}
 }

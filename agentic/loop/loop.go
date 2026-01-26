@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/context/budget"
 	"github.com/victorarias/agentic-weave/agentic/events"
 	"github.com/victorarias/agentic-weave/agentic/history"
+	"github.com/victorarias/agentic-weave/agentic/message"
 	"github.com/victorarias/agentic-weave/agentic/truncate"
 	"github.com/victorarias/agentic-weave/agentic/usage"
 )
@@ -23,7 +25,7 @@ type Decider interface {
 type Input struct {
 	SystemPrompt string
 	UserMessage  string
-	History      []budget.Message
+	History      []message.AgentMessage
 	Tools        []agentic.ToolDefinition
 	ToolCalls    []agentic.ToolCall
 	ToolResults  []agentic.ToolResult
@@ -55,13 +57,13 @@ type Config struct {
 type Request struct {
 	SystemPrompt string
 	UserMessage  string
-	History      []budget.Message
+	History      []message.AgentMessage
 }
 
 // Result captures the final output.
 type Result struct {
 	Reply       string
-	History     []budget.Message
+	History     []message.AgentMessage
 	Summary     string
 	ToolCalls   []agentic.ToolCall
 	ToolResults []agentic.ToolResult
@@ -88,6 +90,37 @@ func New(cfg Config) *Runner {
 	return &Runner{cfg: cfg}
 }
 
+// emit sends an event if a sink is configured.
+func (r *Runner) emit(e events.Event) {
+	if r.cfg.Events != nil {
+		r.cfg.Events.Emit(e)
+	}
+}
+
+// recordAssistantMessage stores an assistant message in history and emits MessageEnd.
+func (r *Runner) recordAssistantMessage(ctx context.Context, turn int, reply string, toolCalls []agentic.ToolCall, history *[]message.AgentMessage, isFinal bool) {
+	msg := message.AgentMessage{
+		Role:      message.RoleAssistant,
+		Content:   reply,
+		ToolCalls: toolCalls,
+		Timestamp: time.Now(),
+	}
+	*history = append(*history, msg)
+	r.appendHistory(ctx, msg)
+
+	msgID := fmt.Sprintf("msg-%d", turn)
+	if isFinal {
+		msgID = fmt.Sprintf("msg-final-%d", turn)
+	}
+	r.emit(events.Event{
+		Type:      events.MessageEnd,
+		MessageID: msgID,
+		Role:      message.RoleAssistant,
+		Content:   reply,
+		ToolCalls: toolCalls,
+	})
+}
+
 // Run executes the loop for a single user request.
 func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if r.cfg.Decider == nil {
@@ -97,13 +130,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 
-	emit := r.cfg.Events
-	if emit != nil {
-		emit.Emit(events.Event{Type: events.AgentStart})
-		defer emit.Emit(events.Event{Type: events.AgentEnd})
-		emit.Emit(events.Event{Type: events.TurnStart})
-		defer emit.Emit(events.Event{Type: events.TurnEnd})
-	}
+	r.emit(events.Event{Type: events.AgentStart})
+	defer r.emit(events.Event{Type: events.AgentEnd})
+	r.emit(events.Event{Type: events.TurnStart})
+	defer r.emit(events.Event{Type: events.TurnEnd})
 
 	historyMessages, err := r.loadHistory(ctx, req)
 	if err != nil {
@@ -112,7 +142,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 	userMessage := strings.TrimSpace(req.UserMessage)
 	if userMessage != "" {
-		historyMessages = append(historyMessages, budget.Message{Role: "user", Content: userMessage})
+		userMsg := message.AgentMessage{
+			Role:      message.RoleUser,
+			Content:   userMessage,
+			Timestamp: time.Now(),
+		}
+		historyMessages = append(historyMessages, userMsg)
+		r.appendHistory(ctx, userMsg)
 	}
 
 	summary, historyMessages, err := r.applyCompaction(ctx, historyMessages)
@@ -125,22 +161,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 
-	toolCalls := make([]agentic.ToolCall, 0)
-	toolResults := make([]agentic.ToolResult, 0)
-	if r.cfg.HistoryStore != nil {
-		if loader, ok := r.cfg.HistoryStore.(history.ToolLoader); ok {
-			calls, err := loader.LoadToolCalls(ctx)
-			if err != nil {
-				return Result{}, err
-			}
-			results, err := loader.LoadToolResults(ctx)
-			if err != nil {
-				return Result{}, err
-			}
-			toolCalls = append(toolCalls, calls...)
-			toolResults = append(toolResults, results...)
-		}
-	}
+	// Extract tool calls and results from history for the current turn
+	toolCalls, toolResults := extractToolsFromHistory(historyMessages)
 
 	turn := 0
 	for {
@@ -158,14 +180,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		if len(decision.ToolCalls) == 0 || turn >= r.cfg.MaxTurns {
-			reply := strings.TrimSpace(decision.Reply)
-			if reply == "" {
-				reply = "I am here. Tell me what you need."
-			}
-			historyMessages = append(historyMessages, budget.Message{Role: "assistant", Content: reply})
-			r.appendHistory(ctx, budget.Message{Role: "assistant", Content: reply})
+			r.recordAssistantMessage(ctx, turn, decision.Reply, nil, &historyMessages, true)
+
 			return Result{
-				Reply:       reply,
+				Reply:       decision.Reply,
 				History:     historyMessages,
 				Summary:     summary,
 				ToolCalls:   toolCalls,
@@ -179,17 +197,19 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{}, errors.New("loop: tool calls requested but no executor configured")
 		}
 
-		for i, call := range decision.ToolCalls {
-			if call.ID == "" {
-				call.ID = fmt.Sprintf("call-%d-%d", turn, i)
+		for i := range decision.ToolCalls {
+			if decision.ToolCalls[i].ID == "" {
+				decision.ToolCalls[i].ID = fmt.Sprintf("call-%d-%d", turn, i)
 			}
-			if call.Caller == nil {
-				call.Caller = &agentic.ToolCaller{Type: r.cfg.ToolCallerType}
+			if decision.ToolCalls[i].Caller == nil {
+				decision.ToolCalls[i].Caller = &agentic.ToolCaller{Type: r.cfg.ToolCallerType}
 			}
-			r.appendToolCall(ctx, call)
-			if emit != nil {
-				emit.Emit(events.Event{Type: events.ToolStart, ToolCall: &call})
-			}
+		}
+
+		r.recordAssistantMessage(ctx, turn, decision.Reply, decision.ToolCalls, &historyMessages, false)
+
+		for _, call := range decision.ToolCalls {
+			r.emit(events.Event{Type: events.ToolStart, ToolCall: &call})
 
 			result, err := r.cfg.Executor.Execute(ctx, call)
 			if err != nil {
@@ -210,8 +230,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				before := result
 				trunc := truncate.Result{}
 				result, trunc = truncateToolResult(result, r.cfg.TruncationMode, *r.cfg.Truncation)
-				if trunc.Truncated && emit != nil {
-					emit.Emit(events.Event{
+				if trunc.Truncated {
+					r.emit(events.Event{
 						Type:       events.ToolOutputTruncated,
 						ToolResult: &before,
 						Content:    truncSummary(trunc),
@@ -219,15 +239,19 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				}
 			}
 
-			if emit != nil {
-				emit.Emit(events.Event{Type: events.ToolEnd, ToolResult: &result})
-			}
+			r.emit(events.Event{Type: events.ToolEnd, ToolResult: &result})
 
 			toolCalls = append(toolCalls, call)
 			toolResults = append(toolResults, result)
-			historyMessages = append(historyMessages, toolResultMessage(result))
-			r.appendToolResult(ctx, result)
-			r.appendHistory(ctx, toolResultMessage(result))
+
+			// Add tool result as structured message
+			toolMsg := message.AgentMessage{
+				Role:        message.RoleTool,
+				ToolResults: []agentic.ToolResult{result},
+				Timestamp:   time.Now(),
+			}
+			historyMessages = append(historyMessages, toolMsg)
+			r.appendHistory(ctx, toolMsg)
 		}
 		turn++
 	}
@@ -253,57 +277,37 @@ func (r *Runner) listTools(ctx context.Context) ([]agentic.ToolDefinition, error
 	return r.cfg.Executor.ListTools(ctx)
 }
 
-func (r *Runner) loadHistory(ctx context.Context, req Request) ([]budget.Message, error) {
+func (r *Runner) loadHistory(ctx context.Context, req Request) ([]message.AgentMessage, error) {
 	if r.cfg.HistoryStore == nil {
-		return append([]budget.Message(nil), req.History...), nil
+		return append([]message.AgentMessage(nil), req.History...), nil
 	}
 	return r.cfg.HistoryStore.Load(ctx)
 }
 
-func (r *Runner) appendHistory(ctx context.Context, msg budget.Message) {
+func (r *Runner) appendHistory(ctx context.Context, msg message.AgentMessage) {
 	if r.cfg.HistoryStore == nil {
 		return
 	}
 	_ = r.cfg.HistoryStore.Append(ctx, msg)
 }
 
-func (r *Runner) appendToolCall(ctx context.Context, call agentic.ToolCall) {
-	if r.cfg.HistoryStore == nil {
-		return
-	}
-	if recorder, ok := r.cfg.HistoryStore.(history.ToolRecorder); ok {
-		_ = recorder.AppendToolCall(ctx, call)
-	}
-}
-
-func (r *Runner) appendToolResult(ctx context.Context, result agentic.ToolResult) {
-	if r.cfg.HistoryStore == nil {
-		return
-	}
-	if recorder, ok := r.cfg.HistoryStore.(history.ToolRecorder); ok {
-		_ = recorder.AppendToolResult(ctx, result)
-	}
-}
-
-func (r *Runner) applyCompaction(ctx context.Context, messages []budget.Message) (string, []budget.Message, error) {
+func (r *Runner) applyCompaction(ctx context.Context, messages []message.AgentMessage) (string, []message.AgentMessage, error) {
 	if r.cfg.Budget == nil {
 		return "", messages, nil
 	}
-	if r.cfg.Events != nil {
-		r.cfg.Events.Emit(events.Event{Type: events.ContextCompactionStart})
-	}
+	r.emit(events.Event{Type: events.ContextCompactionStart})
 
-	compacted, summary, changed, err := r.cfg.Budget.CompactIfNeeded(ctx, messages)
+	compacted, summary, changed, err := message.CompactIfNeeded(ctx, *r.cfg.Budget, messages)
 	if err != nil {
+		r.emit(events.Event{Type: events.ContextCompactionEnd})
 		return "", messages, err
 	}
 	if !changed {
+		r.emit(events.Event{Type: events.ContextCompactionEnd})
 		return "", messages, nil
 	}
 
-	if r.cfg.Events != nil {
-		r.cfg.Events.Emit(events.Event{Type: events.ContextCompactionEnd, Content: summary})
-	}
+	r.emit(events.Event{Type: events.ContextCompactionEnd, Content: summary})
 
 	if r.cfg.HistoryStore != nil {
 		if rewriter, ok := r.cfg.HistoryStore.(history.Rewriter); ok {
@@ -312,6 +316,17 @@ func (r *Runner) applyCompaction(ctx context.Context, messages []budget.Message)
 	}
 
 	return summary, compacted, nil
+}
+
+// extractToolsFromHistory extracts tool calls and results from history messages.
+func extractToolsFromHistory(messages []message.AgentMessage) ([]agentic.ToolCall, []agentic.ToolResult) {
+	var calls []agentic.ToolCall
+	var results []agentic.ToolResult
+	for _, msg := range messages {
+		calls = append(calls, msg.ToolCalls...)
+		results = append(results, msg.ToolResults...)
+	}
+	return calls, results
 }
 
 func truncateToolResult(result agentic.ToolResult, mode truncate.Mode, opts truncate.Options) (agentic.ToolResult, truncate.Result) {
@@ -328,14 +343,4 @@ func truncSummary(result truncate.Result) string {
 		return ""
 	}
 	return fmt.Sprintf("truncated by %s (%d/%d lines, %d/%d bytes)", result.TruncatedBy, result.OutputLines, result.TotalLines, result.OutputBytes, result.TotalBytes)
-}
-
-func toolResultMessage(result agentic.ToolResult) budget.Message {
-	if result.Error != nil {
-		return budget.Message{Role: "tool", Content: fmt.Sprintf("[tool_result] %s error: %s", result.Name, result.Error.Message)}
-	}
-	if len(result.Output) == 0 {
-		return budget.Message{Role: "tool", Content: fmt.Sprintf("[tool_result] %s: (no output)", result.Name)}
-	}
-	return budget.Message{Role: "tool", Content: fmt.Sprintf("[tool_result] %s: %s", result.Name, string(result.Output))}
 }

@@ -9,10 +9,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
@@ -24,9 +22,19 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-      - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
-      - name: Lint (staticcheck)
-        run: staticcheck ./...
-      - name: Run tests
-        run: go test ./...
+      - run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      - run: staticcheck ./...
+      - run: go test ./...
+
+  e2e:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -v ./tests/e2e/...
+        env:
+          VERTEX_AI_API_KEY: ${{ secrets.VERTEX_AI_API_KEY }}

@@ -97,10 +97,11 @@ package budget
 
 import "context"
 
-// Minimal message representation for compaction.
-type Message struct {
-	Role    string
-	Content string
+// Budgetable represents a message that can be counted for token budgeting.
+// AgentMessage implements this interface directly.
+type Budgetable interface {
+	BudgetRole() string
+	BudgetContent() string
 }
 
 // TokenCounter estimates token usage. Can be heuristic or provider-specific.
@@ -110,7 +111,7 @@ type TokenCounter interface {
 
 // Compactor turns messages into a summary.
 type Compactor interface {
-	Compact(ctx context.Context, messages []Message) (string, error)
+	Compact(ctx context.Context, messages []Budgetable) (string, error)
 }
 
 // Policy configures thresholds.
@@ -128,13 +129,15 @@ type Manager struct {
 	Policy    Policy
 }
 
-func (m Manager) CompactIfNeeded(ctx context.Context, messages []Message) (out []Message, summary string, changed bool, err error)
+// CompactIfNeeded returns summary, keepCount (messages to keep from end), changed, error.
+func (m Manager) CompactIfNeeded(ctx context.Context, messages []Budgetable) (summary string, keepCount int, changed bool, err error)
 ```
 
 Notes:
+- `AgentMessage` implements `Budgetable` directly - no conversion needed.
+- `BudgetContent()` returns all content concatenated (text + tool calls + tool results + errors) for accurate token estimation.
 - `KeepRecentTokens` keeps a token budget of recent messages; `KeepLast` is a simpler fallback (count of messages).
 - If `Counter` or `Compactor` is nil, it becomes a no-op (fully optional).
-- This package can wrap or supersede the existing `agentic/context.Manager`, or be added alongside it as `context/budget` for clarity.
 
 ### 5) `agentic/events` (Optional Integration)
 Use the existing `events` module to emit compaction and truncation events. No core dependency.
@@ -164,7 +167,7 @@ type Decider interface {
 type Input struct {
 	SystemPrompt string
 	UserMessage  string
-	History      []budget.Message
+	History      []message.AgentMessage // rich message type with structured tool calls
 	Tools        []agentic.ToolDefinition
 	ToolCalls    []agentic.ToolCall
 	ToolResults  []agentic.ToolResult
@@ -179,7 +182,7 @@ type Decision struct {
 }
 ```
 
-The loop helper remains optional, but makes “mono-like” integration a few lines:
+The loop helper remains optional, but makes "mono-like" integration a few lines:
 
 ```go
 mgr := budget.Manager{
@@ -199,19 +202,53 @@ agent := loop.New(loop.Config{
 })
 ```
 
-If your provider requires full tool-use history, implement `history.ToolRecorder` and `history.ToolLoader` on
-your `HistoryStore` to persist tool calls and results between turns.
+Tool calls and results are automatically preserved in `message.AgentMessage` - no separate interfaces needed.
+Each message stores structured `ToolCalls` and `ToolResults` fields, which are persisted via the history store.
+
+---
+
+## AgentMessage and Budgetable
+
+`AgentMessage` implements the `Budgetable` interface directly:
+
+```go
+// BudgetRole implements budget.Budgetable.
+func (m AgentMessage) BudgetRole() string {
+	return m.Role
+}
+
+// BudgetContent implements budget.Budgetable.
+// Returns all content concatenated for token estimation.
+func (m AgentMessage) BudgetContent() string {
+	content := m.Content
+	for _, tc := range m.ToolCalls {
+		content += tc.Name + string(tc.Input)
+	}
+	for _, tr := range m.ToolResults {
+		content += string(tr.Output)
+		if tr.Error != nil {
+			content += tr.Error.Message
+		}
+	}
+	return content
+}
+```
+
+This design:
+- Avoids the need for a separate "budget message" type
+- Ensures all content (including tool errors) is counted for accurate token estimation
+- Follows the pi-mono pattern of working directly with the rich message type
 
 ---
 
 ## Context Budgeting Behavior
-1) Count total tokens from messages.
+1) Count total tokens from messages using `BudgetContent()`.
 2) If total exceeds `ContextWindow - ReserveTokens`, compact older messages:
    - Summarize older messages using `Compactor`.
    - Keep recent messages based on `KeepRecentTokens` (or `KeepLast` fallback).
 3) Insert summary as a system message at the front.
 
-This mirrors mono’s “reserve + keep recent + summary” model, but remains pluggable.
+This mirrors mono's "reserve + keep recent + summary" model, but remains pluggable.
 
 ---
 
@@ -232,17 +269,20 @@ When using the loop runner with compaction enabled, the history store must also 
 ```go
 package history
 
+import "github.com/victorarias/agentic-weave/agentic/message"
+
 type Store interface {
-	Append(ctx context.Context, msg budget.Message) error
-	Load(ctx context.Context) ([]budget.Message, error)
+	Append(ctx context.Context, msg message.AgentMessage) error
+	Load(ctx context.Context) ([]message.AgentMessage, error)
 }
 ```
+
+`AgentMessage` preserves structured tool calls and results, eliminating the need for separate tool history interfaces.
 
 ---
 
 ## Backwards Compatibility
 - All changes are additive and optional.
-- Existing `agentic/context.Manager` remains intact. New budget manager can live alongside or evolve it (non-breaking).
 - No existing examples are forced to change.
 
 ---
@@ -254,7 +294,6 @@ type Store interface {
 ---
 
 ## Open Questions
-- Should `context/budget` replace `context.Manager` or exist in parallel?
 - Default token counter implementation (chars/4 heuristic vs. provider-specific)?
 - Should `KeepRecentTokens` default to a ratio of `ContextWindow`?
 - How should tool output truncation be represented in the message history (e.g., with a marker)?
