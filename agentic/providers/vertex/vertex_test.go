@@ -78,7 +78,9 @@ func TestVertexPartUnmarshalThoughtSignature(t *testing.T) {
 	}
 }
 
-func TestBuildRequestIncludesThoughtSignatureFromToolCall(t *testing.T) {
+func TestBuildRequestIncludesThoughtSignatureFromHistory(t *testing.T) {
+	// History is the canonical source for tool calls. This test verifies that
+	// ThoughtSignature is preserved when tool calls come from History.
 	client := &Client{
 		project:     "test-project",
 		location:    "us-central1",
@@ -88,23 +90,40 @@ func TestBuildRequestIncludesThoughtSignatureFromToolCall(t *testing.T) {
 	}
 
 	input := Input{
-		UserMessage: "test message",
-		ToolCalls: []agentic.ToolCall{
+		UserMessage: "continue after tools",
+		History: []message.AgentMessage{
 			{
-				ID:               "call-0",
-				Name:             "test_tool",
-				Input:            json.RawMessage(`{"arg":"value"}`),
-				ThoughtSignature: "sig-from-toolcall-123",
+				Role:    message.RoleUser,
+				Content: "test message",
 			},
 			{
-				ID:    "call-1",
-				Name:  "another_tool",
-				Input: json.RawMessage(`{}`),
+				Role: message.RoleAssistant,
+				ToolCalls: []agentic.ToolCall{
+					{
+						ID:               "call-0",
+						Name:             "test_tool",
+						Input:            json.RawMessage(`{"arg":"value"}`),
+						ThoughtSignature: "sig-from-toolcall-123",
+					},
+					{
+						ID:    "call-1",
+						Name:  "another_tool",
+						Input: json.RawMessage(`{}`),
+					},
+				},
 			},
-		},
-		ToolResults: []agentic.ToolResult{
-			{ID: "call-0", Name: "test_tool", Output: json.RawMessage(`{"result":"ok"}`)},
-			{ID: "call-1", Name: "another_tool", Output: json.RawMessage(`{"result":"done"}`)},
+			{
+				Role: message.RoleTool,
+				ToolResults: []agentic.ToolResult{
+					{ID: "call-0", Name: "test_tool", Output: json.RawMessage(`{"result":"ok"}`)},
+				},
+			},
+			{
+				Role: message.RoleTool,
+				ToolResults: []agentic.ToolResult{
+					{ID: "call-1", Name: "another_tool", Output: json.RawMessage(`{"result":"done"}`)},
+				},
+			},
 		},
 	}
 
@@ -382,5 +401,202 @@ func TestAppendHistoryWithAgentMessage(t *testing.T) {
 	// System summary (as user message with prefix)
 	if contents[4].Role != "user" || !strings.Contains(contents[4].Parts[0].Text, "[Context Summary]") {
 		t.Errorf("expected system summary as user message, got %+v", contents[4])
+	}
+}
+
+func TestBuildRequestHistorySerializesToolCallsOnce(t *testing.T) {
+	// History is the canonical source for tool calls. Verify tool calls from history
+	// are serialized exactly once in the request.
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+	}
+
+	input := Input{
+		UserMessage: "continue",
+		History: []message.AgentMessage{
+			{
+				Role:    message.RoleUser,
+				Content: "call a tool",
+			},
+			{
+				Role: message.RoleAssistant,
+				ToolCalls: []agentic.ToolCall{
+					{
+						ID:               "call-0",
+						Name:             "my_tool",
+						Input:            json.RawMessage(`{"arg":"value"}`),
+						ThoughtSignature: "sig-123",
+					},
+				},
+			},
+			{
+				Role: message.RoleTool,
+				ToolResults: []agentic.ToolResult{
+					{ID: "call-0", Name: "my_tool", Output: json.RawMessage(`{"result":"done"}`)},
+				},
+			},
+		},
+	}
+
+	reqBody, err := client.buildRequest(input)
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	var req vertexRequest
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	// Count how many times my_tool functionCall appears
+	functionCallCount := 0
+	functionResponseCount := 0
+	for _, content := range req.Contents {
+		for _, part := range content.Parts {
+			if part.FunctionCall != nil && part.FunctionCall.Name == "my_tool" {
+				functionCallCount++
+			}
+			if part.FunctionResponse != nil && part.FunctionResponse.Name == "my_tool" {
+				functionResponseCount++
+			}
+		}
+	}
+
+	if functionCallCount != 1 {
+		t.Errorf("expected exactly 1 functionCall for my_tool, got %d", functionCallCount)
+	}
+	if functionResponseCount != 1 {
+		t.Errorf("expected exactly 1 functionResponse for my_tool, got %d", functionResponseCount)
+	}
+}
+
+func TestBuildRequestSkipsUserMessageAfterToolResult(t *testing.T) {
+	// When history ends with a tool result and UserMessage is empty,
+	// buildRequest should NOT add an extra user message. This allows
+	// the model to resume thinking directly after the function response.
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+	}
+
+	input := Input{
+		UserMessage: "", // Empty - model should resume after tool result
+		History: []message.AgentMessage{
+			{
+				Role:    message.RoleUser,
+				Content: "call a tool",
+			},
+			{
+				Role: message.RoleAssistant,
+				ToolCalls: []agentic.ToolCall{
+					{
+						ID:               "call-0",
+						Name:             "my_tool",
+						Input:            json.RawMessage(`{"arg":"value"}`),
+						ThoughtSignature: "sig-123",
+					},
+				},
+			},
+			{
+				Role: message.RoleTool,
+				ToolResults: []agentic.ToolResult{
+					{ID: "call-0", Name: "my_tool", Output: json.RawMessage(`{"result":"done"}`)},
+				},
+			},
+		},
+	}
+
+	reqBody, err := client.buildRequest(input)
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	var req vertexRequest
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	// Should have exactly 3 contents: user, model(functionCall), user(functionResponse)
+	// NO extra user message at the end
+	if len(req.Contents) != 3 {
+		t.Errorf("expected 3 contents (no extra user message), got %d", len(req.Contents))
+		for i, c := range req.Contents {
+			t.Logf("  content[%d]: role=%s, parts=%d", i, c.Role, len(c.Parts))
+		}
+	}
+
+	// Last content should be the function response, not a text message
+	lastContent := req.Contents[len(req.Contents)-1]
+	if lastContent.Role != "user" {
+		t.Errorf("expected last content role to be 'user', got %q", lastContent.Role)
+	}
+	if lastContent.Parts[0].FunctionResponse == nil {
+		t.Error("expected last content to be a function response, not text")
+	}
+}
+
+func TestBuildRequestAddsUserMessageWhenProvided(t *testing.T) {
+	// When UserMessage is provided, it should always be added
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+	}
+
+	input := Input{
+		UserMessage: "what next?", // Explicit user message
+		History: []message.AgentMessage{
+			{
+				Role:    message.RoleUser,
+				Content: "call a tool",
+			},
+			{
+				Role: message.RoleAssistant,
+				ToolCalls: []agentic.ToolCall{
+					{
+						ID:    "call-0",
+						Name:  "my_tool",
+						Input: json.RawMessage(`{}`),
+					},
+				},
+			},
+			{
+				Role: message.RoleTool,
+				ToolResults: []agentic.ToolResult{
+					{ID: "call-0", Name: "my_tool", Output: json.RawMessage(`{}`)},
+				},
+			},
+		},
+	}
+
+	reqBody, err := client.buildRequest(input)
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	var req vertexRequest
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	// Should have 4 contents: user, model, user(functionResponse), user("what next?")
+	if len(req.Contents) != 4 {
+		t.Errorf("expected 4 contents (with user message), got %d", len(req.Contents))
+	}
+
+	// Last content should be the user's new message
+	lastContent := req.Contents[len(req.Contents)-1]
+	if lastContent.Role != "user" || lastContent.Parts[0].Text != "what next?" {
+		t.Errorf("expected last content to be user text 'what next?', got role=%q text=%q",
+			lastContent.Role, lastContent.Parts[0].Text)
 	}
 }

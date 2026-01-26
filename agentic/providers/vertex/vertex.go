@@ -20,13 +20,12 @@ import (
 )
 
 // Input represents a single decision request to Vertex Gemini.
+// Tool calls and results should be included in History as AgentMessage entries.
 type Input struct {
 	SystemPrompt string
 	UserMessage  string
 	History      []message.AgentMessage
 	Tools        []agentic.ToolDefinition
-	ToolCalls    []agentic.ToolCall
-	ToolResults  []agentic.ToolResult
 }
 
 // Decision is the output from a single model call.
@@ -47,9 +46,10 @@ type Config struct {
 	MaxTokens   int
 	HTTPClient  *http.Client
 	TokenSource oauth2.TokenSource
+	APIKey      string // Optional: use API key auth instead of OAuth2
 }
 
-// Client calls the Vertex AI Gemini REST API using ADC.
+// Client calls the Vertex AI Gemini REST API.
 type Client struct {
 	project     string
 	location    string
@@ -59,19 +59,13 @@ type Client struct {
 	maxTokens   int
 	client      *http.Client
 	cred        oauth2.TokenSource
+	apiKey      string
 }
 
 // New constructs a Vertex Gemini client from config.
 func New(cfg Config) (*Client, error) {
-	project := strings.TrimSpace(cfg.Project)
 	model := strings.TrimSpace(cfg.Model)
-	location := strings.TrimSpace(cfg.Location)
-	if location == "" {
-		location = "global"
-	}
-	if project == "" || model == "" {
-		return nil, errors.New("project and model are required")
-	}
+	apiKey := strings.TrimSpace(cfg.APIKey)
 
 	client := cfg.HTTPClient
 	if client == nil {
@@ -83,15 +77,6 @@ func New(cfg Config) (*Client, error) {
 		base = "https://aiplatform.googleapis.com/v1"
 	}
 
-	ts := cfg.TokenSource
-	if ts == nil {
-		var err error
-		ts, err = google.DefaultTokenSource(context.Background(), "https://www.googleapis.com/auth/cloud-platform")
-		if err != nil {
-			return nil, fmt.Errorf("vertex adc: %w", err)
-		}
-	}
-
 	temp := cfg.Temperature
 	if temp == 0 {
 		temp = 0.2
@@ -100,6 +85,40 @@ func New(cfg Config) (*Client, error) {
 	maxTokens := cfg.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = 65536
+	}
+
+	// API key auth: simpler setup, no project/location needed
+	if apiKey != "" {
+		if model == "" {
+			return nil, errors.New("model is required")
+		}
+		return &Client{
+			model:       model,
+			baseURL:     strings.TrimRight(base, "/"),
+			temperature: temp,
+			maxTokens:   maxTokens,
+			client:      client,
+			apiKey:      apiKey,
+		}, nil
+	}
+
+	// OAuth2 auth: requires project and location
+	project := strings.TrimSpace(cfg.Project)
+	location := strings.TrimSpace(cfg.Location)
+	if location == "" {
+		location = "global"
+	}
+	if project == "" || model == "" {
+		return nil, errors.New("project and model are required")
+	}
+
+	ts := cfg.TokenSource
+	if ts == nil {
+		var err error
+		ts, err = google.DefaultTokenSource(context.Background(), "https://www.googleapis.com/auth/cloud-platform")
+		if err != nil {
+			return nil, fmt.Errorf("vertex adc: %w", err)
+		}
 	}
 
 	return &Client{
@@ -121,6 +140,7 @@ func NewFromEnv() (*Client, error) {
 		Location: envTrimmed("VERTEX_LOCATION"),
 		Model:    envTrimmed("VERTEX_MODEL"),
 		BaseURL:  envTrimmed("VERTEX_API_BASE"),
+		APIKey:   envTrimmed("VERTEX_AI_API_KEY"),
 	}
 	if temp := envTrimmed("VERTEX_TEMPERATURE"); temp != "" {
 		if v, err := strconv.ParseFloat(temp, 64); err == nil {
@@ -141,26 +161,37 @@ func envTrimmed(key string) string {
 
 // Decide calls Vertex AI generateContent.
 func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
-	if c.cred == nil {
-		return Decision{}, errors.New("token source not configured")
+	if c.cred == nil && c.apiKey == "" {
+		return Decision{}, errors.New("no auth configured (need token source or API key)")
 	}
 	reqBody, err := c.buildRequest(input)
 	if err != nil {
 		return Decision{}, err
 	}
 
-	endpoint := fmt.Sprintf("%s/projects/%s/locations/%s/publishers/google/models/%s:generateContent", c.baseURL, c.project, c.location, c.model)
+	var endpoint string
+	if c.apiKey != "" {
+		// API key auth uses the publishers endpoint
+		endpoint = fmt.Sprintf("%s/publishers/google/models/%s:generateContent?key=%s", c.baseURL, c.model, c.apiKey)
+	} else {
+		// OAuth2 auth uses the project/location endpoint
+		endpoint = fmt.Sprintf("%s/projects/%s/locations/%s/publishers/google/models/%s:generateContent", c.baseURL, c.project, c.location, c.model)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
 	if err != nil {
 		return Decision{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	token, err := c.cred.Token()
-	if err != nil {
-		return Decision{}, fmt.Errorf("vertex token: %w", err)
+	// Set auth header for OAuth2 (not needed for API key - it's in the URL)
+	if c.cred != nil {
+		token, err := c.cred.Token()
+		if err != nil {
+			return Decision{}, fmt.Errorf("vertex token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token.AccessToken)
 	}
-	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -178,7 +209,7 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 		return Decision{}, err
 	}
 	if len(parsed.Candidates) == 0 {
-		return Decision{Reply: "I did not get a response. Try again."}, nil
+		return Decision{}, errors.New("vertex gemini: no candidates in response")
 	}
 
 	parts := parsed.Candidates[0].Content.Parts
@@ -214,9 +245,6 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 	}
 
 	responseText := strings.TrimSpace(reply.String())
-	if responseText == "" {
-		responseText = "I am here. Tell me what you need."
-	}
 	if parsed.Candidates[0].FinishReason == "MAX_TOKENS" {
 		responseText += "\n\n(Reply may be truncated. Consider increasing VERTEX_MAX_TOKENS.)"
 	}
@@ -248,48 +276,25 @@ func readResponseBody(resp *http.Response) (string, error) {
 }
 
 func (c *Client) buildRequest(input Input) ([]byte, error) {
-	contents := make([]vertexContent, 0, 2+len(input.ToolCalls)*2)
+	contents := make([]vertexContent, 0, 2+len(input.History))
 
 	contents = appendHistory(contents, input.History)
 
+	// Add user message if provided.
+	// When history ends with a tool result and no new user message is provided,
+	// the model resumes thinking directly after the function response.
 	userMessage := strings.TrimSpace(input.UserMessage)
-	if userMessage == "" {
-		userMessage = "Hey"
-	}
-	contents = append(contents, vertexContent{
-		Role: "user",
-		Parts: []vertexPart{{
-			Text: userMessage,
-		}},
-	})
-
-	for i, call := range input.ToolCalls {
-		args := decodeArgs(call.Input)
-		// Include signature exactly as stored on each tool call.
-		// Per Vertex AI docs: "include the part containing the functionCall
-		// and its thought_signature exactly as it was returned by the model"
-		contents = append(contents, vertexContent{
-			Role: "model",
-			Parts: []vertexPart{{
-				FunctionCall: &vertexFunctionCall{
-					Name: call.Name,
-					Args: args,
-				},
-				ThoughtSignature: call.ThoughtSignature,
-			}},
-		})
-
-		response := toolResultPayload(input.ToolResults, i)
+	if userMessage != "" {
 		contents = append(contents, vertexContent{
 			Role: "user",
 			Parts: []vertexPart{{
-				FunctionResponse: &vertexFunctionResponse{
-					Name:     call.Name,
-					Response: response,
-				},
+				Text: userMessage,
 			}},
 		})
 	}
+
+	// Tool calls and results are serialized from input.History.
+	// Include all tool data in History as AgentMessage entries.
 
 	functions := make([]vertexFunctionDeclaration, 0, len(input.Tools))
 	for _, tool := range input.Tools {
@@ -399,13 +404,6 @@ func decodeArgs(input json.RawMessage) map[string]any {
 		return map[string]any{}
 	}
 	return args
-}
-
-func toolResultPayload(results []agentic.ToolResult, idx int) map[string]any {
-	if idx >= len(results) {
-		return map[string]any{"result": nil}
-	}
-	return singleToolResultPayload(results[idx])
 }
 
 func singleToolResultPayload(result agentic.ToolResult) map[string]any {

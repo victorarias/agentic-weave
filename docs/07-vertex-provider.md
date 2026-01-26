@@ -1,7 +1,9 @@
 # Vertex Gemini Provider (Optional)
 
-This provider calls Vertex AI Gemini using **Application Default Credentials (ADC)**.
-It does **not** use API keys.
+This provider calls Vertex AI Gemini. It supports two authentication methods:
+
+1. **API Key** - Simpler setup, good for development and CI
+2. **Application Default Credentials (ADC)** - For production with GCP IAM
 
 ## Package
 
@@ -9,9 +11,16 @@ It does **not** use API keys.
 
 ## Environment Variables
 
-- `VERTEX_PROJECT` (required)
+**API Key Auth (simpler):**
+- `VERTEX_AI_API_KEY` (required for API key auth)
+- `VERTEX_MODEL` (required)
+
+**OAuth2/ADC Auth:**
+- `VERTEX_PROJECT` (required for ADC auth)
 - `VERTEX_MODEL` (required)
 - `VERTEX_LOCATION` (optional, default: `global`)
+
+**Common:**
 - `VERTEX_API_BASE` (optional, default: `https://aiplatform.googleapis.com/v1`)
 - `VERTEX_TEMPERATURE` (optional)
 - `VERTEX_MAX_TOKENS` (optional)
@@ -38,6 +47,11 @@ fmt.Println(result.Reply)
 
 ## Notes
 
-- The caller must run with a GCP identity that has `roles/aiplatform.user` on the target project.
-- Use Application Default Credentials via `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account JSON file.
-- Set `VERTEX_LOCATION=global` when using the global Gemini endpoint.
+**API Key Auth:**
+- Get an API key from the Google AI Studio or GCP Console
+- Set `VERTEX_AI_API_KEY` and `VERTEX_MODEL` environment variables
+
+**ADC Auth:**
+- The caller must run with a GCP identity that has `roles/aiplatform.user` on the target project
+- Use Application Default Credentials via `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account JSON file
+- Set `VERTEX_LOCATION=global` when using the global Gemini endpoint
