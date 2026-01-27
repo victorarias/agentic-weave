@@ -2,257 +2,161 @@
 
 This file tracks current work items and progress.
 
-## Current State
+## Implementation Plan: POC Families (first set)
 
-**Status:** Phase 3C implemented locally (capabilities rename + Anthropic provider + e2e). PR #6 open for review.
+### Family: tui-rendering (branch family: feat/poc-tui-*)
+- [ ] PR 1: Bubble Tea renderer + minimal TUI shell
+  - Description: Build a Bubble Tea-based TUI shell with split layout and a mock event stream.
+  - Depends on: none
+  - Definition of Done:
+    - [ ] Tests: `internal/tui/tui_layout_test.go` verifies pane layout sizing and resize handling.
+    - [ ] Tests: `internal/render/render_test.go` validates diff-based render buffer output for a few fixed frames.
+    - [ ] Docs: update `docs/coding-agent/08-tui-spec.md` with renderer contract + layout rules.
+    - [ ] Logging: on TUI init failure, log error and exit with non-zero status; on resize, emit debug log (guarded by config).
+    - [ ] Backward-compat: N/A (new module); config keys optional and default to disabled debug logging.
 
-**Branch:** `feat/phase-3a-message-cleanup`
-**PR:** https://github.com/victorarias/agentic-weave/pull/6
+- [ ] PR 2: TUI event stream + tool/output blocks (Bubble Tea)
+  - Description: Wire a mock event stream into the TUI and render assistant/tool blocks with streaming updates.
+  - Depends on: PR 1 (tui-rendering)
+  - Definition of Done:
+    - [ ] Tests: `internal/tui/stream_render_test.go` simulates streaming events and asserts stable render snapshots.
+    - [ ] Docs: update `docs/coding-agent/04-agent-loop.md` to reference the event types consumed by TUI.
+    - [ ] Logging: warn on unknown event types and skip rendering those blocks.
+    - [ ] Backward-compat: unknown event fields ignored; missing optional fields render as empty content.
 
-### What Was Done
+- [ ] PR 3: Side panel changed-files + diff preview
+  - Description: Add a right-side panel that lists changed files and shows diff preview for selection.
+  - Depends on: PR 1 (tui-rendering)
+  - Definition of Done:
+    - [ ] Tests: `internal/vcs/git_status_test.go` uses fixtures under `tests/fixtures/git-repo` to validate file status and diff generation.
+    - [ ] Tests: `internal/tui/diff_panel_test.go` verifies selection and preview rendering for added/modified files.
+    - [ ] Docs: update `docs/coding-agent/08-tui-spec.md` with side panel behavior + keybindings.
+    - [ ] Logging: on git command failure, show in UI status line and log error; panel renders “Unavailable”.
+    - [ ] Backward-compat: if repo not found, panel hidden; no impact to existing flows.
 
-**Phase 3A - Message Architecture:**
-- Created `AgentMessage` type with structured tool calls/results (no more text flattening)
-- Updated entire codebase: loop, history, vertex provider, events, examples, tests
-- Deleted legacy context files (context.go, compat.go, with_system.go + tests)
-- Removed low-value tests, added 8 high-value edge case tests
-
-**Phase 3B - Loop & Budget Refactoring:**
-- Extracted `recordAssistantMessage()` helper - consolidates history storage + event emission
-- Removed default reply fallback from loop - providers handle empty replies
-- Removed reply trimming from loop - providers handle formatting
-- Replaced `budget.Message` with `Budgetable` interface (pi-mono pattern)
-- `AgentMessage` implements `Budgetable` directly - no conversion needed
-- `BudgetContent()` now includes tool errors in token estimation
-- Removed `ForBudget`, `ForBudgetSlice`, `FromBudget`, `FromBudgetSlice` functions
-- Updated docs with new architecture
-
-**Phase 3C - Capabilities Rename + Anthropic Provider:**
-- Renamed `adapters` package to `capabilities` with doc updates
-- Added Anthropic provider (`agentic/providers/anthropic`)
-- Added Anthropic e2e test mirroring Vertex flow
-- Added Anthropic provider docs
-
-### Next Steps
-- [ ] Merge PR #6
-- [ ] Tag release (if appropriate)
-- [ ] Decide whether to ship the capabilities rename + Anthropic provider as a separate PR or fold into an existing one
-
-### Key Files
-- `agentic/message/message.go` - AgentMessage type, implements Budgetable
-- `agentic/context/budget/budget.go` - Budgetable interface, Manager, compaction logic
-- `agentic/loop/loop.go` - Main agent loop with recordAssistantMessage helper
-- `agentic/providers/vertex/vertex.go` - Vertex Gemini provider
-- `docs/06-context-budgets.md` - Architecture documentation
-
-### Architecture Decisions
-- **Budgetable interface** - Follows pi-mono: work directly with rich AgentMessage, no separate "budget message" type. Avoids conversion bugs.
-- **No default reply in loop** - Providers (Vertex) handle empty replies. Loop passes through what it gets.
-- **No trimming in loop** - Providers handle formatting. Loop is a thin orchestrator.
-- **Tool errors in BudgetContent()** - Fixes bug where large error messages bypassed compaction.
-- **Capabilities vs adapters** - Capabilities provide feature flags; provider packages own message conversion.
-
-### PR #6 Commits
-```
-refactor(budget): replace Message type with Budgetable interface
-refactor(loop): extract recordAssistantMessage helper
-docs: update TASKS.md with Phase 3B completion
-+ earlier Phase 3A commits (AgentMessage, legacy cleanup, tests)
-```
+**Integration Gate (tui-rendering)**
+- [ ] Manual: run `cmd/opencode-tui` with mock session; verify resize, scroll, and side panel toggle.
+- [ ] Manual: simulate tool output streaming; confirm no flicker and stable cursor position.
 
 ---
 
-## Completed Initiatives
+### Family: remote-protocol (branch family: feat/poc-remote-*)
+- [ ] PR 4: Remote protocol types + command/poll queue
+  - Description: Define remote event envelope, add command + output queues with cursor-based polling, and document handshake.
+  - Depends on: none
+  - Definition of Done:
+    - [ ] Tests: `internal/remote/codec_test.go` validates JSON encode/decode compatibility and error cases.
+    - [ ] Tests: `internal/remote/queue_test.go` verifies command queue ordering and poll cursor behavior.
+    - [ ] Docs: update `docs/coding-agent/06-remote-protocol.md` with event schema + handshake + command/poll semantics.
+    - [ ] Logging: invalid frames log warn and drop; command timeouts log warn.
+    - [ ] Backward-compat: N/A (new module); if config missing, remote stays disabled.
 
-### phase-3c-capabilities-anthropic-provider ✅
-Rename adapters to capabilities and add Anthropic provider + e2e coverage.
+- [ ] PR 5: WS transport (client + local server stub)
+  - Description: Add WS transport for remote protocol, including local server stub and client reconnect/backoff.
+  - Depends on: PR 4 (remote-protocol)
+  - Definition of Done:
+    - [ ] Tests: `internal/remote/ws_test.go` spins up in-process WS server and verifies connect, send command, and poll output.
+    - [ ] Docs: update `docs/coding-agent/06-remote-protocol.md` with transport details + retry/backoff rules.
+    - [ ] Logging: connection errors log with remote URL and retry backoff; disconnect reasons log info.
+    - [ ] Backward-compat: remote disabled by default; no impact to local-only flows.
 
-- [x] Rename `adapters` package to `capabilities` across code and docs
-- [x] Add `agentic/providers/anthropic` provider (SDK-based)
-- [x] Add Anthropic e2e test (tool-call roundtrip)
-- [x] Document Anthropic provider usage
+- [ ] PR 6: Remote TUI for connect/send/poll
+  - Description: Add a minimal Bubble Tea remote TUI to connect to agents, send commands, and poll output.
+  - Depends on: PR 5 (remote-protocol)
+  - Definition of Done:
+    - [ ] Tests: `internal/remoteui/model_test.go` validates state transitions (disconnected → connected → polling).
+    - [ ] Docs: update `docs/coding-agent/06-remote-protocol.md` with remote TUI usage notes.
+    - [ ] Logging: command failures log warn and surface in UI status line.
+    - [ ] Backward-compat: N/A (new module).
 
-### phase-3b-loop-budget-refactoring ✅
-Simplify loop and budget code, follow pi-mono pattern more closely.
+- [ ] PR 7: Remote input merge policy (local vs remote)
+  - Description: Implement queue merge semantics and add conflict policy described in the spec (local wins ties).
+  - Depends on: PR 5 (remote-protocol)
+  - Definition of Done:
+    - [ ] Tests: `internal/supervisor/queue_merge_test.go` covers ordering for local vs remote inputs.
+    - [ ] Docs: update `docs/coding-agent/08-tui-spec.md` merge policy section.
+    - [ ] Logging: log remote enqueue failures and continue; queue overflow logs warn and drops oldest.
+    - [ ] Backward-compat: existing local-only behavior unchanged when remote disabled.
 
-- [x] Extract `recordAssistantMessage()` helper in loop.go
-- [x] Remove default reply fallback (providers handle this)
-- [x] Remove reply trimming (providers handle formatting)
-- [x] Replace `budget.Message` with `Budgetable` interface
-- [x] `AgentMessage` implements `Budgetable` directly
-- [x] Include tool errors in `BudgetContent()` for accurate token estimation
-- [x] Remove conversion functions (ForBudget, FromBudget, etc.)
-- [x] Update all Compactor implementations to use `[]Budgetable`
-- [x] Update docs/06-context-budgets.md
-
-### phase-3a-message-architecture ✅
-Adopt pi-mono pattern: rich internal message type with structured tool calls, adapter-level conversion.
-
-- [x] Create AgentMessage type in `agentic/message/message.go`
-- [x] Update loop types (Request, Result, Input) to use `[]message.AgentMessage`
-- [x] Remove `toolResultMessage()` function - no more text flattening
-- [x] Update history Store interface to use AgentMessage
-- [x] Remove ToolRecorder/ToolLoader interfaces (tool data now embedded)
-- [x] Update Vertex provider - replace HistoryTurn with AgentMessage
-- [x] Add ToolCalls field to Event struct for MessageEnd events
-- [x] Delete legacy files: context.go, compat.go, compat_test.go, with_system.go, with_system_test.go
-- [x] Update examples/basic/main.go
-- [x] Update tests/harness/*
-- [x] Remove low-value tests (6 tests across message, history, vertex, harness)
-- [x] Add edge case tests (8 new tests in loop_edge_cases_test.go)
-- [x] Extract `emit()` helper in loop.go
-- [x] Add `envTrimmed()` helper in vertex.go
-- [x] Simplify compaction logic with `max()` builtin
-- [x] Update docs/06-context-budgets.md for AgentMessage
-
-### vertex-provider ✅
-- [x] Add Vertex Gemini provider (ADC-only)
-- [x] Add docs + example usage
-
-### loop-truncation-fixes ✅
-- [x] Return partial output when head truncation hits first-line byte limit
-- [x] Preserve byte-based truncation metadata for tail truncation
-- [x] Avoid appending compaction summaries for history stores without rewrite support
-
-### loop-history-rewriter ✅
-- [x] Require history.Rewriter when budget compaction is configured
-
-### test-harness ✅
-- [x] Add integration harness covering loop, truncation, and compaction flows
-- [x] Expand harness coverage across loop behavior, tools, and policies
-- [x] Add guard, event ordering, byte truncation, and usage passthrough tests
-- [x] Add MCP integration and Vertex config tests
-
-### ci-harness ✅
-- [x] Add GitHub Actions workflow to run all tests
-- [x] Add formatter and linter checks to CI workflow
-- [x] Switch CI linter to staticcheck
-
-### mono-parity-context ✅
-- [x] Design optional, pluggable context budgeting + compaction + truncation modules
-- [x] Define minimal interfaces for model limits + usage reporting
-- [x] Implement budget + truncation packages with tests
-- [x] Add loop helper, adapter utilities, history hook
+**Integration Gate (remote-protocol)**
+- [ ] Manual: run local WS server + remote client, send input, confirm it appears in TUI and respects ordering.
+- [ ] Manual: run remote TUI, connect to agent, send a command, and poll output to confirm round-trip.
 
 ---
 
-## Task Definitions (from conductor-bot)
+### Family: history-tree (branch family: feat/poc-history-*)
+- [ ] PR 8: History tree data model + JSONL persistence
+  - Description: Implement a branch-only history tree (no merges) with branch pointers and JSONL storage for replay.
+  - Depends on: none
+  - Definition of Done:
+    - [ ] Tests: `internal/historytree/tree_test.go` covers branch creation and traversal order.
+    - [ ] Tests: `internal/storage/jsonl_tree_test.go` verifies append + replay for tree events.
+    - [ ] Docs: update `docs/coding-agent/03-jsonl-storage-schema.md` with tree event entries.
+    - [ ] Logging: on replay corruption, log error and skip invalid entries with count.
+    - [ ] Backward-compat: if old linear session log exists, treat as single-branch root; no crash.
 
-### Phase 3A: agentic-weave Message Architecture (pi-mono Pattern)
+- [ ] PR 9: Agent loop integration (branching + resume)
+  - Description: Wire the agent loop to create a new branch only when input is not on the current head; otherwise advance head.
+  - Depends on: PR 8 (history-tree)
+  - Definition of Done:
+    - [ ] Tests: `internal/agent/loop_tree_test.go` ensures new input creates branch and resume uses selected branch.
+    - [ ] Docs: update `docs/coding-agent/04-agent-loop.md` with tree semantics and resume behavior.
+    - [ ] Logging: on missing branch ID, log warn and fall back to latest branch.
+    - [ ] Backward-compat: if branch ID absent, default to linear continuation.
 
-**Why:** Fixes Issue 1 ([tool_call] echo) by preserving tool call structure. Adopts proven pi-mono pattern.
+- [ ] PR 10: History query limits (tail N)
+  - Description: Add a query API to load only the last N messages on the active branch, with an option to load full history.
+  - Depends on: PR 8 (history-tree)
+  - Definition of Done:
+    - [ ] Tests: `internal/historytree/query_test.go` covers tail-N selection and full-history selection.
+    - [ ] Tests: `internal/storage/jsonl_tail_test.go` validates tail-N replay on JSONL sessions.
+    - [ ] Docs: update `docs/coding-agent/04-agent-loop.md` with history load limits for controller vs human modes.
+    - [ ] Logging: if limit is set and truncation occurs, log debug once per session.
+    - [ ] Backward-compat: default (limit unset or 0) loads full history.
 
-**Approach:** Rich internal message type + adapter-level conversion. No backward compatibility, clean API.
+- [ ] PR 11: Branch summaries + file tracking metadata
+  - Description: Add optional branch-summary entries when switching branches and capture read/modified files for context (no file restore in core).
+  - Depends on: PR 8 (history-tree)
+  - Definition of Done:
+    - [ ] Tests: `internal/historytree/summary_test.go` verifies summary entry creation and placement.
+    - [ ] Tests: `internal/historytree/file_tracking_test.go` verifies read/modified file aggregation from tool calls and prior summaries.
+    - [ ] Docs: update `docs/coding-agent/03-jsonl-storage-schema.md` with branch_summary + details schema.
+    - [ ] Docs: update `docs/coding-agent/04-agent-loop.md` to document summary injection on branch switch.
+    - [ ] Logging: summary generation failure logs warn and falls back to no-summary.
+    - [ ] Backward-compat: if summary data missing, branch switch still succeeds with no extra context.
 
-#### Task 3A.1: Create AgentMessage Type
+- [ ] PR 12: Optional git checkpoint hook (file sync POC)
+  - Description: Add a minimal hook/extension that stashes git state on turn end and offers restore on branch/fork (interactive only).
+  - Depends on: PR 9 (history-tree)
+  - Definition of Done:
+    - [ ] Tests: `internal/checkpoint/git_checkpoint_test.go` covers stash creation, lookup by entry, and restore selection.
+    - [ ] Docs: update `docs/coding-agent/05-tooling.md` with checkpoint hook behavior and limitations.
+    - [ ] Logging: when git is unavailable or stash fails, log info and skip.
+    - [ ] Backward-compat: hook is opt-in and disabled by default; no effect on existing flows.
 
-**New file:** `agentic/message/message.go`
-
-```go
-package message
-
-// AgentMessage is the rich internal representation (pi-mono pattern)
-type AgentMessage struct {
-    Role        string           // "user", "assistant", "tool"
-    Content     string           // text content
-    ToolCalls   []ToolCall       // structured tool calls (not text!)
-    ToolResults []ToolResult     // structured tool results (not text!)
-    Timestamp   time.Time
-}
-
-// Standard roles
-const (
-    RoleUser      = "user"
-    RoleAssistant = "assistant"
-    RoleTool      = "tool"
-)
-```
-
-#### Task 3A.2: Update Loop to Use AgentMessage
-
-**File:** `agentic/loop/loop.go`
-
-**Changes:**
-- Replace `[]budget.Message` with `[]message.AgentMessage` for history
-- When appending tool calls: `AgentMessage{Role: "assistant", ToolCalls: calls}`
-- When appending tool results: `AgentMessage{Role: "tool", ToolResults: results}`
-- Remove text flattening helpers (`toolResultMessage()` etc.)
-
-#### Task 3A.3: Add Message Events
-
-**File:** `agentic/events/events.go`
-
-**Changes:**
-- `MessageEnd` - always emitted when LLM response complete (has full content)
-- `MessageStart` - only emitted by streaming providers (signals LLM call started)
-- `MessageUpdate` - only emitted by streaming providers (delta content)
-
-```go
-// MessageEnd is always emitted, even for non-streaming
-emit.Emit(events.Event{
-    Type:      events.MessageEnd,
-    MessageID: msgID,
-    Role:      "assistant",
-    Content:   decision.Reply,
-    ToolCalls: decision.ToolCalls,
-})
-```
-
-#### Task 3A.4: Add Adapter Conversion Functions
-
-Each adapter converts `[]AgentMessage` to provider-specific format.
-
-_Note: In the current codebase, conversion helpers live in provider packages; capabilities expose flags only._
-
-**File:** `capabilities/vertex/vertex.go`
-
-```go
-func convertToVertexFormat(messages []message.AgentMessage) []vertexContent {
-    // Convert structured tool calls to Vertex function call format
-    // No text flattening - preserve structure
-}
-```
-
-**File:** `capabilities/anthropic/anthropic.go`
-
-```go
-func convertToAnthropicFormat(messages []message.AgentMessage) []anthropicMessage {
-    // Convert to Anthropic format with tool_use blocks
-}
-```
-
-#### Task 3A.5: Keep budget.Message Minimal
-
-**File:** `agentic/context/budget/budget.go`
-
-Keep `budget.Message` for token counting only:
-```go
-type Message struct {
-    Role    string
-    Content string
-    // NO tool calls - budget just needs text for token estimation
-}
-```
-
-Add conversion helper:
-```go
-func FromAgentMessages(msgs []message.AgentMessage) []Message {
-    // Flatten for token counting only
-}
-```
+**Integration Gate (history-tree)**
+- [ ] Manual: create two branches from same session; confirm tree view selects and replays correct branch.
 
 ---
+
+## Modules (new/updated)
+- New: `cmd/opencode-tui` (POC app)
+- New: `internal/render` (renderer abstraction + diff buffer)
+- New: `internal/tui` (layout, panes, event rendering)
+- New: `internal/vcs` (git status + diff adapter)
+- New: `cmd/opencode-remote` (minimal remote TUI for connections/commands)
+- New: `internal/remote` (protocol types, ws client/server)
+- New: `internal/historytree` (DAG model)
+- New: `internal/checkpoint` (optional git checkpoint hook)
+- Updated: `internal/storage/jsonl` (tree events + replay)
+- Updated: `internal/supervisor` (queue merge policy)
+- Updated: `docs/coding-agent/03-jsonl-storage-schema.md`
+- Updated: `docs/coding-agent/04-agent-loop.md`
+- Updated: `docs/coding-agent/05-tooling.md`
+- Updated: `docs/coding-agent/06-remote-protocol.md`
+- Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
-- 2026-01-26: Renamed adapters to capabilities; added Anthropic provider, e2e test, and docs.
-- 2026-01-26: Implemented loop history persistence, tool call normalization, Vertex text+tool call preservation, and paired compaction events with tests.
-- 2026-01-26: Added follow-up fixes list for loop/history/Vertex/event pairing.
-- 2026-01-26: Removed Conductor app task definitions from TASKS.md (external service).
-- 2026-01-25: Phase 3B complete: loop refactoring, Budgetable interface, tool error counting.
-- 2026-01-24: Updated docs/06-context-budgets.md for AgentMessage architecture.
-- 2026-01-24: Completed Phase 3A cleanup: tests, refactoring, docs. PR #6 created.
-- 2026-01-24: Completed Phase 3A message architecture refactoring.
-- 2026-01-18: Added toolscope, tool history persistence, tests, and docs.
-- 2026-01-17: Applied gofmt, removed unused test helper for staticcheck.
-- 2026-01-16: Added Vertex Gemini provider, CI workflow, harness tests.
-- 2026-01-14: Initial scaffolding, core module, docs, examples, LICENSE.
+- 2026-01-27 21:40: Updated POC plan + docs to reflect branch-only tree and optional git checkpoint file sync.
+- 2026-01-27 21:02: Marked tui-design-plan complete; docs added under docs/coding-agent.
+- 2026-01-27 21:00: Pruned completed initiatives and history entries per cleanup request.
