@@ -114,6 +114,26 @@ This file tracks current work items and progress.
     - [ ] Logging: if limit is set and truncation occurs, log debug once per session.
     - [ ] Backward-compat: default (limit unset or 0) loads full history.
 
+- [ ] PR 11: Branch summaries + file tracking metadata
+  - Description: Add optional branch-summary entries when switching branches and capture read/modified files for context (no file restore in core).
+  - Depends on: PR 8 (history-tree)
+  - Definition of Done:
+    - [ ] Tests: `internal/historytree/summary_test.go` verifies summary entry creation and placement.
+    - [ ] Tests: `internal/historytree/file_tracking_test.go` verifies read/modified file aggregation from tool calls and prior summaries.
+    - [ ] Docs: update `docs/coding-agent/03-jsonl-storage-schema.md` with branch_summary + details schema.
+    - [ ] Docs: update `docs/coding-agent/04-agent-loop.md` to document summary injection on branch switch.
+    - [ ] Logging: summary generation failure logs warn and falls back to no-summary.
+    - [ ] Backward-compat: if summary data missing, branch switch still succeeds with no extra context.
+
+- [ ] PR 12: Optional git checkpoint hook (file sync POC)
+  - Description: Add a minimal hook/extension that stashes git state on turn end and offers restore on branch/fork (interactive only).
+  - Depends on: PR 9 (history-tree)
+  - Definition of Done:
+    - [ ] Tests: `internal/checkpoint/git_checkpoint_test.go` covers stash creation, lookup by entry, and restore selection.
+    - [ ] Docs: update `docs/coding-agent/05-tooling.md` with checkpoint hook behavior and limitations.
+    - [ ] Logging: when git is unavailable or stash fails, log info and skip.
+    - [ ] Backward-compat: hook is opt-in and disabled by default; no effect on existing flows.
+
 **Integration Gate (history-tree)**
 - [ ] Manual: create two branches from same session; confirm tree view selects and replays correct branch.
 
@@ -127,13 +147,16 @@ This file tracks current work items and progress.
 - New: `cmd/opencode-remote` (minimal remote TUI for connections/commands)
 - New: `internal/remote` (protocol types, ws client/server)
 - New: `internal/historytree` (DAG model)
+- New: `internal/checkpoint` (optional git checkpoint hook)
 - Updated: `internal/storage/jsonl` (tree events + replay)
 - Updated: `internal/supervisor` (queue merge policy)
 - Updated: `docs/coding-agent/03-jsonl-storage-schema.md`
 - Updated: `docs/coding-agent/04-agent-loop.md`
+- Updated: `docs/coding-agent/05-tooling.md`
 - Updated: `docs/coding-agent/06-remote-protocol.md`
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-01-27 21:40: Updated POC plan + docs to reflect branch-only tree and optional git checkpoint file sync.
 - 2026-01-27 21:02: Marked tui-design-plan complete; docs added under docs/coding-agent.
 - 2026-01-27 21:00: Pruned completed initiatives and history entries per cleanup request.
