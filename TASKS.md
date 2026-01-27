@@ -38,6 +38,13 @@ This file tracks current work items and progress.
 - [ ] Tag release (if appropriate)
 - [ ] Decide whether to ship the capabilities rename + Anthropic provider as a separate PR or fold into an existing one
 
+### feat/agentic-weave-streaming*
+- [x] Add Anthropic streaming API (text/tool/done/error events + stop reason normalization)
+- [x] Default tool schema to `{type:"object",properties:{}}` when absent
+- [x] Normalize tool result content for tool_result blocks
+- [x] Add stream unit tests + streaming e2e coverage
+- [x] Update Anthropic provider docs + streaming example
+
 ### Key Files
 - `agentic/message/message.go` - AgentMessage type, implements Budgetable
 - `agentic/context/budget/budget.go` - Budgetable interface, Manager, compaction logic
@@ -244,6 +251,7 @@ func FromAgentMessages(msgs []message.AgentMessage) []Message {
 ---
 
 ## Progress Log
+- 2026-01-27 21:10: Added Anthropic streaming support (stream API, tests, docs, e2e update, example) + schema/tool-result normalization.
 - 2026-01-26: Renamed adapters to capabilities; added Anthropic provider, e2e test, and docs.
 - 2026-01-26: Implemented loop history persistence, tool call normalization, Vertex text+tool call preservation, and paired compaction events with tests.
 - 2026-01-26: Added follow-up fixes list for loop/history/Vertex/event pairing.

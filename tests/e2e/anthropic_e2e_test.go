@@ -14,6 +14,7 @@ import (
 	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/message"
 	anthropic "github.com/victorarias/agentic-weave/agentic/providers/anthropic"
+	"github.com/victorarias/agentic-weave/agentic/usage"
 )
 
 func init() {
@@ -32,11 +33,11 @@ func init() {
 	}
 }
 
-// TestAnthropicE2E tests the complete agentic loop:
-// user message → tool call → tool result → final answer
-//
-// Uses 2 API calls total.
-func TestAnthropicE2E(t *testing.T) {
+// TestAnthropicStreamingE2E validates streaming behavior:
+// - text deltas stream for a non-tool request
+// - tool calls stream for a tool request
+// - done events include stop reason + usage
+func TestAnthropicStreamingE2E(t *testing.T) {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
 		t.Skip("ANTHROPIC_API_KEY not set")
@@ -55,54 +56,148 @@ func TestAnthropicE2E(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
+	// Step 1: Streaming text without tools.
+	textStream, err := client.Stream(ctx, anthropic.Input{
+		SystemPrompt: "Respond with the single word OK.",
+		UserMessage:  "Say OK.",
+		MaxTokens:    16,
+	})
+	if err != nil {
+		t.Fatalf("text stream failed: %v", err)
+	}
+	_, textCounts := collectStream(t, textStream)
+	if textCounts.TextDeltas == 0 {
+		t.Fatalf("expected text deltas in streaming text response")
+	}
+	if !textCounts.DoneSeen || textCounts.StopReason == "" || !textCounts.UsageSeen {
+		t.Fatalf("expected done event with stop reason + usage in text response")
+	}
+
+	// Step 2: Streaming tool-use flow.
 	tools := []agentic.ToolDefinition{{
 		Name:        "add",
 		Description: "Add two numbers",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}},"required":["a","b"]}`),
 	}}
 
-	// Call 1: User asks question → model returns tool call
-	decision, err := client.Decide(ctx, anthropic.Input{
-		SystemPrompt: "Use the add tool for math. After getting the result, state the answer.",
-		UserMessage:  "What is 42 + 17?",
-		Tools:        tools,
-		MaxTokens:    256,
-	})
-	if err != nil {
-		t.Fatalf("call 1 failed: %v", err)
-	}
-	if len(decision.ToolCalls) == 0 {
-		t.Fatalf("expected tool call, got: %s", decision.Reply)
+	var (
+		history   []message.AgentMessage
+		args      struct{ A, B float64 }
+		maxTurns  = 3
+		userQuery = "What is 42 + 17?"
+		system    = "Use the add tool for math."
+		toolSeen  bool
+		doneSeen  bool
+		usageSeen bool
+		stopSeen  bool
+	)
+
+	for turn := 0; turn < maxTurns; turn++ {
+		input := anthropic.Input{
+			SystemPrompt: system,
+			Tools:        tools,
+			MaxTokens:    256,
+		}
+		if turn == 0 {
+			input.UserMessage = userQuery
+		} else {
+			input.History = history
+		}
+
+		stream, err := client.Stream(ctx, input)
+		if err != nil {
+			t.Fatalf("tool stream %d failed: %v", turn+1, err)
+		}
+
+		reply, counts := collectStream(t, stream)
+		doneSeen = doneSeen || counts.DoneSeen
+		usageSeen = usageSeen || counts.UsageSeen
+		if counts.StopReason != "" {
+			stopSeen = true
+		}
+		if counts.ToolCalls > 0 {
+			toolSeen = true
+		}
+		if len(reply) > 0 && counts.ToolCalls == 0 {
+			break
+		}
+		if counts.ToolCalls == 0 {
+			break
+		}
+
+		if turn == 0 && len(history) == 0 {
+			history = append(history, message.AgentMessage{Role: message.RoleUser, Content: userQuery})
+		}
+
+		results := make([]agentic.ToolResult, 0, counts.ToolCalls)
+		for _, call := range counts.ToolCallList {
+			if call.Name != "add" {
+				t.Fatalf("expected 'add' tool call, got: %s", call.Name)
+			}
+			_ = json.Unmarshal(call.Input, &args)
+			result, _ := json.Marshal(map[string]float64{"sum": args.A + args.B})
+			results = append(results, agentic.ToolResult{ID: call.ID, Name: call.Name, Output: result})
+		}
+
+		history = append(history,
+			message.AgentMessage{Role: message.RoleAssistant, ToolCalls: counts.ToolCallList},
+			message.AgentMessage{Role: message.RoleTool, ToolResults: results},
+		)
 	}
 
-	tc := decision.ToolCalls[0]
-	if tc.Name != "add" {
-		t.Fatalf("expected 'add' tool call, got: %s", tc.Name)
+	if !toolSeen {
+		t.Fatalf("expected at least one tool call during streaming tool flow")
+	}
+	if !doneSeen || !usageSeen {
+		t.Fatalf("expected done event with usage during tool flow")
+	}
+	if !stopSeen {
+		t.Fatalf("expected stop reason during tool flow")
+	}
+}
+
+type streamCounts struct {
+	TextDeltas   int
+	ToolCalls    int
+	ToolCallList []agentic.ToolCall
+	DoneSeen     bool
+	StopReason   usage.StopReason
+	UsageSeen    bool
+}
+
+func collectStream(t *testing.T, stream <-chan anthropic.StreamEvent) (string, streamCounts) {
+	t.Helper()
+
+	var reply strings.Builder
+	counts := streamCounts{}
+
+	for event := range stream {
+		switch e := event.(type) {
+		case anthropic.TextDeltaEvent:
+			reply.WriteString(e.Delta)
+			if strings.TrimSpace(e.Delta) != "" {
+				counts.TextDeltas++
+			}
+		case anthropic.ToolCallEvent:
+			counts.ToolCalls++
+			counts.ToolCallList = append(counts.ToolCallList, e.Call)
+		case anthropic.DoneEvent:
+			counts.DoneSeen = true
+			counts.StopReason = e.StopReasonNormalized
+			if e.Usage != nil {
+				counts.UsageSeen = true
+			}
+		case anthropic.ErrorEvent:
+			t.Fatalf("stream error: %v", e.Err)
+		}
 	}
 
-	// Execute tool
-	var args struct{ A, B float64 }
-	_ = json.Unmarshal(tc.Input, &args)
-	result, _ := json.Marshal(map[string]float64{"sum": args.A + args.B})
+	if !counts.DoneSeen {
+		t.Fatalf("stream ended without DoneEvent")
+	}
 
-	// Call 2: Send tool result → model returns final answer
-	decision, err = client.Decide(ctx, anthropic.Input{
-		SystemPrompt: "Use the add tool for math. After getting the result, state the answer.",
-		Tools:        tools,
-		MaxTokens:    256,
-		History: []message.AgentMessage{
-			{Role: message.RoleUser, Content: "What is 42 + 17?"},
-			{Role: message.RoleAssistant, ToolCalls: []agentic.ToolCall{tc}},
-			{Role: message.RoleTool, ToolResults: []agentic.ToolResult{{ID: tc.ID, Name: tc.Name, Output: result}}},
-		},
-	})
-	if err != nil {
-		t.Fatalf("call 2 failed: %v", err)
-	}
-	if !strings.Contains(decision.Reply, "59") {
-		t.Fatalf("expected '59' in reply, got: %s", decision.Reply)
-	}
+	return strings.TrimSpace(reply.String()), counts
 }

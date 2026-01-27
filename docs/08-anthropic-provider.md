@@ -34,7 +34,35 @@ if err != nil {
 fmt.Println(result.Reply)
 ```
 
+## Streaming
+
+```go
+stream, err := client.Stream(ctx, anthropic.Input{
+    SystemPrompt: "Use tools when needed.",
+    UserMessage:  "Add 10 and 32.",
+    Tools:        tools,
+})
+if err != nil {
+    // handle request error
+}
+
+for event := range stream {
+    switch e := event.(type) {
+    case anthropic.TextDeltaEvent:
+        fmt.Print(e.Delta)
+    case anthropic.ToolCallEvent:
+        // execute tool using e.Call
+    case anthropic.DoneEvent:
+        fmt.Printf("\n(stop=%s)\n", e.StopReason)
+    case anthropic.ErrorEvent:
+        // handle stream error
+    }
+}
+```
+
 ## Notes
 
 - Tool calls are returned as `agentic.ToolCall` values with raw JSON input.
 - Tool results should be provided via `History` as `message.AgentMessage` entries.
+- Streaming emits tool call events after assembling JSON input deltas.
+- Normalized stop reasons are available on `Decision.StopReasonNormalized` and `DoneEvent.StopReasonNormalized`.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/message"
 	"github.com/victorarias/agentic-weave/agentic/usage"
@@ -31,10 +32,11 @@ type Input struct {
 
 // Decision is the output from a single model call.
 type Decision struct {
-	Reply      string
-	ToolCalls  []agentic.ToolCall
-	StopReason string
-	Usage      *usage.Usage
+	Reply                string
+	ToolCalls            []agentic.ToolCall
+	StopReason           string
+	StopReasonNormalized usage.StopReason
+	Usage                *usage.Usage
 }
 
 // Config controls an Anthropic client.
@@ -122,40 +124,7 @@ func NewFromEnv() (*Client, error) {
 
 // Decide calls the Anthropic Messages API.
 func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
-	messages := appendHistory(nil, input.History)
-
-	userMessage := strings.TrimSpace(input.UserMessage)
-	if userMessage != "" {
-		messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(userMessage)))
-	}
-
-	req := anthropic.MessageNewParams{
-		Model:     anthropic.Model(c.model),
-		MaxTokens: int64(c.maxTokens),
-		Messages:  messages,
-	}
-
-	if len(input.Tools) > 0 {
-		req.Tools = toolDefsToAnthropic(input.Tools)
-	}
-
-	if system := strings.TrimSpace(input.SystemPrompt); system != "" {
-		req.System = []anthropic.TextBlockParam{{
-			Text: system,
-		}}
-	}
-
-	if input.MaxTokens > 0 {
-		req.MaxTokens = int64(input.MaxTokens)
-	}
-
-	temperature := input.Temperature
-	if temperature == nil {
-		temperature = c.temperature
-	}
-	if temperature != nil {
-		req.Temperature = anthropic.Float(*temperature)
-	}
+	req := buildRequest(c, input)
 
 	msg, err := c.client.Messages.New(ctx, req)
 	if err != nil {
@@ -164,12 +133,14 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 
 	reply, calls := parseResponse(msg)
 	usageValue := capabilities.NormalizeUsage(int(msg.Usage.InputTokens), int(msg.Usage.OutputTokens), 0)
+	stopReason := string(msg.StopReason)
 
 	return Decision{
-		Reply:      reply,
-		ToolCalls:  calls,
-		StopReason: string(msg.StopReason),
-		Usage:      &usageValue,
+		Reply:                reply,
+		ToolCalls:            calls,
+		StopReason:           stopReason,
+		StopReasonNormalized: capabilities.StopReasonFromFinish(stopReason),
+		Usage:                &usageValue,
 	}, nil
 }
 
@@ -190,8 +161,9 @@ func appendHistory(messages []anthropic.MessageParam, history []message.AgentMes
 			if strings.TrimSpace(msg.Content) != "" {
 				blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 			}
-			for _, call := range msg.ToolCalls {
-				blocks = append(blocks, anthropic.NewToolUseBlock(call.ID, decodeArgs(call.Input), call.Name))
+			for i, call := range msg.ToolCalls {
+				callID := ensureToolCallID(call.ID, call.Name, i)
+				blocks = append(blocks, anthropic.NewToolUseBlock(callID, decodeArgs(call.Input), call.Name))
 			}
 			if len(blocks) > 0 {
 				messages = append(messages, anthropic.NewAssistantMessage(blocks...))
@@ -229,8 +201,9 @@ func parseResponse(msg *anthropic.Message) (string, []agentic.ToolCall) {
 		case anthropic.TextBlock:
 			reply.WriteString(variant.Text)
 		case anthropic.ToolUseBlock:
+			callID := ensureToolCallID(variant.ID, variant.Name, len(calls))
 			call := agentic.ToolCall{
-				ID:    variant.ID,
+				ID:    callID,
 				Name:  variant.Name,
 				Input: variant.Input,
 			}
@@ -238,6 +211,45 @@ func parseResponse(msg *anthropic.Message) (string, []agentic.ToolCall) {
 		}
 	}
 	return strings.TrimSpace(reply.String()), calls
+}
+
+func buildRequest(c *Client, input Input) anthropic.MessageNewParams {
+	messages := appendHistory(nil, input.History)
+
+	userMessage := strings.TrimSpace(input.UserMessage)
+	if userMessage != "" {
+		messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(userMessage)))
+	}
+
+	req := anthropic.MessageNewParams{
+		Model:     anthropic.Model(c.model),
+		MaxTokens: int64(c.maxTokens),
+		Messages:  messages,
+	}
+
+	if len(input.Tools) > 0 {
+		req.Tools = toolDefsToAnthropic(input.Tools)
+	}
+
+	if system := strings.TrimSpace(input.SystemPrompt); system != "" {
+		req.System = []anthropic.TextBlockParam{{
+			Text: system,
+		}}
+	}
+
+	if input.MaxTokens > 0 {
+		req.MaxTokens = int64(input.MaxTokens)
+	}
+
+	temperature := input.Temperature
+	if temperature == nil {
+		temperature = c.temperature
+	}
+	if temperature != nil {
+		req.Temperature = anthropic.Float(*temperature)
+	}
+
+	return req
 }
 
 func toolDefsToAnthropic(tools []agentic.ToolDefinition) []anthropic.ToolUnionParam {
@@ -262,6 +274,9 @@ func schemaFromRaw(raw json.RawMessage) anthropic.ToolInputSchemaParam {
 	}
 
 	props := schema["properties"]
+	if props == nil {
+		props = map[string]any{}
+	}
 	required := requiredFields(schema["required"])
 
 	extras := map[string]any{}
@@ -277,6 +292,10 @@ func schemaFromRaw(raw json.RawMessage) anthropic.ToolInputSchemaParam {
 	param := anthropic.ToolInputSchemaParam{
 		Properties: props,
 		Required:   required,
+		Type:       constant.Object("object"),
+	}
+	if t, ok := schema["type"].(string); ok && strings.TrimSpace(t) != "" {
+		param.Type = constant.Object(t)
 	}
 	if len(extras) > 0 {
 		param.ExtraFields = extras
@@ -316,10 +335,29 @@ func toolResultContent(result agentic.ToolResult) (string, bool) {
 	if result.Error != nil {
 		return result.Error.Message, true
 	}
-	if len(result.Output) == 0 {
+	output := strings.TrimSpace(string(result.Output))
+	if output == "" {
 		return "null", false
 	}
-	return string(result.Output), false
+	var decoded any
+	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
+		return output, false
+	}
+	if str, ok := decoded.(string); ok {
+		return str, false
+	}
+	return output, false
+}
+
+func ensureToolCallID(id string, name string, index int) string {
+	trimmed := strings.TrimSpace(id)
+	if trimmed != "" {
+		return trimmed
+	}
+	if strings.TrimSpace(name) != "" {
+		return fmt.Sprintf("%s-%d", name, index+1)
+	}
+	return fmt.Sprintf("tool-call-%d", index+1)
 }
 
 func envTrimmed(key string) string {
