@@ -41,20 +41,37 @@ This file tracks current work items and progress.
 ---
 
 ### Family: remote-protocol (branch family: feat/poc-remote-*)
-- [ ] PR 4: Remote protocol types + ws client/server stub
-  - Description: Define remote event envelope, add a local WS server stub + remote client, a minimal remote TUI to connect to agents, and support connect/send/poll flows for commands/output.
+- [ ] PR 4: Remote protocol types + command/poll queue
+  - Description: Define remote event envelope, add command + output queues with cursor-based polling, and document handshake.
   - Depends on: none
   - Definition of Done:
     - [ ] Tests: `internal/remote/codec_test.go` validates JSON encode/decode compatibility and error cases.
-    - [ ] Tests: `internal/remote/ws_test.go` spins up in-process WS server and verifies connect, send command, and poll output.
     - [ ] Tests: `internal/remote/queue_test.go` verifies command queue ordering and poll cursor behavior.
     - [ ] Docs: update `docs/coding-agent/06-remote-protocol.md` with event schema + handshake + command/poll semantics.
-    - [ ] Logging: connection errors log with remote URL and retry backoff; invalid frames log warn and drop; command timeouts log warn.
+    - [ ] Logging: invalid frames log warn and drop; command timeouts log warn.
     - [ ] Backward-compat: N/A (new module); if config missing, remote stays disabled.
 
-- [ ] PR 5: Remote input merge policy (local vs remote)
-  - Description: Implement queue merge semantics and add conflict policy described in the spec (local wins ties).
+- [ ] PR 5: WS transport (client + local server stub)
+  - Description: Add WS transport for remote protocol, including local server stub and client reconnect/backoff.
   - Depends on: PR 4 (remote-protocol)
+  - Definition of Done:
+    - [ ] Tests: `internal/remote/ws_test.go` spins up in-process WS server and verifies connect, send command, and poll output.
+    - [ ] Docs: update `docs/coding-agent/06-remote-protocol.md` with transport details + retry/backoff rules.
+    - [ ] Logging: connection errors log with remote URL and retry backoff; disconnect reasons log info.
+    - [ ] Backward-compat: remote disabled by default; no impact to local-only flows.
+
+- [ ] PR 6: Remote TUI for connect/send/poll
+  - Description: Add a minimal Bubble Tea remote TUI to connect to agents, send commands, and poll output.
+  - Depends on: PR 5 (remote-protocol)
+  - Definition of Done:
+    - [ ] Tests: `internal/remoteui/model_test.go` validates state transitions (disconnected → connected → polling).
+    - [ ] Docs: update `docs/coding-agent/06-remote-protocol.md` with remote TUI usage notes.
+    - [ ] Logging: command failures log warn and surface in UI status line.
+    - [ ] Backward-compat: N/A (new module).
+
+- [ ] PR 7: Remote input merge policy (local vs remote)
+  - Description: Implement queue merge semantics and add conflict policy described in the spec (local wins ties).
+  - Depends on: PR 5 (remote-protocol)
   - Definition of Done:
     - [ ] Tests: `internal/supervisor/queue_merge_test.go` covers ordering for local vs remote inputs.
     - [ ] Docs: update `docs/coding-agent/08-tui-spec.md` merge policy section.
@@ -68,19 +85,19 @@ This file tracks current work items and progress.
 ---
 
 ### Family: history-tree (branch family: feat/poc-history-*)
-- [ ] PR 6: History tree data model + JSONL persistence
-  - Description: Implement a DAG-based history tree with branch pointers and JSONL storage for replay.
+- [ ] PR 8: History tree data model + JSONL persistence
+  - Description: Implement a branch-only history tree (no merges) with branch pointers and JSONL storage for replay.
   - Depends on: none
   - Definition of Done:
-    - [ ] Tests: `internal/historytree/tree_test.go` covers branch creation, merge, and traversal order.
+    - [ ] Tests: `internal/historytree/tree_test.go` covers branch creation and traversal order.
     - [ ] Tests: `internal/storage/jsonl_tree_test.go` verifies append + replay for tree events.
     - [ ] Docs: update `docs/coding-agent/03-jsonl-storage-schema.md` with tree event entries.
     - [ ] Logging: on replay corruption, log error and skip invalid entries with count.
     - [ ] Backward-compat: if old linear session log exists, treat as single-branch root; no crash.
 
-- [ ] PR 7: Agent loop integration (branching + resume)
-  - Description: Wire the agent loop to create branches on new user input while preserving history tree.
-  - Depends on: PR 6 (history-tree)
+- [ ] PR 9: Agent loop integration (branching + resume)
+  - Description: Wire the agent loop to create a new branch only when input is not on the current head; otherwise advance head.
+  - Depends on: PR 8 (history-tree)
   - Definition of Done:
     - [ ] Tests: `internal/agent/loop_tree_test.go` ensures new input creates branch and resume uses selected branch.
     - [ ] Docs: update `docs/coding-agent/04-agent-loop.md` with tree semantics and resume behavior.
