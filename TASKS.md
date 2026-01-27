@@ -104,6 +104,16 @@ This file tracks current work items and progress.
     - [ ] Logging: on missing branch ID, log warn and fall back to latest branch.
     - [ ] Backward-compat: if branch ID absent, default to linear continuation.
 
+- [ ] PR 10: History query limits (tail N)
+  - Description: Add a query API to load only the last N messages on the active branch, with an option to load full history.
+  - Depends on: PR 8 (history-tree)
+  - Definition of Done:
+    - [ ] Tests: `internal/historytree/query_test.go` covers tail-N selection and full-history selection.
+    - [ ] Tests: `internal/storage/jsonl_tail_test.go` validates tail-N replay on JSONL sessions.
+    - [ ] Docs: update `docs/coding-agent/04-agent-loop.md` with history load limits for controller vs human modes.
+    - [ ] Logging: if limit is set and truncation occurs, log debug once per session.
+    - [ ] Backward-compat: default (limit unset or 0) loads full history.
+
 **Integration Gate (history-tree)**
 - [ ] Manual: create two branches from same session; confirm tree view selects and replays correct branch.
 
