@@ -122,6 +122,50 @@ func TestStreamToolUseAssembly(t *testing.T) {
 	}
 }
 
+func TestStreamToolUseDeltaOverridesStartInput(t *testing.T) {
+	state := newStreamState()
+
+	start := sdk.ContentBlockStartEvent{
+		Type:  constant.ContentBlockStart("content_block_start"),
+		Index: 2,
+		ContentBlock: sdk.ContentBlockStartEventContentBlockUnion{
+			Type:  "tool_use",
+			ID:    "tool-1",
+			Name:  "add",
+			Input: map[string]any{},
+		},
+	}
+	state.handle(mustUnion(t, start))
+
+	delta := sdk.ContentBlockDeltaEvent{
+		Type:  constant.ContentBlockDelta("content_block_delta"),
+		Index: 2,
+		Delta: sdk.RawContentBlockDeltaUnion{
+			Type:        "input_json_delta",
+			PartialJSON: `{"a":1,"b":2}`,
+		},
+	}
+	state.handle(mustUnion(t, delta))
+
+	stop := sdk.ContentBlockStopEvent{
+		Type:  constant.ContentBlockStop("content_block_stop"),
+		Index: 2,
+	}
+	out := state.handle(mustUnion(t, stop))
+
+	callEvent, ok := out[0].(ToolCallEvent)
+	if !ok {
+		t.Fatalf("expected ToolCallEvent, got %T", out[0])
+	}
+	var args map[string]int
+	if err := json.Unmarshal(callEvent.Call.Input, &args); err != nil {
+		t.Fatalf("failed to parse tool input: %v", err)
+	}
+	if args["a"] != 1 || args["b"] != 2 {
+		t.Fatalf("unexpected tool input: %#v", args)
+	}
+}
+
 func TestStreamStopReasonMapping(t *testing.T) {
 	state := newStreamState()
 

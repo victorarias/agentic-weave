@@ -3,6 +3,8 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"log"
+	"os"
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -57,8 +59,13 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 		defer func() { _ = stream.Close() }()
 
 		state := newStreamState()
+		debug := os.Getenv("ANTHROPIC_STREAM_DEBUG") != ""
 		for stream.Next() {
-			for _, ev := range state.handle(stream.Current()) {
+			event := stream.Current()
+			if debug {
+				log.Printf("anthropic stream event: type=%s raw=%s", event.Type, event.RawJSON())
+			}
+			for _, ev := range state.handle(event) {
 				events <- ev
 			}
 		}
@@ -85,6 +92,7 @@ type toolState struct {
 	id          string
 	name        string
 	partialJSON strings.Builder
+	sawDelta    bool
 }
 
 func newStreamState() *streamState {
@@ -145,6 +153,10 @@ func (s *streamState) handleContentBlockDelta(evt sdk.ContentBlockDeltaEvent) []
 		return []StreamEvent{TextDeltaEvent{Delta: evt.Delta.Text}}
 	case "input_json_delta":
 		if state := s.tools[evt.Index]; state != nil {
+			if !state.sawDelta {
+				state.partialJSON.Reset()
+				state.sawDelta = true
+			}
 			state.partialJSON.WriteString(evt.Delta.PartialJSON)
 		}
 	}

@@ -84,78 +84,31 @@ func TestAnthropicStreamingE2E(t *testing.T) {
 	}}
 
 	var (
-		history   []message.AgentMessage
-		args      struct{ A, B float64 }
-		maxTurns  = 3
 		userQuery = "What is 42 + 17?"
-		system    = "Use the add tool for math."
-		toolSeen  bool
-		doneSeen  bool
-		usageSeen bool
-		stopSeen  bool
+		system    = "Use the add tool for math. Do not answer before the tool result. After receiving the tool result, respond with only the final number."
+		followup  = "Answer with only the final number."
 	)
 
-	for turn := 0; turn < maxTurns; turn++ {
-		input := anthropic.Input{
-			SystemPrompt: system,
-			Tools:        tools,
-			MaxTokens:    256,
-		}
-		if turn == 0 {
-			input.UserMessage = userQuery
-		} else {
-			input.History = history
-		}
-
-		stream, err := client.Stream(ctx, input)
-		if err != nil {
-			t.Fatalf("tool stream %d failed: %v", turn+1, err)
-		}
-
-		reply, counts := collectStream(t, stream)
-		doneSeen = doneSeen || counts.DoneSeen
-		usageSeen = usageSeen || counts.UsageSeen
-		if counts.StopReason != "" {
-			stopSeen = true
-		}
-		if counts.ToolCalls > 0 {
-			toolSeen = true
-		}
-		if len(reply) > 0 && counts.ToolCalls == 0 {
+	var result toolRunResult
+	for attempt := 0; attempt < 2; attempt++ {
+		result = runToolStreaming(ctx, t, client, tools, system, followup, userQuery)
+		if result.AnswerSeen {
 			break
 		}
-		if counts.ToolCalls == 0 {
-			break
-		}
-
-		if turn == 0 && len(history) == 0 {
-			history = append(history, message.AgentMessage{Role: message.RoleUser, Content: userQuery})
-		}
-
-		results := make([]agentic.ToolResult, 0, counts.ToolCalls)
-		for _, call := range counts.ToolCallList {
-			if call.Name != "add" {
-				t.Fatalf("expected 'add' tool call, got: %s", call.Name)
-			}
-			_ = json.Unmarshal(call.Input, &args)
-			result, _ := json.Marshal(map[string]float64{"sum": args.A + args.B})
-			results = append(results, agentic.ToolResult{ID: call.ID, Name: call.Name, Output: result})
-		}
-
-		history = append(history,
-			message.AgentMessage{Role: message.RoleAssistant, ToolCalls: counts.ToolCallList},
-			message.AgentMessage{Role: message.RoleTool, ToolResults: results},
-		)
+		t.Logf("retrying tool streaming flow (attempt %d)", attempt+2)
 	}
 
-	if !toolSeen {
+	if !result.ToolSeen {
 		t.Fatalf("expected at least one tool call during streaming tool flow")
 	}
-	if !doneSeen || !usageSeen {
+	if !result.DoneSeen || !result.UsageSeen {
 		t.Fatalf("expected done event with usage during tool flow")
 	}
-	if !stopSeen {
+	if !result.StopSeen {
 		t.Fatalf("expected stop reason during tool flow")
+	}
+	if !result.AnswerSeen {
+		t.Fatalf("expected '59' in reply, got: %s", result.Reply)
 	}
 }
 
@@ -200,4 +153,94 @@ func collectStream(t *testing.T, stream <-chan anthropic.StreamEvent) (string, s
 	}
 
 	return strings.TrimSpace(reply.String()), counts
+}
+
+type toolRunResult struct {
+	Reply      string
+	ToolSeen   bool
+	DoneSeen   bool
+	UsageSeen  bool
+	StopSeen   bool
+	AnswerSeen bool
+}
+
+func runToolStreaming(ctx context.Context, t *testing.T, client *anthropic.Client, tools []agentic.ToolDefinition, system, followup, userQuery string) toolRunResult {
+	t.Helper()
+
+	var (
+		history  []message.AgentMessage
+		args     struct{ A, B float64 }
+		maxTurns = 3
+		out      strings.Builder
+		result   toolRunResult
+		debug    = os.Getenv("ANTHROPIC_E2E_DEBUG") != ""
+	)
+
+	for turn := 0; turn < maxTurns; turn++ {
+		input := anthropic.Input{
+			SystemPrompt: system,
+			Tools:        tools,
+			MaxTokens:    256,
+		}
+		if turn == 0 {
+			input.UserMessage = userQuery
+		} else {
+			input.History = history
+			input.UserMessage = followup
+		}
+
+		stream, err := client.Stream(ctx, input)
+		if err != nil {
+			t.Fatalf("tool stream %d failed: %v", turn+1, err)
+		}
+
+		reply, counts := collectStream(t, stream)
+		if debug {
+			t.Logf("turn %d reply=%q tool_calls=%d stop_reason=%q usage=%v", turn+1, reply, counts.ToolCalls, counts.StopReason, counts.UsageSeen)
+			for i, call := range counts.ToolCallList {
+				t.Logf("turn %d tool_call[%d]=%s input=%s", turn+1, i, call.Name, string(call.Input))
+			}
+		}
+		out.WriteString(reply)
+		result.Reply = strings.TrimSpace(out.String())
+		result.DoneSeen = result.DoneSeen || counts.DoneSeen
+		result.UsageSeen = result.UsageSeen || counts.UsageSeen
+		if counts.StopReason != "" {
+			result.StopSeen = true
+		}
+		if counts.ToolCalls > 0 {
+			result.ToolSeen = true
+		}
+		if strings.Contains(reply, "59") {
+			result.AnswerSeen = true
+			break
+		}
+		if len(reply) > 0 && counts.ToolCalls == 0 {
+			break
+		}
+		if counts.ToolCalls == 0 {
+			break
+		}
+
+		if turn == 0 && len(history) == 0 {
+			history = append(history, message.AgentMessage{Role: message.RoleUser, Content: userQuery})
+		}
+
+		results := make([]agentic.ToolResult, 0, counts.ToolCalls)
+		for _, call := range counts.ToolCallList {
+			if call.Name != "add" {
+				t.Fatalf("expected 'add' tool call, got: %s", call.Name)
+			}
+			_ = json.Unmarshal(call.Input, &args)
+			resultPayload, _ := json.Marshal(map[string]float64{"sum": args.A + args.B})
+			results = append(results, agentic.ToolResult{ID: call.ID, Name: call.Name, Output: resultPayload})
+		}
+
+		history = append(history,
+			message.AgentMessage{Role: message.RoleAssistant, ToolCalls: counts.ToolCallList},
+			message.AgentMessage{Role: message.RoleTool, ToolResults: results},
+		)
+	}
+
+	return result
 }
