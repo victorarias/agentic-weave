@@ -85,7 +85,7 @@ func TestAnthropicStreamingE2E(t *testing.T) {
 
 	var (
 		userQuery = "What is 42 + 17?"
-		system    = "Use the add tool for math. Do not answer before the tool result. After receiving the tool result, respond with only the final number."
+		system    = "Use the add tool for math. Do not answer before the tool result. After receiving the tool result, respond with only the final number. If the tool result is an error, explain the error and do not call tools again."
 		followup  = "Answer with only the final number."
 	)
 
@@ -230,6 +230,37 @@ func runToolStreaming(ctx context.Context, t *testing.T, client *anthropic.Clien
 		for _, call := range counts.ToolCallList {
 			if call.Name != "add" {
 				t.Fatalf("expected 'add' tool call, got: %s", call.Name)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(call.Input, &payload); err != nil {
+				results = append(results, agentic.ToolResult{
+					ID:   call.ID,
+					Name: call.Name,
+					Error: &agentic.ToolError{
+						Message: "invalid tool input: " + err.Error(),
+					},
+				})
+				continue
+			}
+			if _, ok := payload["a"]; !ok {
+				results = append(results, agentic.ToolResult{
+					ID:   call.ID,
+					Name: call.Name,
+					Error: &agentic.ToolError{
+						Message: "invalid tool input: missing field a",
+					},
+				})
+				continue
+			}
+			if _, ok := payload["b"]; !ok {
+				results = append(results, agentic.ToolResult{
+					ID:   call.ID,
+					Name: call.Name,
+					Error: &agentic.ToolError{
+						Message: "invalid tool input: missing field b",
+					},
+				})
+				continue
 			}
 			_ = json.Unmarshal(call.Input, &args)
 			resultPayload, _ := json.Marshal(map[string]float64{"sum": args.A + args.B})
