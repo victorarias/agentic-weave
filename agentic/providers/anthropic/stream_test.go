@@ -194,6 +194,18 @@ func TestStreamStopReasonMapping(t *testing.T) {
 	}
 }
 
+func TestParseToolInputInvalidJSON(t *testing.T) {
+	raw := `{"a":1,`
+	parsed := parseToolInput(raw)
+	if json.Valid(parsed) {
+		t.Fatalf("expected invalid JSON to stay invalid, got %s", string(parsed))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(parsed, &payload); err == nil {
+		t.Fatalf("expected unmarshal to fail for invalid JSON")
+	}
+}
+
 func mustUnion(t *testing.T, event any) sdk.MessageStreamEventUnion {
 	t.Helper()
 	data, err := json.Marshal(event)

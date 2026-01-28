@@ -196,8 +196,21 @@ func (s *streamState) done() DoneEvent {
 
 func parseToolInput(raw string) json.RawMessage {
 	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" || !json.Valid([]byte(trimmed)) {
-		return json.RawMessage(`{}`)
+	if trimmed == "" {
+		log.Printf("anthropic stream: empty tool input")
+		return json.RawMessage(`""`)
+	}
+	if !json.Valid([]byte(trimmed)) {
+		log.Printf("anthropic stream: invalid tool input json: %s", summarizeJSON(trimmed))
+		return json.RawMessage(trimmed)
 	}
 	return json.RawMessage(trimmed)
+}
+
+func summarizeJSON(raw string) string {
+	const limit = 256
+	if len(raw) <= limit {
+		return raw
+	}
+	return raw[:limit] + "...(truncated)"
 }
