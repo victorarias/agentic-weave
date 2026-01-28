@@ -9,4 +9,4 @@ Start here:
 - `05-advanced-tool-use.md`
 - `06-context-budgets.md`
 - `07-vertex-provider.md`
-- `08-anthropic-provider.md`
+- `08-anthropic-provider.md` (streaming + decide)
