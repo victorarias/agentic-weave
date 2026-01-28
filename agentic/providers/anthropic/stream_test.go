@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -163,6 +164,56 @@ func TestStreamToolUseDeltaOverridesStartInput(t *testing.T) {
 	}
 	if args["a"] != 1 || args["b"] != 2 {
 		t.Fatalf("unexpected tool input: %#v", args)
+	}
+}
+
+func TestStreamToolUseDeltaDoesNotConcatStartInput(t *testing.T) {
+	state := newStreamState()
+
+	start := sdk.ContentBlockStartEvent{
+		Type:  constant.ContentBlockStart("content_block_start"),
+		Index: 3,
+		ContentBlock: sdk.ContentBlockStartEventContentBlockUnion{
+			Type:  "tool_use",
+			ID:    "tool-2",
+			Name:  "add",
+			Input: map[string]any{},
+		},
+	}
+	state.handle(mustUnion(t, start))
+
+	delta := sdk.ContentBlockDeltaEvent{
+		Type:  constant.ContentBlockDelta("content_block_delta"),
+		Index: 3,
+		Delta: sdk.RawContentBlockDeltaUnion{
+			Type:        "input_json_delta",
+			PartialJSON: `{"a":42,"b":17}`,
+		},
+	}
+	state.handle(mustUnion(t, delta))
+
+	stop := sdk.ContentBlockStopEvent{
+		Type:  constant.ContentBlockStop("content_block_stop"),
+		Index: 3,
+	}
+	out := state.handle(mustUnion(t, stop))
+
+	callEvent, ok := out[0].(ToolCallEvent)
+	if !ok {
+		t.Fatalf("expected ToolCallEvent, got %T", out[0])
+	}
+
+	raw := string(callEvent.Call.Input)
+	compact := strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\n', '\r', '\t':
+			return -1
+		default:
+			return r
+		}
+	}, raw)
+	if strings.Contains(compact, "}{") {
+		t.Fatalf("expected tool input not to concatenate start input with delta: %q", raw)
 	}
 }
 

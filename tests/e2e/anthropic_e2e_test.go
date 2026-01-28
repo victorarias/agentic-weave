@@ -84,8 +84,8 @@ func TestAnthropicStreamingE2E(t *testing.T) {
 	}}
 
 	var (
-		userQuery = "What is 42 + 17?"
-		system    = "Use the add tool for math. Do not answer before the tool result. After receiving the tool result, respond with only the final number. If the tool result is an error, explain the error and do not call tools again."
+		userQuery = "What is 42+17? Answer with only the final number. You must use the add tool."
+		system    = "Do not answer before the tool result. If the tool result is an error, explain the error and do not call tools again."
 		followup  = "Answer with only the final number."
 	)
 
@@ -98,6 +98,22 @@ func TestAnthropicStreamingE2E(t *testing.T) {
 		t.Logf("retrying tool streaming flow (attempt %d)", attempt+2)
 	}
 
+	summary, err := json.MarshalIndent(map[string]any{
+		"reply":                 result.Reply,
+		"answer_seen":           result.AnswerSeen,
+		"tool_seen":             result.ToolSeen,
+		"done_seen":             result.DoneSeen,
+		"usage_seen":            result.UsageSeen,
+		"stop_seen":             result.StopSeen,
+		"tool_errors":           result.ToolErrors,
+		"post_error_tool_calls": result.PostErrorToolCalls,
+		"post_error_reply":      result.PostErrorReply,
+	}, "", "  ")
+	if err != nil {
+		t.Fatalf("failed to marshal summary: %v", err)
+	}
+	t.Logf("final_output:\n%s", string(summary))
+
 	if !result.ToolSeen {
 		t.Fatalf("expected at least one tool call during streaming tool flow")
 	}
@@ -108,6 +124,17 @@ func TestAnthropicStreamingE2E(t *testing.T) {
 		t.Fatalf("expected stop reason during tool flow")
 	}
 	if !result.AnswerSeen {
+		if len(result.ToolErrors) > 0 && result.PostErrorToolCalls > 0 {
+			t.Fatalf("expected '59' in reply, got: %s (tool errors: %s; model called tools after error: %d; post-error reply: %q)",
+				result.Reply,
+				strings.Join(result.ToolErrors, " | "),
+				result.PostErrorToolCalls,
+				result.PostErrorReply,
+			)
+		}
+		if len(result.ToolErrors) > 0 {
+			t.Fatalf("expected '59' in reply, got: %s (tool errors: %s)", result.Reply, strings.Join(result.ToolErrors, " | "))
+		}
 		t.Fatalf("expected '59' in reply, got: %s", result.Reply)
 	}
 }
@@ -156,24 +183,28 @@ func collectStream(t *testing.T, stream <-chan anthropic.StreamEvent) (string, s
 }
 
 type toolRunResult struct {
-	Reply      string
-	ToolSeen   bool
-	DoneSeen   bool
-	UsageSeen  bool
-	StopSeen   bool
-	AnswerSeen bool
+	Reply              string
+	ToolSeen           bool
+	DoneSeen           bool
+	UsageSeen          bool
+	StopSeen           bool
+	AnswerSeen         bool
+	ToolErrors         []string
+	PostErrorToolCalls int
+	PostErrorReply     string
 }
 
 func runToolStreaming(ctx context.Context, t *testing.T, client *anthropic.Client, tools []agentic.ToolDefinition, system, followup, userQuery string) toolRunResult {
 	t.Helper()
 
 	var (
-		history  []message.AgentMessage
-		args     struct{ A, B float64 }
-		maxTurns = 3
-		out      strings.Builder
-		result   toolRunResult
-		debug    = os.Getenv("ANTHROPIC_E2E_DEBUG") != ""
+		history   []message.AgentMessage
+		args      struct{ A, B float64 }
+		maxTurns  = 10
+		out       strings.Builder
+		result    toolRunResult
+		debug     = os.Getenv("ANTHROPIC_E2E_DEBUG") != ""
+		errorSent bool
 	)
 
 	for turn := 0; turn < maxTurns; turn++ {
@@ -195,6 +226,10 @@ func runToolStreaming(ctx context.Context, t *testing.T, client *anthropic.Clien
 		}
 
 		reply, counts := collectStream(t, stream)
+		if errorSent && counts.ToolCalls > 0 {
+			result.PostErrorToolCalls += counts.ToolCalls
+			result.PostErrorReply = reply
+		}
 		if debug {
 			t.Logf("turn %d reply=%q tool_calls=%d stop_reason=%q usage=%v", turn+1, reply, counts.ToolCalls, counts.StopReason, counts.UsageSeen)
 			for i, call := range counts.ToolCallList {
@@ -227,37 +262,50 @@ func runToolStreaming(ctx context.Context, t *testing.T, client *anthropic.Clien
 		}
 
 		results := make([]agentic.ToolResult, 0, counts.ToolCalls)
+		sentErrorThisTurn := false
 		for _, call := range counts.ToolCallList {
 			if call.Name != "add" {
 				t.Fatalf("expected 'add' tool call, got: %s", call.Name)
 			}
 			var payload map[string]any
 			if err := json.Unmarshal(call.Input, &payload); err != nil {
+				errMsg := "invalid tool input: " + err.Error()
+				result.ToolErrors = append(result.ToolErrors, errMsg)
+				sentErrorThisTurn = true
+				t.Logf("tool error returned: %s (raw=%s)", errMsg, string(call.Input))
 				results = append(results, agentic.ToolResult{
 					ID:   call.ID,
 					Name: call.Name,
 					Error: &agentic.ToolError{
-						Message: "invalid tool input: " + err.Error(),
+						Message: errMsg,
 					},
 				})
 				continue
 			}
 			if _, ok := payload["a"]; !ok {
+				errMsg := "invalid tool input: missing field a"
+				result.ToolErrors = append(result.ToolErrors, errMsg)
+				sentErrorThisTurn = true
+				t.Logf("tool error returned: %s (raw=%s)", errMsg, string(call.Input))
 				results = append(results, agentic.ToolResult{
 					ID:   call.ID,
 					Name: call.Name,
 					Error: &agentic.ToolError{
-						Message: "invalid tool input: missing field a",
+						Message: errMsg,
 					},
 				})
 				continue
 			}
 			if _, ok := payload["b"]; !ok {
+				errMsg := "invalid tool input: missing field b"
+				result.ToolErrors = append(result.ToolErrors, errMsg)
+				sentErrorThisTurn = true
+				t.Logf("tool error returned: %s (raw=%s)", errMsg, string(call.Input))
 				results = append(results, agentic.ToolResult{
 					ID:   call.ID,
 					Name: call.Name,
 					Error: &agentic.ToolError{
-						Message: "invalid tool input: missing field b",
+						Message: errMsg,
 					},
 				})
 				continue
@@ -271,6 +319,9 @@ func runToolStreaming(ctx context.Context, t *testing.T, client *anthropic.Clien
 			message.AgentMessage{Role: message.RoleAssistant, ToolCalls: counts.ToolCallList},
 			message.AgentMessage{Role: message.RoleTool, ToolResults: results},
 		)
+		if sentErrorThisTurn {
+			errorSent = true
+		}
 	}
 
 	return result

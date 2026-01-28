@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -249,7 +250,17 @@ func buildRequest(c *Client, input Input) anthropic.MessageNewParams {
 		req.Temperature = anthropic.Float(*temperature)
 	}
 
+	debugAnthropicRequest(req)
 	return req
+}
+
+func debugAnthropicRequest(req anthropic.MessageNewParams) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		log.Printf("anthropic request debug: failed to marshal request: %v", err)
+		return
+	}
+	log.Printf("anthropic request debug: %s", string(data))
 }
 
 func toolDefsToAnthropic(tools []agentic.ToolDefinition) []anthropic.ToolUnionParam {
