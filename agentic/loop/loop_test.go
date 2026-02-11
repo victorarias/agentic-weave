@@ -275,6 +275,48 @@ func TestMessageEndEventWithToolCalls(t *testing.T) {
 	}
 }
 
+func TestExhausted_FalseOnNaturalStop(t *testing.T) {
+	runner := New(Config{
+		Decider:  &replyDecider{reply: "done"},
+		MaxTurns: 10,
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Exhausted {
+		t.Fatal("expected Exhausted=false when LLM stops naturally")
+	}
+}
+
+func TestExhausted_TrueWhenMaxTurnsReached(t *testing.T) {
+	runner := New(Config{
+		Decider:  &alwaysCallToolDecider{},
+		Executor: stubExecutor{},
+		MaxTurns: 3,
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Exhausted {
+		t.Fatal("expected Exhausted=true when loop hits MaxTurns")
+	}
+}
+
+type alwaysCallToolDecider struct{}
+
+func (d *alwaysCallToolDecider) Decide(ctx context.Context, in Input) (Decision, error) {
+	return Decision{
+		ToolCalls: []agentic.ToolCall{{
+			Name:  "echo",
+			Input: json.RawMessage(`{"text":"again"}`),
+		}},
+	}, nil
+}
+
 type replyDecider struct {
 	reply string
 }

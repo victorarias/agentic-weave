@@ -69,6 +69,7 @@ type Result struct {
 	ToolResults []agentic.ToolResult
 	Usage       *usage.Usage
 	StopReason  usage.StopReason
+	Exhausted   bool // true when the loop exited because it hit MaxTurns
 }
 
 // Runner executes a tool-aware loop with optional compaction and truncation.
@@ -190,6 +191,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				ToolResults: toolResults,
 				Usage:       decision.Usage,
 				StopReason:  decision.StopReason,
+				Exhausted:   turn >= r.cfg.MaxTurns,
 			}, nil
 		}
 
