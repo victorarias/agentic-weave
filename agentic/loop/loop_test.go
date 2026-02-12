@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -306,6 +307,50 @@ func TestExhausted_TrueWhenMaxTurnsReached(t *testing.T) {
 	}
 }
 
+func TestRunReturnsErrorWhenHistoryAppendFails(t *testing.T) {
+	store := &failingAppendStore{err: errors.New("append failed")}
+	runner := New(Config{
+		Decider:      &replyDecider{reply: "done"},
+		HistoryStore: store,
+	})
+
+	_, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err == nil || !strings.Contains(err.Error(), "append failed") {
+		t.Fatalf("expected append error, got %v", err)
+	}
+}
+
+func TestRunReturnsErrorWhenHistoryReplaceFails(t *testing.T) {
+	store := &failingReplaceStore{
+		err: errors.New("replace failed"),
+		messages: []message.AgentMessage{
+			{Role: message.RoleUser, Content: "hello there"},
+			{Role: message.RoleAssistant, Content: "general kenobi"},
+		},
+	}
+	compactor := &recordingCompactor{summary: "summary"}
+	budgetMgr := &budget.Manager{
+		Counter:   budget.CharCounter{},
+		Compactor: compactor,
+		Policy: budget.Policy{
+			ContextWindow: 4,
+			ReserveTokens: 0,
+			KeepLast:      1,
+		},
+	}
+
+	runner := New(Config{
+		Decider:      &replyDecider{reply: "ok"},
+		HistoryStore: store,
+		Budget:       budgetMgr,
+	})
+
+	_, err := runner.Run(context.Background(), Request{UserMessage: "ping"})
+	if err == nil || !strings.Contains(err.Error(), "replace failed") {
+		t.Fatalf("expected replace error, got %v", err)
+	}
+}
+
 type alwaysCallToolDecider struct{}
 
 func (d *alwaysCallToolDecider) Decide(ctx context.Context, in Input) (Decision, error) {
@@ -369,4 +414,39 @@ func (d *historyAssertingDecider) Decide(ctx context.Context, in Input) (Decisio
 		}, nil
 	}
 	return Decision{Reply: "done"}, nil
+}
+
+type failingAppendStore struct {
+	err      error
+	messages []message.AgentMessage
+}
+
+func (s *failingAppendStore) Append(_ context.Context, _ message.AgentMessage) error {
+	return s.err
+}
+
+func (s *failingAppendStore) Load(_ context.Context) ([]message.AgentMessage, error) {
+	out := make([]message.AgentMessage, len(s.messages))
+	copy(out, s.messages)
+	return out, nil
+}
+
+type failingReplaceStore struct {
+	err      error
+	messages []message.AgentMessage
+}
+
+func (s *failingReplaceStore) Append(_ context.Context, msg message.AgentMessage) error {
+	s.messages = append(s.messages, msg)
+	return nil
+}
+
+func (s *failingReplaceStore) Load(_ context.Context) ([]message.AgentMessage, error) {
+	out := make([]message.AgentMessage, len(s.messages))
+	copy(out, s.messages)
+	return out, nil
+}
+
+func (s *failingReplaceStore) Replace(_ context.Context, _ []message.AgentMessage) error {
+	return s.err
 }

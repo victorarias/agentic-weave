@@ -99,7 +99,7 @@ func (r *Runner) emit(e events.Event) {
 }
 
 // recordAssistantMessage stores an assistant message in history and emits MessageEnd.
-func (r *Runner) recordAssistantMessage(ctx context.Context, turn int, reply string, toolCalls []agentic.ToolCall, history *[]message.AgentMessage, isFinal bool) {
+func (r *Runner) recordAssistantMessage(ctx context.Context, turn int, reply string, toolCalls []agentic.ToolCall, history *[]message.AgentMessage, isFinal bool) error {
 	msg := message.AgentMessage{
 		Role:      message.RoleAssistant,
 		Content:   reply,
@@ -107,7 +107,9 @@ func (r *Runner) recordAssistantMessage(ctx context.Context, turn int, reply str
 		Timestamp: time.Now(),
 	}
 	*history = append(*history, msg)
-	r.appendHistory(ctx, msg)
+	if err := r.appendHistory(ctx, msg); err != nil {
+		return err
+	}
 
 	msgID := fmt.Sprintf("msg-%d", turn)
 	if isFinal {
@@ -120,6 +122,7 @@ func (r *Runner) recordAssistantMessage(ctx context.Context, turn int, reply str
 		Content:   reply,
 		ToolCalls: toolCalls,
 	})
+	return nil
 }
 
 // Run executes the loop for a single user request.
@@ -149,7 +152,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			Timestamp: time.Now(),
 		}
 		historyMessages = append(historyMessages, userMsg)
-		r.appendHistory(ctx, userMsg)
+		if err := r.appendHistory(ctx, userMsg); err != nil {
+			return Result{}, err
+		}
 	}
 
 	summary, historyMessages, err := r.applyCompaction(ctx, historyMessages)
@@ -181,7 +186,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		if len(decision.ToolCalls) == 0 || turn >= r.cfg.MaxTurns {
-			r.recordAssistantMessage(ctx, turn, decision.Reply, nil, &historyMessages, true)
+			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, nil, &historyMessages, true); err != nil {
+				return Result{}, err
+			}
 
 			return Result{
 				Reply:       decision.Reply,
@@ -208,7 +215,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 		}
 
-		r.recordAssistantMessage(ctx, turn, decision.Reply, decision.ToolCalls, &historyMessages, false)
+		if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.ToolCalls, &historyMessages, false); err != nil {
+			return Result{}, err
+		}
 
 		for _, call := range decision.ToolCalls {
 			r.emit(events.Event{Type: events.ToolStart, ToolCall: &call})
@@ -253,7 +262,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				Timestamp:   time.Now(),
 			}
 			historyMessages = append(historyMessages, toolMsg)
-			r.appendHistory(ctx, toolMsg)
+			if err := r.appendHistory(ctx, toolMsg); err != nil {
+				return Result{}, err
+			}
 		}
 		turn++
 	}
@@ -286,11 +297,11 @@ func (r *Runner) loadHistory(ctx context.Context, req Request) ([]message.AgentM
 	return r.cfg.HistoryStore.Load(ctx)
 }
 
-func (r *Runner) appendHistory(ctx context.Context, msg message.AgentMessage) {
+func (r *Runner) appendHistory(ctx context.Context, msg message.AgentMessage) error {
 	if r.cfg.HistoryStore == nil {
-		return
+		return nil
 	}
-	_ = r.cfg.HistoryStore.Append(ctx, msg)
+	return r.cfg.HistoryStore.Append(ctx, msg)
 }
 
 func (r *Runner) applyCompaction(ctx context.Context, messages []message.AgentMessage) (string, []message.AgentMessage, error) {
@@ -313,7 +324,9 @@ func (r *Runner) applyCompaction(ctx context.Context, messages []message.AgentMe
 
 	if r.cfg.HistoryStore != nil {
 		if rewriter, ok := r.cfg.HistoryStore.(history.Rewriter); ok {
-			_ = rewriter.Replace(ctx, compacted)
+			if err := rewriter.Replace(ctx, compacted); err != nil {
+				return "", messages, err
+			}
 		}
 	}
 
