@@ -62,6 +62,42 @@ docs: update TASKS.md with Phase 3B completion
 
 ---
 
+## Active Initiatives
+
+### wv-coding-agent-cli
+Build `cmd/wv` as a nested module terminal coding agent CLI.
+
+- Branch family tag: `feat/wv-*`
+- Scope now: Phase 1 skeleton + minimal TUI + Anthropic-only session loop
+- [x] Create nested Go module in `cmd/wv`
+- [x] Add minimal custom TUI renderer and base components
+- [x] Add Anthropic-backed session wrapper over `agentic/loop`
+- [x] Add built-in coding tools (`bash`, `read`, `write`, `edit`, `grep`, `glob`, `ls`)
+- [x] Add Lua extension loader and `/reload`
+- [ ] Add non-interactive mode and persistent sessions
+
+Progress log:
+- 2026-02-12 00:12 UTC - Created `cmd/wv/` nested module structure (`config`, `session`, `tui`, `tui/components`).
+- 2026-02-12 00:12 UTC - Implemented Anthropic-only Phase 1 scaffolding: config loader, session loop bridge, differential renderer, editor, markdown/text components, and CLI entrypoint.
+- 2026-02-12 00:19 UTC - Validated changes with `go test ./...`, `go vet ./...`, and `go build ./...` in both root module and `cmd/wv`.
+- 2026-02-12 00:29 UTC - Added pi-mono-inspired virtual terminal test harness for `cmd/wv/tui` and initial renderer/input tests plus editor behavior tests.
+- 2026-02-12 00:29 UTC - Documented wv testing philosophy and basic architecture in `AGENTS.md` to guide expansion toward full coding-agent test coverage.
+- 2026-02-12 00:32 UTC - Expanded harness coverage to session and app integration (`cmd/wv/session/session_test.go`, `cmd/wv/main_test.go`) and fixed editor multi-byte input handling.
+- 2026-02-12 00:36 UTC - Implemented and wired built-in coding tools (`bash`, `read`, `write`, `edit`, `grep`, `glob`, `ls`) with unit tests in `cmd/wv/tools`.
+- 2026-02-12 00:37 UTC - Added lightweight per-tool output previews in the chat stream on tool completion to improve observability during runs.
+- 2026-02-12 00:39 UTC - Added dedicated `ToolOutput` TUI component with pending/success/error states and Ctrl+O expand/collapse behavior, wired to tool lifecycle events with harness-backed tests.
+- 2026-02-12 00:42 UTC - Added minimal Lua extension loader (`cmd/wv/extensions`) and slash command handling (`/help`, `/clear`, `/reload`) with integration tests.
+- 2026-02-12 01:00 UTC - Hardened built-in tool safety and correctness: workspace path confinement, symlink-safe grep traversal, recursive `**` glob matching, bounded default outputs/entries/matches, and bounded `bash` capture-at-write with truncation metadata.
+- 2026-02-12 01:00 UTC - Refined session and UI reliability: removed session-side synthetic streaming, preserved structural events under backpressure, made session provider-agnostic via explicit decider injection, and fixed editor UTF-8/split-escape handling plus placeholder ANSI wrapping edge case.
+- 2026-02-12 01:00 UTC - Added safer runtime defaults and config validation: strict env parsing, boolean feature flags (`WV_ENABLE_EXTENSIONS`, `WV_ENABLE_BASH`), extension loader opt-in, and expanded unit/integration coverage (`config`, `tools`, `session`, `tui`).
+- 2026-02-12 01:00 UTC - Ran dual-agent review pass (implementation + architecture personas), addressed reported high-severity issues, and revalidated with `go test`, `go vet`, and `go test -race` in `cmd/wv`.
+- 2026-02-12 01:00 UTC - Completed second dual-agent review hardening: added strict bool parsing + run timeout config, `/cancel` command with bounded run contexts, project-extension trust gating (`WV_ENABLE_PROJECT_EXTENSIONS`), extension discovery dedupe, streaming `read` implementation, symlinked-workspace path fix, and removed nested-module `replace` to keep `go install .../cmd/wv@latest` viable.
+- 2026-02-12 01:00 UTC - Polished architecture boundaries: moved tool result presentation logic out of `main.go` into `cmd/wv/tools/presentation.go`, and made TUI runtime explicitly one-shot (`ErrRunAlreadyStarted`) with regression tests.
+- 2026-02-12 01:00 UTC - Added terminal-control sanitization layer for untrusted model/tool text (`cmd/wv/sanitize`), wired through conversation/tool rendering paths, and added regression tests to prevent ANSI/OSC injection in TUI output.
+- 2026-02-12 01:00 UTC - Closed final confinement gap: path guards now validate existing symlinked path segments to prevent write escapes via missing intermediate directories (e.g. `link/new/file.txt`), with dedicated regression coverage.
+
+---
+
 ## Completed Initiatives
 
 ### phase-3c-capabilities-anthropic-provider ✅
