@@ -87,3 +87,13 @@ func TestRunNonInteractivePropagatesWriterFailure(t *testing.T) {
 		t.Fatalf("expected writer error, got %v", err)
 	}
 }
+
+func TestWaitNonInteractiveErrorsWhenUpdatesClose(t *testing.T) {
+	updates := make(chan session.Update)
+	close(updates)
+	var out bytes.Buffer
+	err := waitNonInteractive(context.Background(), updates, &out)
+	if err == nil || !strings.Contains(err.Error(), "updates channel closed") {
+		t.Fatalf("expected closed updates error, got %v", err)
+	}
+}

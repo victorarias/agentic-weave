@@ -2,6 +2,7 @@ package persist
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -236,5 +237,30 @@ func TestReleaseLock(t *testing.T) {
 	store.releaseLock("token-1")
 	if _, err := os.Stat(store.lockPath); !os.IsNotExist(err) {
 		t.Fatalf("expected lock removed on match, got err=%v", err)
+	}
+}
+
+func TestStoreRejectsUnsupportedVersion(t *testing.T) {
+	workDir := t.TempDir()
+	store, err := NewStore(workDir, "s1")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	payload := map[string]any{
+		"version":  999,
+		"messages": []map[string]any{},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := os.WriteFile(store.path, data, 0o644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	if _, err := store.Load(context.Background()); err == nil || !strings.Contains(err.Error(), "unsupported version") {
+		t.Fatalf("expected unsupported version error, got %v", err)
 	}
 }

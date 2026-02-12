@@ -307,6 +307,49 @@ func TestExhausted_TrueWhenMaxTurnsReached(t *testing.T) {
 	}
 }
 
+func TestExhausted_PreservesPendingToolCallsAtBoundary(t *testing.T) {
+	runner := New(Config{
+		Decider:  &alwaysCallToolDecider{},
+		Executor: stubExecutor{},
+		MaxTurns: 1,
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Exhausted {
+		t.Fatal("expected Exhausted=true when loop hits MaxTurns")
+	}
+	if len(result.ToolCalls) != 2 {
+		t.Fatalf("expected executed+pending tool calls, got %d", len(result.ToolCalls))
+	}
+	last := result.History[len(result.History)-1]
+	if last.Role != message.RoleAssistant || len(last.ToolCalls) == 0 {
+		t.Fatalf("expected final assistant message with pending tool calls, got %#v", last)
+	}
+}
+
+func TestRunMergesRequestHistoryWithStoreHistory(t *testing.T) {
+	store := history.NewMemoryStore()
+	_ = store.Append(context.Background(), message.AgentMessage{Role: message.RoleSystem, Content: "from-store"})
+	decider := &historyMergeDecider{t: t}
+	runner := New(Config{
+		Decider:      decider,
+		HistoryStore: store,
+	})
+
+	_, err := runner.Run(context.Background(), Request{
+		UserMessage: "hi",
+		History: []message.AgentMessage{
+			{Role: message.RoleSystem, Content: "from-request"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunReturnsErrorWhenHistoryAppendFails(t *testing.T) {
 	store := &failingAppendStore{err: errors.New("append failed")}
 	runner := New(Config{
@@ -412,6 +455,27 @@ func (d *historyAssertingDecider) Decide(ctx context.Context, in Input) (Decisio
 		return Decision{
 			ToolCalls: []agentic.ToolCall{{Name: "echo"}},
 		}, nil
+	}
+	return Decision{Reply: "done"}, nil
+}
+
+type historyMergeDecider struct {
+	t *testing.T
+}
+
+func (d *historyMergeDecider) Decide(_ context.Context, in Input) (Decision, error) {
+	hasStore := false
+	hasRequest := false
+	for _, msg := range in.History {
+		if msg.Content == "from-store" {
+			hasStore = true
+		}
+		if msg.Content == "from-request" {
+			hasRequest = true
+		}
+	}
+	if !hasStore || !hasRequest {
+		d.t.Fatalf("expected merged history from store+request, got %#v", in.History)
 	}
 	return Decision{Reply: "done"}, nil
 }

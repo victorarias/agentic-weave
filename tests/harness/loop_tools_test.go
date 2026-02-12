@@ -272,8 +272,8 @@ func TestLoopMaxTurnsStops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.ToolCalls) != 1 || len(result.ToolResults) != 1 {
-		t.Fatalf("expected 1 tool call/result")
+	if len(result.ToolCalls) != 2 || len(result.ToolResults) != 1 {
+		t.Fatalf("expected 2 tool calls (executed+pending) and 1 result, got calls=%d results=%d", len(result.ToolCalls), len(result.ToolResults))
 	}
 	// Loop passes through decider's reply without adding defaults
 }

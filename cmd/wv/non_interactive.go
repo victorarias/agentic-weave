@@ -29,11 +29,17 @@ func runNonInteractive(ctx context.Context, sess *session.Session, prompt string
 	if err := sess.Send(runCtx, message); err != nil {
 		return err
 	}
+	return waitNonInteractive(runCtx, sess.Updates(), out)
+}
 
+func waitNonInteractive(ctx context.Context, updates <-chan session.Update, out io.Writer) error {
 	for {
 		// Prefer draining terminal updates before treating context timeout as final.
 		select {
-		case update := <-sess.Updates():
+		case update, ok := <-updates:
+			if !ok {
+				return errors.New("non-interactive: updates channel closed")
+			}
 			done, err := handleNonInteractiveUpdate(update, out)
 			if done {
 				return err
@@ -43,22 +49,28 @@ func runNonInteractive(ctx context.Context, sess *session.Session, prompt string
 		}
 
 		select {
-		case update := <-sess.Updates():
+		case update, ok := <-updates:
+			if !ok {
+				return errors.New("non-interactive: updates channel closed")
+			}
 			done, err := handleNonInteractiveUpdate(update, out)
 			if done {
 				return err
 			}
-		case <-runCtx.Done():
+		case <-ctx.Done():
 			// Drain one last update if it is already available before returning timeout.
 			select {
-			case update := <-sess.Updates():
+			case update, ok := <-updates:
+				if !ok {
+					return errors.New("non-interactive: updates channel closed")
+				}
 				done, err := handleNonInteractiveUpdate(update, out)
 				if done {
 					return err
 				}
 			default:
 			}
-			return runCtx.Err()
+			return ctx.Err()
 		}
 	}
 }

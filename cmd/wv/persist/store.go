@@ -27,6 +27,8 @@ type filePayload struct {
 	Messages []message.AgentMessage `json:"messages"`
 }
 
+const fileVersion = 1
+
 // Store persists session history on disk.
 type Store struct {
 	path     string
@@ -122,6 +124,9 @@ func (s *Store) loadLocked() ([]message.AgentMessage, error) {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, fmt.Errorf("persist: decode %s: %w", s.path, err)
 	}
+	if payload.Version != 0 && payload.Version != fileVersion {
+		return nil, fmt.Errorf("persist: unsupported version %d in %s", payload.Version, s.path)
+	}
 	out := make([]message.AgentMessage, len(payload.Messages))
 	copy(out, payload.Messages)
 	return out, nil
@@ -132,7 +137,7 @@ func (s *Store) saveLocked(messages []message.AgentMessage) error {
 		return err
 	}
 	payload := filePayload{
-		Version:  1,
+		Version:  fileVersion,
 		Messages: make([]message.AgentMessage, len(messages)),
 	}
 	copy(payload.Messages, messages)

@@ -100,6 +100,7 @@ Progress log:
 - 2026-02-12 07:36 UTC - Hardened persistence and non-interactive reliability: cross-process store locking + unique atomic temp writes, strict CLI arg validation, busy-state `/clear` guard, bounded initial history load, and expanded regression tests for concurrency, empty replies, writer failures, and command races.
 - 2026-02-12 07:46 UTC - Tightened core loop durability semantics by propagating history `Append`/`Replace` failures as run errors (`agentic/loop/loop.go`) and added loop-level regression tests for append/replace failure paths.
 - 2026-02-12 07:51 UTC - Hardened lock ownership safety in `cmd/wv/persist`: lock release/removal now verifies token ownership before deleting lock files, with new stale-lock and lock-release regression tests; revalidated coverage gate at 70.2%.
+- 2026-02-12 08:11 UTC - Completed dual-agent final review pass and shipped follow-up fixes: non-interactive closed-update-channel handling, persistence payload version validation, loop exhaustion now preserves pending tool calls, request/store history merge semantics in loop input, and harness updates for new max-turn behavior.
 
 ---
 
