@@ -26,6 +26,7 @@ type Input struct {
 	UserMessage  string
 	History      []message.AgentMessage
 	Tools        []agentic.ToolDefinition
+	GoogleSearch bool // Enable grounding with Google Search
 }
 
 // Decision is the output from a single model call.
@@ -319,7 +320,10 @@ func (c *Client) buildRequest(input Input) ([]byte, error) {
 	}
 
 	if len(functions) > 0 {
-		request.Tools = []vertexTool{{FunctionDeclarations: functions}}
+		request.Tools = append(request.Tools, vertexTool{FunctionDeclarations: functions})
+	}
+	if input.GoogleSearch {
+		request.Tools = append(request.Tools, vertexTool{GoogleSearch: &vertexGoogleSearch{}})
 	}
 
 	return json.Marshal(request)
@@ -492,8 +496,11 @@ type vertexFunctionResponse struct {
 	Response map[string]any `json:"response"`
 }
 
+type vertexGoogleSearch struct{}
+
 type vertexTool struct {
-	FunctionDeclarations []vertexFunctionDeclaration `json:"functionDeclarations"`
+	FunctionDeclarations []vertexFunctionDeclaration `json:"functionDeclarations,omitempty"`
+	GoogleSearch         *vertexGoogleSearch         `json:"googleSearch,omitempty"`
 }
 
 type vertexFunctionDeclaration struct {

@@ -573,6 +573,120 @@ func TestBuildRequestSkipsUserMessageAfterToolResult(t *testing.T) {
 	}
 }
 
+func TestBuildRequestIncludesGoogleSearch(t *testing.T) {
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+	}
+
+	input := Input{
+		UserMessage:  "what happened today?",
+		GoogleSearch: true,
+		Tools: []agentic.ToolDefinition{
+			{Name: "my_tool", Description: "a tool"},
+		},
+	}
+
+	reqBody, err := client.buildRequest(input)
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	var req vertexRequest
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	if len(req.Tools) != 2 {
+		t.Fatalf("expected 2 tool entries (functions + googleSearch), got %d", len(req.Tools))
+	}
+
+	// First entry: function declarations
+	if len(req.Tools[0].FunctionDeclarations) != 1 {
+		t.Errorf("expected 1 function declaration, got %d", len(req.Tools[0].FunctionDeclarations))
+	}
+	if req.Tools[0].GoogleSearch != nil {
+		t.Error("first tool entry should not have googleSearch")
+	}
+
+	// Second entry: google search
+	if req.Tools[1].GoogleSearch == nil {
+		t.Error("second tool entry should have googleSearch")
+	}
+	if len(req.Tools[1].FunctionDeclarations) != 0 {
+		t.Error("second tool entry should not have function declarations")
+	}
+}
+
+func TestBuildRequestOmitsGoogleSearchWhenDisabled(t *testing.T) {
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+	}
+
+	input := Input{
+		UserMessage: "hello",
+		Tools: []agentic.ToolDefinition{
+			{Name: "my_tool", Description: "a tool"},
+		},
+	}
+
+	reqBody, err := client.buildRequest(input)
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	var req vertexRequest
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	if len(req.Tools) != 1 {
+		t.Fatalf("expected 1 tool entry, got %d", len(req.Tools))
+	}
+	if req.Tools[0].GoogleSearch != nil {
+		t.Error("should not have googleSearch when disabled")
+	}
+}
+
+func TestBuildRequestGoogleSearchOnlyNoFunctions(t *testing.T) {
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+	}
+
+	input := Input{
+		UserMessage:  "search the web",
+		GoogleSearch: true,
+	}
+
+	reqBody, err := client.buildRequest(input)
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	var req vertexRequest
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	if len(req.Tools) != 1 {
+		t.Fatalf("expected 1 tool entry (googleSearch only), got %d", len(req.Tools))
+	}
+	if req.Tools[0].GoogleSearch == nil {
+		t.Error("expected googleSearch tool")
+	}
+}
+
 func TestBuildRequestAddsUserMessageWhenProvided(t *testing.T) {
 	// When UserMessage is provided, it should always be added
 	client := &Client{
