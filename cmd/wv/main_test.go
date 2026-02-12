@@ -10,6 +10,7 @@ import (
 
 	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/loop"
+	"github.com/victorarias/agentic-weave/agentic/message"
 	"github.com/victorarias/agentic-weave/cmd/wv/session"
 	"github.com/victorarias/agentic-weave/cmd/wv/tui/components"
 )
@@ -54,6 +55,12 @@ type stubReloader struct {
 	reloadErr error
 }
 
+type stubHistoryResetter struct {
+	replaceErr error
+	last       []message.AgentMessage
+	called     bool
+}
+
 func (r *stubReloader) Reload() error {
 	return r.reloadErr
 }
@@ -62,6 +69,13 @@ func (r *stubReloader) Loaded() []string {
 	out := make([]string, len(r.loaded))
 	copy(out, r.loaded)
 	return out
+}
+
+func (s *stubHistoryResetter) Replace(_ context.Context, messages []message.AgentMessage) error {
+	s.called = true
+	s.last = make([]message.AgentMessage, len(messages))
+	copy(s.last, messages)
+	return s.replaceErr
 }
 
 func TestAppSubmitAndReceiveAssistantMessage(t *testing.T) {
@@ -242,6 +256,72 @@ func TestAppCancelCommandCancelsActiveRun(t *testing.T) {
 	waitForIdle(t, app, 2*time.Second)
 	if !containsPrefix(app.conversation, "**System:** Cancellation requested.") {
 		t.Fatalf("expected cancellation feedback, got %#v", app.conversation)
+	}
+}
+
+func TestConversationFromHistory(t *testing.T) {
+	input := []message.AgentMessage{
+		{Role: message.RoleUser, Content: "hello"},
+		{Role: message.RoleAssistant, Content: "hi"},
+		{Role: message.RoleTool, Content: "ignored"},
+		{Role: message.RoleSystem, Content: "note"},
+	}
+	lines := conversationFromHistory(input)
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 visible lines, got %#v", lines)
+	}
+	if lines[0] != "**User:** hello" || lines[1] != "**Assistant:** hi" || lines[2] != "**System:** note" {
+		t.Fatalf("unexpected converted lines %#v", lines)
+	}
+}
+
+func TestAppClearResetsPersistedHistory(t *testing.T) {
+	s, err := session.New(session.Config{
+		Decider: appReplyDecider{reply: "assistant reply"},
+	})
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	resetter := &stubHistoryResetter{}
+	app := newAppWithHistory(
+		"test-model",
+		s,
+		nil,
+		"",
+		time.Second,
+		[]message.AgentMessage{{Role: message.RoleUser, Content: "old"}},
+		resetter,
+	)
+	app.submit("/clear")
+	if !resetter.called {
+		t.Fatal("expected persisted history resetter to be called")
+	}
+	if len(resetter.last) != 0 {
+		t.Fatalf("expected reset with empty message slice, got %#v", resetter.last)
+	}
+}
+
+func TestNewAppWithHistoryLoadsConversation(t *testing.T) {
+	s, err := session.New(session.Config{
+		Decider: appReplyDecider{reply: "assistant reply"},
+	})
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	app := newAppWithHistory(
+		"test-model",
+		s,
+		nil,
+		"",
+		time.Second,
+		[]message.AgentMessage{
+			{Role: message.RoleUser, Content: "first"},
+			{Role: message.RoleAssistant, Content: "second"},
+		},
+		nil,
+	)
+	if !containsLine(app.conversation, "**User:** first") || !containsLine(app.conversation, "**Assistant:** second") {
+		t.Fatalf("expected conversation to load from history, got %#v", app.conversation)
 	}
 }
 

@@ -10,9 +10,11 @@ import (
 
 	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/events"
+	"github.com/victorarias/agentic-weave/agentic/message"
 	provider "github.com/victorarias/agentic-weave/agentic/providers/anthropic"
 	"github.com/victorarias/agentic-weave/cmd/wv/config"
 	"github.com/victorarias/agentic-weave/cmd/wv/extensions"
+	"github.com/victorarias/agentic-weave/cmd/wv/persist"
 	"github.com/victorarias/agentic-weave/cmd/wv/sanitize"
 	"github.com/victorarias/agentic-weave/cmd/wv/session"
 	"github.com/victorarias/agentic-weave/cmd/wv/tools"
@@ -30,6 +32,11 @@ func main() {
 }
 
 func run() error {
+	opts, err := parseCLIArgs(os.Args[1:])
+	if err != nil {
+		return err
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -45,11 +52,25 @@ func run() error {
 		return err
 	}
 
-	reg := agentic.NewRegistry()
 	workDir, err := os.Getwd()
 	if err != nil {
 		return err
 	}
+	sessionStore, err := persist.NewStore(workDir, opts.SessionID)
+	if err != nil {
+		return err
+	}
+	if opts.NewSession {
+		if err := sessionStore.Replace(context.Background(), nil); err != nil {
+			return err
+		}
+	}
+	initialHistory, err := sessionStore.Load(context.Background())
+	if err != nil {
+		return err
+	}
+
+	reg := agentic.NewRegistry()
 	if err := tools.RegisterBuiltins(reg, tools.Options{
 		WorkDir:    workDir,
 		EnableBash: cfg.EnableBash,
@@ -79,6 +100,7 @@ func run() error {
 			temperature: cfg.Temperature,
 		},
 		Executor:     reg,
+		HistoryStore: sessionStore,
 		SystemPrompt: cfg.SystemPrompt,
 		MaxTurns:     cfg.MaxTurns,
 	})
@@ -86,7 +108,23 @@ func run() error {
 		return err
 	}
 
-	app := newApp(cfg.Model, sess, loader, extensionNotice, time.Duration(cfg.RunTimeoutSeconds)*time.Second)
+	if opts.NonInteractive {
+		messageValue, err := resolveNonInteractiveMessage(opts.Message, os.Stdin, stdinIsTTY())
+		if err != nil {
+			return err
+		}
+		return runNonInteractive(context.Background(), sess, messageValue, time.Duration(cfg.RunTimeoutSeconds)*time.Second, os.Stdout)
+	}
+
+	app := newAppWithHistory(
+		cfg.Model,
+		sess,
+		loader,
+		extensionNotice,
+		time.Duration(cfg.RunTimeoutSeconds)*time.Second,
+		initialHistory,
+		sessionStore,
+	)
 	term := tui.NewTerminal(os.Stdin, os.Stdout)
 	ui := tui.New(term, app.root, app.root)
 	ui.SetOnTick(app.OnTick)
@@ -117,6 +155,7 @@ type app struct {
 	extensions      extensionReloader
 	runTimeout      time.Duration
 	runCancel       context.CancelFunc
+	historyResetter historyResetter
 }
 
 type extensionReloader interface {
@@ -124,7 +163,23 @@ type extensionReloader interface {
 	Loaded() []string
 }
 
+type historyResetter interface {
+	Replace(ctx context.Context, messages []message.AgentMessage) error
+}
+
 func newApp(model string, sess *session.Session, ext extensionReloader, startupNotice string, runTimeout time.Duration) *app {
+	return newAppWithHistory(model, sess, ext, startupNotice, runTimeout, nil, nil)
+}
+
+func newAppWithHistory(
+	model string,
+	sess *session.Session,
+	ext extensionReloader,
+	startupNotice string,
+	runTimeout time.Duration,
+	initialHistory []message.AgentMessage,
+	resetter historyResetter,
+) *app {
 	if runTimeout <= 0 {
 		runTimeout = 180 * time.Second
 	}
@@ -140,6 +195,7 @@ func newApp(model string, sess *session.Session, ext extensionReloader, startupN
 		streamingBuffer: "",
 		extensions:      ext,
 		runTimeout:      runTimeout,
+		historyResetter: resetter,
 	}
 	a.editor.SetSubmitHandler(a.submit)
 
@@ -154,8 +210,13 @@ func newApp(model string, sess *session.Session, ext extensionReloader, startupN
 		horizontalRule{},
 		a.editor,
 	)
+	if len(initialHistory) > 0 {
+		a.conversation = conversationFromHistory(initialHistory)
+	}
 	if strings.TrimSpace(startupNotice) != "" {
 		a.appendConversation("System", startupNotice)
+	} else {
+		a.refreshChat()
 	}
 	return a
 }
@@ -197,6 +258,11 @@ func (a *app) handleCommand(raw string) {
 		a.streamingActive = false
 		a.streamingBuffer = ""
 		a.tools.Clear()
+		if a.historyResetter != nil {
+			if err := a.historyResetter.Replace(context.Background(), nil); err != nil {
+				a.appendConversation("System", "Failed to clear persisted session: "+err.Error())
+			}
+		}
 		a.refreshChat()
 		a.status.Set("ready")
 	case "/cancel":
@@ -340,6 +406,25 @@ func (a *app) refreshChat() {
 		body = "Welcome to wv. Type a message and press Enter."
 	}
 	a.chat.Set(body)
+}
+
+func conversationFromHistory(messages []message.AgentMessage) []string {
+	out := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		content := strings.TrimSpace(sanitize.Text(msg.Content))
+		if content == "" {
+			continue
+		}
+		switch msg.Role {
+		case message.RoleUser:
+			out = append(out, "**User:** "+content)
+		case message.RoleAssistant:
+			out = append(out, "**Assistant:** "+content)
+		case message.RoleSystem:
+			out = append(out, "**System:** "+content)
+		}
+	}
+	return out
 }
 
 type horizontalRule struct{}

@@ -41,6 +41,7 @@ This file provides guidance to AI agents when working in this repository.
 - `cmd/wv/main.go` wires config, session, and TUI runtime.
 - `cmd/wv/config` loads runtime settings from env (`ANTHROPIC_*`, `WV_*`).
 - `cmd/wv/session` is provider-agnostic: it wraps `agentic/loop.Runner` and bridges loop events to UI updates.
+- `cmd/wv/persist` stores session history as JSON under `.wv/sessions/<session>.json` via `history.Store`.
 - `cmd/wv/tui` owns terminal mode, differential rendering, input loop, and ANSI utilities.
 - `cmd/wv/tui/components` contains composable UI primitives (container, markdown, editor, loader, text).
 - `cmd/wv/tools` provides built-in coding tools (`bash`, `read`, `write`, `edit`, `grep`, `glob`, `ls`).
@@ -55,3 +56,7 @@ This file provides guidance to AI agents when working in this repository.
 - File tools are workspace-scoped and reject paths outside the current workspace root.
 - Event delivery preserves structural state transitions (`message_end`, `tool_end`, etc.); only high-frequency message deltas are drop-eligible under pressure.
 - Runs are cancellable via `/cancel` and time-bounded by `WV_RUN_TIMEOUT_SECONDS` (default: 180s).
+- `wv` supports non-interactive execution and persisted session selection:
+  - `--non-interactive --message \"...\"` (or piped stdin)
+  - `--session <id>` to select persisted context
+  - `--new-session` to reset the selected persisted session before running

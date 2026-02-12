@@ -74,7 +74,7 @@ Build `cmd/wv` as a nested module terminal coding agent CLI.
 - [x] Add Anthropic-backed session wrapper over `agentic/loop`
 - [x] Add built-in coding tools (`bash`, `read`, `write`, `edit`, `grep`, `glob`, `ls`)
 - [x] Add Lua extension loader and `/reload`
-- [ ] Add non-interactive mode and persistent sessions
+- [x] Add non-interactive mode and persistent sessions
 
 Progress log:
 - 2026-02-12 00:12 UTC - Created `cmd/wv/` nested module structure (`config`, `session`, `tui`, `tui/components`).
@@ -95,6 +95,8 @@ Progress log:
 - 2026-02-12 01:00 UTC - Polished architecture boundaries: moved tool result presentation logic out of `main.go` into `cmd/wv/tools/presentation.go`, and made TUI runtime explicitly one-shot (`ErrRunAlreadyStarted`) with regression tests.
 - 2026-02-12 01:00 UTC - Added terminal-control sanitization layer for untrusted model/tool text (`cmd/wv/sanitize`), wired through conversation/tool rendering paths, and added regression tests to prevent ANSI/OSC injection in TUI output.
 - 2026-02-12 01:00 UTC - Closed final confinement gap: path guards now validate existing symlinked path segments to prevent write escapes via missing intermediate directories (e.g. `link/new/file.txt`), with dedicated regression coverage.
+- 2026-02-12 01:00 UTC - Added persistent sessions (`cmd/wv/persist` file store under `.wv/sessions/<session>.json`) and wired resume/new-session behavior into both TUI and non-interactive flows.
+- 2026-02-12 01:00 UTC - Added non-interactive mode (`--non-interactive`, `--message`, piped-stdin support, `--session`, `--new-session`) with timeout-bounded single-run execution and dedicated tests (`cmd/wv/cli_test.go`, `cmd/wv/non_interactive_test.go`).
 
 ---
 
