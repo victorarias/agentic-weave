@@ -2,7 +2,10 @@ package persist
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,5 +113,128 @@ func TestStoreConcurrentAppendAcrossInstances(t *testing.T) {
 	}
 	if got, want := len(loaded), 2*perWriter; got != want {
 		t.Fatalf("unexpected message count: got=%d want=%d", got, want)
+	}
+}
+
+func TestReleaseLockDoesNotDeleteAnotherOwner(t *testing.T) {
+	store, err := NewStore(t.TempDir(), "shared")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	unlock, err := store.acquireLock(context.Background())
+	if err != nil {
+		t.Fatalf("acquire lock: %v", err)
+	}
+	if err := os.WriteFile(store.lockPath, []byte("other-owner\n"), 0o600); err != nil {
+		t.Fatalf("rewrite lock: %v", err)
+	}
+	unlock()
+	data, err := os.ReadFile(store.lockPath)
+	if err != nil {
+		t.Fatalf("expected lock to remain, read error: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "other-owner" {
+		t.Fatalf("unexpected lock contents: %q", string(data))
+	}
+}
+
+func TestAcquireLockRespectsContext(t *testing.T) {
+	store, err := NewStore(t.TempDir(), "shared")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	unlock, err := store.acquireLock(context.Background())
+	if err != nil {
+		t.Fatalf("acquire lock: %v", err)
+	}
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = store.acquireLock(ctx)
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected deadline/canceled, got %v", err)
+	}
+}
+
+func TestStaleLockToken(t *testing.T) {
+	store, err := NewStore(t.TempDir(), "shared")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.lockPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(store.lockPath, []byte("token-1\n"), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(store.lockPath, now, now); err != nil {
+		t.Fatalf("chtimes fresh: %v", err)
+	}
+
+	stale, token, err := store.staleLockToken()
+	if err != nil {
+		t.Fatalf("staleLockToken fresh: %v", err)
+	}
+	if stale || token != "" {
+		t.Fatalf("expected fresh lock state, got stale=%v token=%q", stale, token)
+	}
+
+	past := now.Add(-staleLockAge - time.Second)
+	if err := os.Chtimes(store.lockPath, past, past); err != nil {
+		t.Fatalf("chtimes stale: %v", err)
+	}
+	stale, token, err = store.staleLockToken()
+	if err != nil {
+		t.Fatalf("staleLockToken stale: %v", err)
+	}
+	if !stale || token != "token-1" {
+		t.Fatalf("expected stale lock with token, got stale=%v token=%q", stale, token)
+	}
+}
+
+func TestBreakStaleLockIfTokenMatches(t *testing.T) {
+	store, err := NewStore(t.TempDir(), "shared")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.lockPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(store.lockPath, []byte("token-1\n"), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	store.breakStaleLockIfTokenMatches("token-2")
+	if _, err := os.Stat(store.lockPath); err != nil {
+		t.Fatalf("expected lock to remain on mismatch: %v", err)
+	}
+	store.breakStaleLockIfTokenMatches("token-1")
+	if _, err := os.Stat(store.lockPath); !os.IsNotExist(err) {
+		t.Fatalf("expected lock removed on match, got err=%v", err)
+	}
+}
+
+func TestReleaseLock(t *testing.T) {
+	store, err := NewStore(t.TempDir(), "shared")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.lockPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(store.lockPath, []byte("token-1\n"), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	store.releaseLock("token-2")
+	if _, err := os.Stat(store.lockPath); err != nil {
+		t.Fatalf("expected lock to remain on mismatch: %v", err)
+	}
+	store.releaseLock("token-1")
+	if _, err := os.Stat(store.lockPath); !os.IsNotExist(err) {
+		t.Fatalf("expected lock removed on match, got err=%v", err)
 	}
 }

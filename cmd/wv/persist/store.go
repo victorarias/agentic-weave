@@ -176,18 +176,19 @@ func (s *Store) acquireLock(ctx context.Context) (func(), error) {
 	for {
 		lock, err := os.OpenFile(s.lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
-			_, _ = fmt.Fprintf(lock, "pid=%d\n", os.Getpid())
+			token := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+			_, _ = fmt.Fprintln(lock, token)
 			_ = lock.Close()
 			return func() {
-				_ = os.Remove(s.lockPath)
+				s.releaseLock(token)
 			}, nil
 		}
 		if !os.IsExist(err) {
 			return nil, err
 		}
-		stale, staleErr := s.isLockStale()
+		stale, token, staleErr := s.staleLockToken()
 		if staleErr == nil && stale {
-			_ = os.Remove(s.lockPath)
+			s.breakStaleLockIfTokenMatches(token)
 			continue
 		}
 		timer := time.NewTimer(lockRetryDelay)
@@ -200,13 +201,51 @@ func (s *Store) acquireLock(ctx context.Context) (func(), error) {
 	}
 }
 
-func (s *Store) isLockStale() (bool, error) {
+func (s *Store) staleLockToken() (bool, string, error) {
 	info, err := os.Stat(s.lockPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return false, "", nil
 		}
-		return false, err
+		return false, "", err
 	}
-	return time.Since(info.ModTime()) > staleLockAge, nil
+	if time.Since(info.ModTime()) <= staleLockAge {
+		return false, "", nil
+	}
+	data, err := os.ReadFile(s.lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, "", nil
+		}
+		return false, "", err
+	}
+	return true, strings.TrimSpace(string(data)), nil
+}
+
+func (s *Store) breakStaleLockIfTokenMatches(token string) {
+	if token == "" {
+		return
+	}
+	data, err := os.ReadFile(s.lockPath)
+	if err != nil {
+		return
+	}
+	if strings.TrimSpace(string(data)) != token {
+		return
+	}
+	_ = os.Remove(s.lockPath)
+}
+
+func (s *Store) releaseLock(token string) {
+	if token == "" {
+		return
+	}
+	data, err := os.ReadFile(s.lockPath)
+	if err != nil {
+		return
+	}
+	if strings.TrimSpace(string(data)) != token {
+		return
+	}
+	_ = os.Remove(s.lockPath)
 }
