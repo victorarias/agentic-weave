@@ -27,6 +27,24 @@ func executeTool(t *testing.T, tool agentic.Tool, input any) agentic.ToolResult 
 	return result
 }
 
+func executeBashSuccess(t *testing.T, tool BashTool, input map[string]any) agentic.ToolResult {
+	t.Helper()
+	for attempt := 1; attempt <= 3; attempt++ {
+		result := executeTool(t, tool, input)
+		if result.Error == nil {
+			return result
+		}
+		msg := strings.ToLower(result.Error.Message)
+		if strings.Contains(msg, "resource temporarily unavailable") && attempt < 3 {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		t.Fatalf("unexpected bash error: %v", result.Error)
+	}
+	t.Fatal("bash success helper exhausted retries")
+	return agentic.ToolResult{}
+}
+
 func decodeOutput(t *testing.T, result agentic.ToolResult) map[string]any {
 	t.Helper()
 	var out map[string]any
@@ -157,10 +175,7 @@ func TestBashTool(t *testing.T) {
 	workDir := t.TempDir()
 	tool := BashTool{WorkDir: workDir, Timeout: testBashTimeout}
 
-	okResult := executeTool(t, tool, map[string]any{"command": "printf 'ok'"})
-	if okResult.Error != nil {
-		t.Fatalf("unexpected bash error: %v", okResult.Error)
-	}
+	okResult := executeBashSuccess(t, tool, map[string]any{"command": "printf 'ok'"})
 	okOut := decodeOutput(t, okResult)
 	if okOut["stdout"].(string) != "ok" {
 		t.Fatalf("expected stdout ok, got %#v", okOut)
@@ -218,7 +233,7 @@ func TestToolPathsAreConstrainedToWorkspace(t *testing.T) {
 func TestBashOutputIsBounded(t *testing.T) {
 	workDir := t.TempDir()
 	tool := BashTool{WorkDir: workDir, Timeout: testBashTimeout}
-	result := executeTool(t, tool, map[string]any{
+	result := executeBashSuccess(t, tool, map[string]any{
 		"command":          "printf '%02000d' 0",
 		"max_output_bytes": 128,
 	})

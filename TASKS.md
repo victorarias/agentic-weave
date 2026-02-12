@@ -106,6 +106,7 @@ Progress log:
 - 2026-02-12 08:50 UTC - Added lock-heartbeat maintenance while persistence locks are held to reduce false stale-lock eviction during longer operations; added owner-only refresh tests and revalidated root/cmd-wv quality gates (coverage now 70.4%).
 - 2026-02-12 08:56 UTC - Hardened `claude-code-review` workflow reliability: bounded runtime with job timeout, made Claude review step advisory (`continue-on-error`) to avoid flaky external SDK/plugin regressions blocking merges, and added step-summary reporting for pass/fail outcome visibility.
 - 2026-02-12 08:59 UTC - Fixed CI flake in `cmd/wv/tools` by increasing test-only bash command timeout budget (2s -> 10s) and added stress validation with repeated package runs plus full `cmd/wv` test sweep.
+- 2026-02-12 09:06 UTC - Applied subagent-review polish: moved Claude review timeout to step-level (prevents job-timeout hard failures in advisory mode), added explicit summary handling for success/failure/cancelled/skipped outcomes, and hardened bash tool tests with transient process-launch retries plus repeated stability validation.
 
 ---
 

@@ -19,7 +19,6 @@ jobs:
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
 
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: read
@@ -35,6 +34,7 @@ jobs:
       - name: Run Claude Code Review
         id: claude-review
         continue-on-error: true
+        timeout-minutes: 12
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -47,17 +47,42 @@ jobs:
       - name: Summarize Claude review outcome
         if: always()
         run: |
-          if [[ "${{ steps.claude-review.outcome }}" == "failure" ]]; then
-            {
-              echo "### Claude review status: advisory failure"
-              echo
-              echo "The Claude review action failed due to an external runtime/plugin issue."
-              echo "This job is intentionally non-blocking so CI reliability is determined by deterministic test suites."
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            {
-              echo "### Claude review status: completed"
-              echo
-              echo "Claude review finished successfully."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          outcome="${{ steps.claude-review.outcome }}"
+          case "$outcome" in
+            success)
+              {
+                echo "### Claude review status: completed"
+                echo
+                echo "Claude review finished successfully."
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            failure)
+              {
+                echo "### Claude review status: advisory failure"
+                echo
+                echo "The Claude review action failed due to an external runtime/plugin issue."
+                echo "This check remains non-blocking so deterministic test suites are the merge gate."
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            cancelled)
+              {
+                echo "### Claude review status: cancelled"
+                echo
+                echo "Claude review was cancelled. This check is advisory and does not block deterministic CI gates."
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            skipped)
+              {
+                echo "### Claude review status: skipped"
+                echo
+                echo "Claude review step was skipped."
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              {
+                echo "### Claude review status: unknown outcome"
+                echo
+                echo "Unexpected step outcome: \`$outcome\`."
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac
