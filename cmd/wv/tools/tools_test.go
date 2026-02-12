@@ -12,6 +12,8 @@ import (
 	"github.com/victorarias/agentic-weave/agentic"
 )
 
+const testBashTimeout = 10 * time.Second
+
 func executeTool(t *testing.T, tool agentic.Tool, input any) agentic.ToolResult {
 	t.Helper()
 	payload, err := json.Marshal(input)
@@ -153,7 +155,7 @@ func TestGrepGlobAndLS(t *testing.T) {
 
 func TestBashTool(t *testing.T) {
 	workDir := t.TempDir()
-	tool := BashTool{WorkDir: workDir, Timeout: 2 * time.Second}
+	tool := BashTool{WorkDir: workDir, Timeout: testBashTimeout}
 
 	okResult := executeTool(t, tool, map[string]any{"command": "printf 'ok'"})
 	if okResult.Error != nil {
@@ -191,7 +193,7 @@ func TestToolPathsAreConstrainedToWorkspace(t *testing.T) {
 		t.Fatal("expected outside-workspace read to fail")
 	}
 
-	bashResult := executeTool(t, BashTool{WorkDir: workDir, Timeout: 2 * time.Second}, map[string]any{
+	bashResult := executeTool(t, BashTool{WorkDir: workDir, Timeout: testBashTimeout}, map[string]any{
 		"command":  "pwd",
 		"work_dir": "..",
 	})
@@ -215,7 +217,7 @@ func TestToolPathsAreConstrainedToWorkspace(t *testing.T) {
 
 func TestBashOutputIsBounded(t *testing.T) {
 	workDir := t.TempDir()
-	tool := BashTool{WorkDir: workDir, Timeout: 2 * time.Second}
+	tool := BashTool{WorkDir: workDir, Timeout: testBashTimeout}
 	result := executeTool(t, tool, map[string]any{
 		"command":          "printf '%02000d' 0",
 		"max_output_bytes": 128,

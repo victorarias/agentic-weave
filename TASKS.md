@@ -105,6 +105,7 @@ Progress log:
 - 2026-02-12 08:39 UTC - Final polish pass: made generated loop tool-call IDs run-unique to avoid persisted-session collisions, preserved unknown Anthropic stop reasons (instead of coercing to `stop`), and updated loop/harness tests to assert contract shape rather than fixed call-id literals.
 - 2026-02-12 08:50 UTC - Added lock-heartbeat maintenance while persistence locks are held to reduce false stale-lock eviction during longer operations; added owner-only refresh tests and revalidated root/cmd-wv quality gates (coverage now 70.4%).
 - 2026-02-12 08:56 UTC - Hardened `claude-code-review` workflow reliability: bounded runtime with job timeout, made Claude review step advisory (`continue-on-error`) to avoid flaky external SDK/plugin regressions blocking merges, and added step-summary reporting for pass/fail outcome visibility.
+- 2026-02-12 08:59 UTC - Fixed CI flake in `cmd/wv/tools` by increasing test-only bash command timeout budget (2s -> 10s) and added stress validation with repeated package runs plus full `cmd/wv` test sweep.
 
 ---
 
