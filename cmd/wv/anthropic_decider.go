@@ -44,6 +44,10 @@ func normalizeStopReason(stop string) usage.StopReason {
 	case "end_turn", "stop":
 		return usage.StopReasonStop
 	default:
-		return usage.StopReasonStop
+		normalized := strings.TrimSpace(strings.ToLower(stop))
+		if normalized == "" {
+			return usage.StopReasonStop
+		}
+		return usage.StopReason(normalized)
 	}
 }

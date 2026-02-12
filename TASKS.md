@@ -102,6 +102,7 @@ Progress log:
 - 2026-02-12 07:51 UTC - Hardened lock ownership safety in `cmd/wv/persist`: lock release/removal now verifies token ownership before deleting lock files, with new stale-lock and lock-release regression tests; revalidated coverage gate at 70.2%.
 - 2026-02-12 08:11 UTC - Completed dual-agent final review pass and shipped follow-up fixes: non-interactive closed-update-channel handling, persistence payload version validation, loop exhaustion now preserves pending tool calls, request/store history merge semantics in loop input, and harness updates for new max-turn behavior.
 - 2026-02-12 08:23 UTC - Completed architect/implementation re-review sweep and polished contracts: added unsupported-version rejection tests for persisted sessions, strengthened non-interactive wait-loop closed-channel handling, preserved pending tool-intent at max-turn boundaries with harness alignment, and revalidated all local quality gates + green CI.
+- 2026-02-12 08:39 UTC - Final polish pass: made generated loop tool-call IDs run-unique to avoid persisted-session collisions, preserved unknown Anthropic stop reasons (instead of coercing to `stop`), and updated loop/harness tests to assert contract shape rather than fixed call-id literals.
 
 ---
 

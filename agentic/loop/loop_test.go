@@ -200,7 +200,7 @@ func TestRunPersistsToolHistory(t *testing.T) {
 	if result.ToolCalls[0].Name != "prior" {
 		t.Fatalf("expected prior tool call first, got %q", result.ToolCalls[0].Name)
 	}
-	if result.ToolCalls[1].ID != "call-0-0" {
+	if !strings.HasPrefix(result.ToolCalls[1].ID, "call-") {
 		t.Fatalf("expected generated call id, got %q", result.ToolCalls[1].ID)
 	}
 

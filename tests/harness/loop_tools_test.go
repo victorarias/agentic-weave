@@ -42,7 +42,7 @@ func TestLoopToolDefaults(t *testing.T) {
 	if len(result.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool call")
 	}
-	if result.ToolCalls[0].ID == "" || result.ToolCalls[0].ID != "call-0-0" {
+	if !strings.HasPrefix(result.ToolCalls[0].ID, "call-") {
 		t.Fatalf("unexpected tool call id: %q", result.ToolCalls[0].ID)
 	}
 	if result.ToolCalls[0].Caller == nil || result.ToolCalls[0].Caller.Type != "llm" {
@@ -169,7 +169,7 @@ func TestLoopToolCallDefaultsPersistInHistory(t *testing.T) {
 	if toolMsg == nil {
 		t.Fatalf("expected assistant tool call message in history")
 	}
-	if toolMsg.ToolCalls[0].ID != "call-0-0" {
+	if !strings.HasPrefix(toolMsg.ToolCalls[0].ID, "call-") {
 		t.Fatalf("expected tool call id in history, got %q", toolMsg.ToolCalls[0].ID)
 	}
 	if toolMsg.ToolCalls[0].Caller == nil || toolMsg.ToolCalls[0].Caller.Type != "llm" {

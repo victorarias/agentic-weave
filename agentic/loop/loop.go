@@ -171,6 +171,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	toolCalls, toolResults := extractToolsFromHistory(historyMessages)
 
 	turn := 0
+	runID := time.Now().UnixNano()
 	for {
 		decision, err := r.cfg.Decider.Decide(ctx, Input{
 			SystemPrompt: req.SystemPrompt,
@@ -187,7 +188,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		for i := range decision.ToolCalls {
 			if decision.ToolCalls[i].ID == "" {
-				decision.ToolCalls[i].ID = fmt.Sprintf("call-%d-%d", turn, i)
+				decision.ToolCalls[i].ID = fmt.Sprintf("call-%d-%d-%d", runID, turn, i)
 			}
 			if decision.ToolCalls[i].Caller == nil {
 				decision.ToolCalls[i].Caller = &agentic.ToolCaller{Type: r.cfg.ToolCallerType}

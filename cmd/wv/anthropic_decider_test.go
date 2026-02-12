@@ -12,7 +12,8 @@ func TestNormalizeStopReason(t *testing.T) {
 		"max_tokens": usage.StopReasonMaxTokens,
 		"end_turn":   usage.StopReasonStop,
 		"stop":       usage.StopReasonStop,
-		"unknown":    usage.StopReasonStop,
+		"unknown":    usage.StopReason("unknown"),
+		"":           usage.StopReasonStop,
 	}
 	for in, want := range cases {
 		if got := normalizeStopReason(in); got != want {
