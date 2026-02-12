@@ -3,6 +3,7 @@ package persist
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,5 +61,54 @@ func TestStorePathAndDefaultSessionID(t *testing.T) {
 func TestStoreRejectsInvalidSessionID(t *testing.T) {
 	if _, err := NewStore(t.TempDir(), "../bad"); err == nil {
 		t.Fatal("expected invalid session id error")
+	}
+}
+
+func TestStoreConcurrentAppendAcrossInstances(t *testing.T) {
+	workDir := t.TempDir()
+	storeA, err := NewStore(workDir, "shared")
+	if err != nil {
+		t.Fatalf("new store A: %v", err)
+	}
+	storeB, err := NewStore(workDir, "shared")
+	if err != nil {
+		t.Fatalf("new store B: %v", err)
+	}
+
+	const perWriter = 40
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < perWriter; i++ {
+			msg := message.AgentMessage{Role: message.RoleUser, Content: "a", Timestamp: time.Now()}
+			if err := storeA.Append(context.Background(), msg); err != nil {
+				t.Errorf("append A[%d]: %v", i, err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < perWriter; i++ {
+			msg := message.AgentMessage{Role: message.RoleAssistant, Content: "b", Timestamp: time.Now()}
+			if err := storeB.Append(context.Background(), msg); err != nil {
+				t.Errorf("append B[%d]: %v", i, err)
+				return
+			}
+		}
+	}()
+	close(start)
+	wg.Wait()
+
+	loaded, err := storeA.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got, want := len(loaded), 2*perWriter; got != want {
+		t.Fatalf("unexpected message count: got=%d want=%d", got, want)
 	}
 }

@@ -97,6 +97,7 @@ Progress log:
 - 2026-02-12 01:00 UTC - Closed final confinement gap: path guards now validate existing symlinked path segments to prevent write escapes via missing intermediate directories (e.g. `link/new/file.txt`), with dedicated regression coverage.
 - 2026-02-12 01:00 UTC - Added persistent sessions (`cmd/wv/persist` file store under `.wv/sessions/<session>.json`) and wired resume/new-session behavior into both TUI and non-interactive flows.
 - 2026-02-12 01:00 UTC - Added non-interactive mode (`--non-interactive`, `--message`, piped-stdin support, `--session`, `--new-session`) with timeout-bounded single-run execution and dedicated tests (`cmd/wv/cli_test.go`, `cmd/wv/non_interactive_test.go`).
+- 2026-02-12 07:36 UTC - Hardened persistence and non-interactive reliability: cross-process store locking + unique atomic temp writes, strict CLI arg validation, busy-state `/clear` guard, bounded initial history load, and expanded regression tests for concurrency, empty replies, writer failures, and command races.
 
 ---
 

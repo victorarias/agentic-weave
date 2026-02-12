@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -50,5 +52,38 @@ func TestRunNonInteractiveTimeout(t *testing.T) {
 	err = runNonInteractive(context.Background(), s, "hello", 20*time.Millisecond, &out)
 	if err == nil {
 		t.Fatal("expected timeout/cancellation error")
+	}
+}
+
+type niEmptyReplyDecider struct{}
+
+func (niEmptyReplyDecider) Decide(_ context.Context, _ loop.Input) (loop.Decision, error) {
+	return loop.Decision{Reply: ""}, nil
+}
+
+type errWriter struct{}
+
+func (errWriter) Write(_ []byte) (int, error) { return 0, errors.New("write failed") }
+
+func TestRunNonInteractiveErrorsOnEmptyReply(t *testing.T) {
+	s, err := session.New(session.Config{Decider: niEmptyReplyDecider{}})
+	if err != nil {
+		t.Fatalf("session new: %v", err)
+	}
+	var out bytes.Buffer
+	err = runNonInteractive(context.Background(), s, "hello", time.Second, &out)
+	if err == nil || !strings.Contains(err.Error(), "empty reply") {
+		t.Fatalf("expected empty reply error, got %v", err)
+	}
+}
+
+func TestRunNonInteractivePropagatesWriterFailure(t *testing.T) {
+	s, err := session.New(session.Config{Decider: niStaticDecider{reply: "hi"}})
+	if err != nil {
+		t.Fatalf("session new: %v", err)
+	}
+	err = runNonInteractive(context.Background(), s, "hello", time.Second, io.Writer(errWriter{}))
+	if err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("expected writer error, got %v", err)
 	}
 }

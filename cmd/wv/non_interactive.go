@@ -31,26 +31,58 @@ func runNonInteractive(ctx context.Context, sess *session.Session, prompt string
 	}
 
 	for {
+		// Prefer draining terminal updates before treating context timeout as final.
 		select {
-		case <-runCtx.Done():
-			return runCtx.Err()
 		case update := <-sess.Updates():
-			switch update.Type {
-			case session.UpdateRunEnd:
-				reply := ""
-				if update.Result != nil {
-					reply = strings.TrimSpace(sanitize.Text(update.Result.Reply))
-				}
-				if reply != "" {
-					_, _ = fmt.Fprintln(out, reply)
-				}
-				return nil
-			case session.UpdateRunError:
-				if update.Err != nil {
-					return update.Err
-				}
-				return errors.New("non-interactive: run failed")
+			done, err := handleNonInteractiveUpdate(update, out)
+			if done {
+				return err
 			}
+			continue
+		default:
 		}
+
+		select {
+		case update := <-sess.Updates():
+			done, err := handleNonInteractiveUpdate(update, out)
+			if done {
+				return err
+			}
+		case <-runCtx.Done():
+			// Drain one last update if it is already available before returning timeout.
+			select {
+			case update := <-sess.Updates():
+				done, err := handleNonInteractiveUpdate(update, out)
+				if done {
+					return err
+				}
+			default:
+			}
+			return runCtx.Err()
+		}
+	}
+}
+
+func handleNonInteractiveUpdate(update session.Update, out io.Writer) (bool, error) {
+	switch update.Type {
+	case session.UpdateRunEnd:
+		reply := ""
+		if update.Result != nil {
+			reply = strings.TrimSpace(sanitize.Text(update.Result.Reply))
+		}
+		if reply == "" {
+			return true, errors.New("non-interactive: assistant returned empty reply")
+		}
+		if _, err := fmt.Fprintln(out, reply); err != nil {
+			return true, err
+		}
+		return true, nil
+	case session.UpdateRunError:
+		if update.Err != nil {
+			return true, update.Err
+		}
+		return true, errors.New("non-interactive: run failed")
+	default:
+		return false, nil
 	}
 }

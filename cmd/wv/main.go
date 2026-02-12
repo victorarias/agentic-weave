@@ -65,32 +65,12 @@ func run() error {
 			return err
 		}
 	}
-	initialHistory, err := sessionStore.Load(context.Background())
-	if err != nil {
-		return err
-	}
-
 	reg := agentic.NewRegistry()
 	if err := tools.RegisterBuiltins(reg, tools.Options{
 		WorkDir:    workDir,
 		EnableBash: cfg.EnableBash,
 	}); err != nil {
 		return err
-	}
-	var loader *extensions.Loader
-	extensionNotice := ""
-	if cfg.EnableExtensions {
-		if !cfg.EnableProjectExtensions {
-			extensionNotice = "Project extensions disabled (set WV_ENABLE_PROJECT_EXTENSIONS=1 to enable .wv/extensions)."
-		}
-		loader = extensions.NewLoaderWithOptions(workDir, extensions.Options{
-			IncludeGlobal:  true,
-			IncludeProject: cfg.EnableProjectExtensions,
-		})
-		defer loader.Close()
-		if err := loader.Load(); err != nil {
-			extensionNotice = "Extension load error: " + err.Error()
-		}
 	}
 
 	sess, err := session.New(session.Config{
@@ -114,6 +94,27 @@ func run() error {
 			return err
 		}
 		return runNonInteractive(context.Background(), sess, messageValue, time.Duration(cfg.RunTimeoutSeconds)*time.Second, os.Stdout)
+	}
+
+	initialHistory, err := sessionStore.Load(context.Background())
+	if err != nil {
+		return err
+	}
+
+	var loader *extensions.Loader
+	extensionNotice := ""
+	if cfg.EnableExtensions {
+		if !cfg.EnableProjectExtensions {
+			extensionNotice = "Project extensions disabled (set WV_ENABLE_PROJECT_EXTENSIONS=1 to enable .wv/extensions)."
+		}
+		loader = extensions.NewLoaderWithOptions(workDir, extensions.Options{
+			IncludeGlobal:  true,
+			IncludeProject: cfg.EnableProjectExtensions,
+		})
+		defer loader.Close()
+		if err := loader.Load(); err != nil {
+			extensionNotice = "Extension load error: " + err.Error()
+		}
 	}
 
 	app := newAppWithHistory(
@@ -254,6 +255,10 @@ func (a *app) handleCommand(raw string) {
 	case "/help":
 		a.appendConversation("System", "Commands: /help, /clear, /reload, /cancel")
 	case "/clear":
+		if a.busy || a.runCancel != nil {
+			a.appendConversation("System", "Cannot clear while run is active. Use /cancel and wait for completion.")
+			return
+		}
 		a.conversation = nil
 		a.streamingActive = false
 		a.streamingBuffer = ""
@@ -423,6 +428,9 @@ func conversationFromHistory(messages []message.AgentMessage) []string {
 		case message.RoleSystem:
 			out = append(out, "**System:** "+content)
 		}
+	}
+	if len(out) > maxConversationEntries {
+		out = append([]string(nil), out[len(out)-maxConversationEntries:]...)
 	}
 	return out
 }

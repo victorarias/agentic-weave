@@ -33,8 +33,18 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, fmt.Errorf("%w\n%s", err, out.String())
 	}
-	if opts.NonInteractive && strings.TrimSpace(opts.Message) == "" && fs.NArg() > 0 {
-		opts.Message = strings.Join(fs.Args(), " ")
+	positional := fs.Args()
+	if !opts.NonInteractive && strings.TrimSpace(opts.Message) != "" {
+		return cliOptions{}, fmt.Errorf("--message requires --non-interactive")
+	}
+	if !opts.NonInteractive && len(positional) > 0 {
+		return cliOptions{}, fmt.Errorf("unexpected positional arguments: %s", strings.Join(positional, " "))
+	}
+	if opts.NonInteractive && strings.TrimSpace(opts.Message) != "" && len(positional) > 0 {
+		return cliOptions{}, fmt.Errorf("cannot combine --message with positional input")
+	}
+	if opts.NonInteractive && strings.TrimSpace(opts.Message) == "" && len(positional) > 0 {
+		opts.Message = strings.Join(positional, " ")
 	}
 	opts.SessionID = strings.TrimSpace(opts.SessionID)
 	if opts.SessionID == "" {

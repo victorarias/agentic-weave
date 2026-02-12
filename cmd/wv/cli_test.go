@@ -40,3 +40,21 @@ func TestResolveNonInteractiveMessageErrorsOnEmptyTTY(t *testing.T) {
 		t.Fatal("expected error for missing message in tty mode")
 	}
 }
+
+func TestParseCLIArgsRejectsPositionalInInteractiveMode(t *testing.T) {
+	if _, err := parseCLIArgs([]string{"hello"}); err == nil {
+		t.Fatal("expected positional argument error in interactive mode")
+	}
+}
+
+func TestParseCLIArgsRejectsMessageWithoutNonInteractive(t *testing.T) {
+	if _, err := parseCLIArgs([]string{"--message", "hello"}); err == nil {
+		t.Fatal("expected --message validation error")
+	}
+}
+
+func TestParseCLIArgsRejectsMixedMessageInputs(t *testing.T) {
+	if _, err := parseCLIArgs([]string{"--non-interactive", "--message", "hello", "world"}); err == nil {
+		t.Fatal("expected mixed input validation error")
+	}
+}

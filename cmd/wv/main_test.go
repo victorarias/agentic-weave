@@ -301,6 +301,28 @@ func TestAppClearResetsPersistedHistory(t *testing.T) {
 	}
 }
 
+func TestAppClearWhileBusyIsRejected(t *testing.T) {
+	s, err := session.New(session.Config{
+		Decider: appBlockingDecider{},
+	})
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	resetter := &stubHistoryResetter{}
+	app := newAppWithHistory("test-model", s, nil, "", 30*time.Second, nil, resetter)
+	app.submit("long running")
+	time.Sleep(10 * time.Millisecond)
+	app.submit("/clear")
+	if resetter.called {
+		t.Fatal("expected clear resetter not to be called while busy")
+	}
+	if !containsPrefix(app.conversation, "**System:** Cannot clear while run is active.") {
+		t.Fatalf("expected busy clear warning, got %#v", app.conversation)
+	}
+	app.submit("/cancel")
+	waitForIdle(t, app, 2*time.Second)
+}
+
 func TestNewAppWithHistoryLoadsConversation(t *testing.T) {
 	s, err := session.New(session.Config{
 		Decider: appReplyDecider{reply: "assistant reply"},
@@ -322,6 +344,17 @@ func TestNewAppWithHistoryLoadsConversation(t *testing.T) {
 	)
 	if !containsLine(app.conversation, "**User:** first") || !containsLine(app.conversation, "**Assistant:** second") {
 		t.Fatalf("expected conversation to load from history, got %#v", app.conversation)
+	}
+}
+
+func TestConversationFromHistoryIsBounded(t *testing.T) {
+	input := make([]message.AgentMessage, 0, maxConversationEntries+20)
+	for i := 0; i < maxConversationEntries+20; i++ {
+		input = append(input, message.AgentMessage{Role: message.RoleUser, Content: "x"})
+	}
+	lines := conversationFromHistory(input)
+	if got, want := len(lines), maxConversationEntries; got != want {
+		t.Fatalf("expected bounded history lines got=%d want=%d", got, want)
 	}
 }
 
