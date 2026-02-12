@@ -19,6 +19,7 @@ var sessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 const (
 	defaultSessionID = "default"
 	lockRetryDelay   = 20 * time.Millisecond
+	lockRefreshDelay = 30 * time.Second
 	staleLockAge     = 2 * time.Minute
 )
 
@@ -184,7 +185,10 @@ func (s *Store) acquireLock(ctx context.Context) (func(), error) {
 			token := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 			_, _ = fmt.Fprintln(lock, token)
 			_ = lock.Close()
+			stopRefresh := make(chan struct{})
+			go s.maintainLock(token, stopRefresh)
 			return func() {
+				close(stopRefresh)
 				s.releaseLock(token)
 			}, nil
 		}
@@ -253,4 +257,32 @@ func (s *Store) releaseLock(token string) {
 		return
 	}
 	_ = os.Remove(s.lockPath)
+}
+
+func (s *Store) maintainLock(token string, stop <-chan struct{}) {
+	ticker := time.NewTicker(lockRefreshDelay)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			s.touchLock(token)
+		}
+	}
+}
+
+func (s *Store) touchLock(token string) {
+	if token == "" {
+		return
+	}
+	data, err := os.ReadFile(s.lockPath)
+	if err != nil {
+		return
+	}
+	if strings.TrimSpace(string(data)) != token {
+		return
+	}
+	now := time.Now()
+	_ = os.Chtimes(s.lockPath, now, now)
 }

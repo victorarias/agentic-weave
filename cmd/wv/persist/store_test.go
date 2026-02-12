@@ -264,3 +264,60 @@ func TestStoreRejectsUnsupportedVersion(t *testing.T) {
 		t.Fatalf("expected unsupported version error, got %v", err)
 	}
 }
+
+func TestTouchLockRefreshesStaleLockForOwner(t *testing.T) {
+	store, err := NewStore(t.TempDir(), "shared")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.lockPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(store.lockPath, []byte("token-1\n"), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	past := time.Now().Add(-staleLockAge - time.Second)
+	if err := os.Chtimes(store.lockPath, past, past); err != nil {
+		t.Fatalf("chtimes stale: %v", err)
+	}
+	stale, _, err := store.staleLockToken()
+	if err != nil {
+		t.Fatalf("staleLockToken before touch: %v", err)
+	}
+	if !stale {
+		t.Fatal("expected stale lock before touch")
+	}
+	store.touchLock("token-1")
+	stale, _, err = store.staleLockToken()
+	if err != nil {
+		t.Fatalf("staleLockToken after touch: %v", err)
+	}
+	if stale {
+		t.Fatal("expected refreshed lock to be non-stale")
+	}
+}
+
+func TestTouchLockIgnoresNonOwnerToken(t *testing.T) {
+	store, err := NewStore(t.TempDir(), "shared")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.lockPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(store.lockPath, []byte("token-1\n"), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	past := time.Now().Add(-staleLockAge - time.Second)
+	if err := os.Chtimes(store.lockPath, past, past); err != nil {
+		t.Fatalf("chtimes stale: %v", err)
+	}
+	store.touchLock("token-2")
+	stale, token, err := store.staleLockToken()
+	if err != nil {
+		t.Fatalf("staleLockToken after wrong touch: %v", err)
+	}
+	if !stale || token != "token-1" {
+		t.Fatalf("expected stale lock unchanged, got stale=%v token=%q", stale, token)
+	}
+}
