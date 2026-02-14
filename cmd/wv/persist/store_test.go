@@ -209,6 +209,20 @@ func TestBreakStaleLockIfTokenMatches(t *testing.T) {
 	if err := os.WriteFile(store.lockPath, []byte("token-1\n"), 0o600); err != nil {
 		t.Fatalf("write lock: %v", err)
 	}
+
+	now := time.Now()
+	if err := os.Chtimes(store.lockPath, now, now); err != nil {
+		t.Fatalf("chtimes fresh: %v", err)
+	}
+	store.breakStaleLockIfTokenMatches("token-1")
+	if _, err := os.Stat(store.lockPath); err != nil {
+		t.Fatalf("expected fresh lock to remain on match: %v", err)
+	}
+
+	past := now.Add(-staleLockAge - time.Second)
+	if err := os.Chtimes(store.lockPath, past, past); err != nil {
+		t.Fatalf("chtimes stale: %v", err)
+	}
 	store.breakStaleLockIfTokenMatches("token-2")
 	if _, err := os.Stat(store.lockPath); err != nil {
 		t.Fatalf("expected lock to remain on mismatch: %v", err)
@@ -216,6 +230,27 @@ func TestBreakStaleLockIfTokenMatches(t *testing.T) {
 	store.breakStaleLockIfTokenMatches("token-1")
 	if _, err := os.Stat(store.lockPath); !os.IsNotExist(err) {
 		t.Fatalf("expected lock removed on match, got err=%v", err)
+	}
+}
+
+func TestBreakStaleLockIfTokenMatchesRemovesEmptyToken(t *testing.T) {
+	store, err := NewStore(t.TempDir(), "shared")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.lockPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(store.lockPath, nil, 0o600); err != nil {
+		t.Fatalf("write empty lock: %v", err)
+	}
+	past := time.Now().Add(-staleLockAge - time.Second)
+	if err := os.Chtimes(store.lockPath, past, past); err != nil {
+		t.Fatalf("chtimes stale: %v", err)
+	}
+	store.breakStaleLockIfTokenMatches("")
+	if _, err := os.Stat(store.lockPath); !os.IsNotExist(err) {
+		t.Fatalf("expected empty stale lock removed, got err=%v", err)
 	}
 }
 

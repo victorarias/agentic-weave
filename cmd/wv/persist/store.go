@@ -232,14 +232,28 @@ func (s *Store) staleLockToken() (bool, string, error) {
 }
 
 func (s *Store) breakStaleLockIfTokenMatches(token string) {
-	if token == "" {
+	info, err := os.Stat(s.lockPath)
+	if err != nil {
+		return
+	}
+	if time.Since(info.ModTime()) <= staleLockAge {
 		return
 	}
 	data, err := os.ReadFile(s.lockPath)
 	if err != nil {
 		return
 	}
-	if strings.TrimSpace(string(data)) != token {
+	contents := strings.TrimSpace(string(data))
+	if token == "" {
+		// If the lock file is stale but missing a token (e.g. crash between create and write),
+		// allow recovery by deleting the empty lock.
+		if contents != "" {
+			return
+		}
+		_ = os.Remove(s.lockPath)
+		return
+	}
+	if contents != token {
 		return
 	}
 	_ = os.Remove(s.lockPath)
