@@ -174,7 +174,8 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 }
 
 func appendHistory(messages []anthropic.MessageParam, history []message.AgentMessage) []anthropic.MessageParam {
-	for _, msg := range history {
+	for i := 0; i < len(history); i++ {
+		msg := history[i]
 		switch msg.Role {
 		case message.RoleUser:
 			blocks := make([]anthropic.ContentBlockParamUnion, 0, 1)
@@ -198,15 +199,26 @@ func appendHistory(messages []anthropic.MessageParam, history []message.AgentMes
 			}
 
 		case message.RoleTool:
-			blocks := make([]anthropic.ContentBlockParamUnion, 0, len(msg.ToolResults))
-			for _, result := range msg.ToolResults {
-				id := strings.TrimSpace(result.ID)
-				if id == "" {
-					id = result.Name
+			// Anthropic requires that all tool_result blocks for a given tool_use message
+			// appear in the *immediately next* message. Our loop records tool results as
+			// separate role=tool history entries (often one per tool call), so we coalesce
+			// consecutive tool messages into a single user message containing multiple
+			// tool_result blocks.
+			blocks := make([]anthropic.ContentBlockParamUnion, 0)
+			for ; i < len(history); i++ {
+				if history[i].Role != message.RoleTool {
+					break
 				}
-				content, isError := toolResultContent(result)
-				blocks = append(blocks, anthropic.NewToolResultBlock(id, content, isError))
+				for _, result := range history[i].ToolResults {
+					id := strings.TrimSpace(result.ID)
+					if id == "" {
+						id = result.Name
+					}
+					content, isError := toolResultContent(result)
+					blocks = append(blocks, anthropic.NewToolResultBlock(id, content, isError))
+				}
 			}
+			i-- // compensate for the outer loop increment
 			if len(blocks) > 0 {
 				messages = append(messages, anthropic.NewUserMessage(blocks...))
 			}

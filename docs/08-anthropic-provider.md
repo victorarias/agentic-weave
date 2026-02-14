@@ -34,6 +34,30 @@ if err != nil {
 fmt.Println(result.Reply)
 ```
 
+## Streaming
+
+The provider also supports streaming via `client.Stream(...)`, which returns a
+channel of `anthropic.StreamEvent` values (text deltas, tool calls, and a final
+done event).
+
+```go
+events, err := client.Stream(ctx, anthropic.Input{
+    SystemPrompt: "You are a helpful assistant.",
+    UserMessage:  "Summarize the latest changes.",
+    Tools:        tools,
+})
+if err != nil {
+    // handle request error
+}
+
+decision, err := anthropic.CollectDecision(events)
+if err != nil {
+    // handle stream error
+}
+
+fmt.Println(decision.Reply)
+```
+
 ## Notes
 
 - Tool calls are returned as `agentic.ToolCall` values with raw JSON input.

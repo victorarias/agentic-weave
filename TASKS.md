@@ -62,6 +62,54 @@ docs: update TASKS.md with Phase 3B completion
 
 ---
 
+## Active Initiatives
+
+### wv-coding-agent-cli
+Build `cmd/wv` as a nested module terminal coding agent CLI.
+
+- Branch family tag: `feat/wv-*`
+- Scope now: Phase 1 skeleton + minimal TUI + Anthropic-only session loop
+- [x] Create nested Go module in `cmd/wv`
+- [x] Add minimal custom TUI renderer and base components
+- [x] Add Anthropic-backed session wrapper over `agentic/loop`
+- [x] Add built-in coding tools (`bash`, `read`, `write`, `edit`, `grep`, `glob`, `ls`)
+- [x] Add Lua extension loader and `/reload`
+- [x] Add non-interactive mode and persistent sessions
+
+Progress log:
+- 2026-02-12 00:12 UTC - Created `cmd/wv/` nested module structure (`config`, `session`, `tui`, `tui/components`).
+- 2026-02-12 00:12 UTC - Implemented Anthropic-only Phase 1 scaffolding: config loader, session loop bridge, differential renderer, editor, markdown/text components, and CLI entrypoint.
+- 2026-02-12 00:19 UTC - Validated changes with `go test ./...`, `go vet ./...`, and `go build ./...` in both root module and `cmd/wv`.
+- 2026-02-12 00:29 UTC - Added pi-mono-inspired virtual terminal test harness for `cmd/wv/tui` and initial renderer/input tests plus editor behavior tests.
+- 2026-02-12 00:29 UTC - Documented wv testing philosophy and basic architecture in `AGENTS.md` to guide expansion toward full coding-agent test coverage.
+- 2026-02-12 00:32 UTC - Expanded harness coverage to session and app integration (`cmd/wv/session/session_test.go`, `cmd/wv/main_test.go`) and fixed editor multi-byte input handling.
+- 2026-02-12 00:36 UTC - Implemented and wired built-in coding tools (`bash`, `read`, `write`, `edit`, `grep`, `glob`, `ls`) with unit tests in `cmd/wv/tools`.
+- 2026-02-12 00:37 UTC - Added lightweight per-tool output previews in the chat stream on tool completion to improve observability during runs.
+- 2026-02-12 00:39 UTC - Added dedicated `ToolOutput` TUI component with pending/success/error states and Ctrl+O expand/collapse behavior, wired to tool lifecycle events with harness-backed tests.
+- 2026-02-12 00:42 UTC - Added minimal Lua extension loader (`cmd/wv/extensions`) and slash command handling (`/help`, `/clear`, `/reload`) with integration tests.
+- 2026-02-12 01:00 UTC - Hardened built-in tool safety and correctness: workspace path confinement, symlink-safe grep traversal, recursive `**` glob matching, bounded default outputs/entries/matches, and bounded `bash` capture-at-write with truncation metadata.
+- 2026-02-12 01:00 UTC - Refined session and UI reliability: removed session-side synthetic streaming, preserved structural events under backpressure, made session provider-agnostic via explicit decider injection, and fixed editor UTF-8/split-escape handling plus placeholder ANSI wrapping edge case.
+- 2026-02-12 01:00 UTC - Added safer runtime defaults and config validation: strict env parsing, boolean feature flags (`WV_ENABLE_EXTENSIONS`, `WV_ENABLE_BASH`), extension loader opt-in, and expanded unit/integration coverage (`config`, `tools`, `session`, `tui`).
+- 2026-02-12 01:00 UTC - Ran dual-agent review pass (implementation + architecture personas), addressed reported high-severity issues, and revalidated with `go test`, `go vet`, and `go test -race` in `cmd/wv`.
+- 2026-02-12 01:00 UTC - Completed second dual-agent review hardening: added strict bool parsing + run timeout config, `/cancel` command with bounded run contexts, project-extension trust gating (`WV_ENABLE_PROJECT_EXTENSIONS`), extension discovery dedupe, streaming `read` implementation, symlinked-workspace path fix, and removed nested-module `replace` to keep `go install .../cmd/wv@latest` viable.
+- 2026-02-12 01:00 UTC - Polished architecture boundaries: moved tool result presentation logic out of `main.go` into `cmd/wv/tools/presentation.go`, and made TUI runtime explicitly one-shot (`ErrRunAlreadyStarted`) with regression tests.
+- 2026-02-12 01:00 UTC - Added terminal-control sanitization layer for untrusted model/tool text (`cmd/wv/sanitize`), wired through conversation/tool rendering paths, and added regression tests to prevent ANSI/OSC injection in TUI output.
+- 2026-02-12 01:00 UTC - Closed final confinement gap: path guards now validate existing symlinked path segments to prevent write escapes via missing intermediate directories (e.g. `link/new/file.txt`), with dedicated regression coverage.
+- 2026-02-12 01:00 UTC - Added persistent sessions (`cmd/wv/persist` file store under `.wv/sessions/<session>.json`) and wired resume/new-session behavior into both TUI and non-interactive flows.
+- 2026-02-12 01:00 UTC - Added non-interactive mode (`--non-interactive`, `--message`, piped-stdin support, `--session`, `--new-session`) with timeout-bounded single-run execution and dedicated tests (`cmd/wv/cli_test.go`, `cmd/wv/non_interactive_test.go`).
+- 2026-02-12 07:36 UTC - Hardened persistence and non-interactive reliability: cross-process store locking + unique atomic temp writes, strict CLI arg validation, busy-state `/clear` guard, bounded initial history load, and expanded regression tests for concurrency, empty replies, writer failures, and command races.
+- 2026-02-12 07:46 UTC - Tightened core loop durability semantics by propagating history `Append`/`Replace` failures as run errors (`agentic/loop/loop.go`) and added loop-level regression tests for append/replace failure paths.
+- 2026-02-12 07:51 UTC - Hardened lock ownership safety in `cmd/wv/persist`: lock release/removal now verifies token ownership before deleting lock files, with new stale-lock and lock-release regression tests; revalidated coverage gate at 70.2%.
+- 2026-02-12 08:11 UTC - Completed dual-agent final review pass and shipped follow-up fixes: non-interactive closed-update-channel handling, persistence payload version validation, loop exhaustion now preserves pending tool calls, request/store history merge semantics in loop input, and harness updates for new max-turn behavior.
+- 2026-02-12 08:23 UTC - Completed architect/implementation re-review sweep and polished contracts: added unsupported-version rejection tests for persisted sessions, strengthened non-interactive wait-loop closed-channel handling, preserved pending tool-intent at max-turn boundaries with harness alignment, and revalidated all local quality gates + green CI.
+- 2026-02-12 08:39 UTC - Final polish pass: made generated loop tool-call IDs run-unique to avoid persisted-session collisions, preserved unknown Anthropic stop reasons (instead of coercing to `stop`), and updated loop/harness tests to assert contract shape rather than fixed call-id literals.
+- 2026-02-12 08:50 UTC - Added lock-heartbeat maintenance while persistence locks are held to reduce false stale-lock eviction during longer operations; added owner-only refresh tests and revalidated root/cmd-wv quality gates (coverage now 70.4%).
+- 2026-02-12 08:56 UTC - Hardened `claude-code-review` workflow reliability: bounded runtime with job timeout, made Claude review step advisory (`continue-on-error`) to avoid flaky external SDK/plugin regressions blocking merges, and added step-summary reporting for pass/fail outcome visibility.
+- 2026-02-12 08:59 UTC - Fixed CI flake in `cmd/wv/tools` by increasing test-only bash command timeout budget (2s -> 10s) and added stress validation with repeated package runs plus full `cmd/wv` test sweep.
+- 2026-02-12 09:06 UTC - Applied subagent-review polish: moved Claude review timeout to step-level (prevents job-timeout hard failures in advisory mode), added explicit summary handling for success/failure/cancelled/skipped outcomes, and hardened bash tool tests with transient process-launch retries plus repeated stability validation.
+
+---
+
 ## Completed Initiatives
 
 ### phase-3c-capabilities-anthropic-provider ✅

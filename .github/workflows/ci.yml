@@ -22,7 +22,39 @@ jobs:
           fi
       - run: go install honnef.co/go/tools/cmd/staticcheck@latest
       - run: staticcheck ./...
+      - run: go vet ./...
       - run: go test ./...
+
+  wv:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cmd/wv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/wv/go.mod
+          cache: true
+      - name: Format check (wv)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      - run: staticcheck ./...
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -race ./...
+      - name: Coverage gate (70%)
+        run: |
+          go test ./... -coverprofile=coverage.out
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | sed 's/%//')
+          echo "wv total coverage: ${total}%"
+          awk -v v="$total" 'BEGIN { exit (v >= 70.0 ? 0 : 1) }'
 
   e2e:
     runs-on: ubuntu-latest

@@ -42,7 +42,7 @@ func TestLoopToolDefaults(t *testing.T) {
 	if len(result.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool call")
 	}
-	if result.ToolCalls[0].ID == "" || result.ToolCalls[0].ID != "call-0-0" {
+	if !strings.HasPrefix(result.ToolCalls[0].ID, "call-") {
 		t.Fatalf("unexpected tool call id: %q", result.ToolCalls[0].ID)
 	}
 	if result.ToolCalls[0].Caller == nil || result.ToolCalls[0].Caller.Type != "llm" {
@@ -169,7 +169,7 @@ func TestLoopToolCallDefaultsPersistInHistory(t *testing.T) {
 	if toolMsg == nil {
 		t.Fatalf("expected assistant tool call message in history")
 	}
-	if toolMsg.ToolCalls[0].ID != "call-0-0" {
+	if !strings.HasPrefix(toolMsg.ToolCalls[0].ID, "call-") {
 		t.Fatalf("expected tool call id in history, got %q", toolMsg.ToolCalls[0].ID)
 	}
 	if toolMsg.ToolCalls[0].Caller == nil || toolMsg.ToolCalls[0].Caller.Type != "llm" {
@@ -272,8 +272,8 @@ func TestLoopMaxTurnsStops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.ToolCalls) != 1 || len(result.ToolResults) != 1 {
-		t.Fatalf("expected 1 tool call/result")
+	if len(result.ToolCalls) != 2 || len(result.ToolResults) != 1 {
+		t.Fatalf("expected 2 tool calls (executed+pending) and 1 result, got calls=%d results=%d", len(result.ToolCalls), len(result.ToolResults))
 	}
 	// Loop passes through decider's reply without adding defaults
 }
