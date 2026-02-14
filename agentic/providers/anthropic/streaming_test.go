@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,44 @@ func TestAppendHistory_ToolRoleBecomesUserToolResultMessage(t *testing.T) {
 	}
 	if msgs[2].Role != anthropic.MessageParamRoleUser {
 		t.Fatalf("expected msgs[2] role user (tool_result container), got %q", msgs[2].Role)
+	}
+}
+
+func TestAppendHistory_CoalescesConsecutiveToolMessages(t *testing.T) {
+	history := []message.AgentMessage{
+		{Role: message.RoleUser, Content: "hi"},
+		{
+			Role: message.RoleAssistant,
+			ToolCalls: []agentic.ToolCall{
+				{ID: "toolu_1", Name: "a", Input: json.RawMessage(`{}`)},
+				{ID: "toolu_2", Name: "b", Input: json.RawMessage(`{}`)},
+			},
+		},
+		{Role: message.RoleTool, ToolResults: []agentic.ToolResult{{ID: "toolu_1", Name: "a", Output: json.RawMessage(`"one"`)}}},
+		{Role: message.RoleTool, ToolResults: []agentic.ToolResult{{ID: "toolu_2", Name: "b", Output: json.RawMessage(`"two"`)}}},
+	}
+
+	msgs := appendHistory(nil, history)
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 anthropic messages, got %d", len(msgs))
+	}
+	if msgs[1].Role != anthropic.MessageParamRoleAssistant {
+		t.Fatalf("expected msgs[1] role assistant, got %q", msgs[1].Role)
+	}
+	if msgs[2].Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("expected msgs[2] role user (tool_result container), got %q", msgs[2].Role)
+	}
+
+	raw, err := json.Marshal(msgs[2])
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	if !json.Valid(raw) {
+		t.Fatalf("expected valid json")
+	}
+	// Both tool ids should appear in the single next message.
+	if !bytes.Contains(raw, []byte("toolu_1")) || !bytes.Contains(raw, []byte("toolu_2")) {
+		t.Fatalf("expected coalesced tool results to include both tool ids, got %s", string(raw))
 	}
 }
 
