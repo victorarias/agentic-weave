@@ -12,11 +12,13 @@ import (
 
 // VertexConfig controls an Anthropic client that routes through Vertex AI.
 type VertexConfig struct {
-	Project     string
-	Location    string
-	Model       string
-	MaxTokens   int
-	Temperature *float64
+	Project      string
+	Location     string
+	Model        string
+	MaxTokens    int
+	Temperature  *float64
+	ThinkingMode string
+	ThinkingBgt  int
 }
 
 // NewVertex constructs an Anthropic client that uses Vertex AI as the backend.
@@ -36,6 +38,11 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 	if maxTokens <= 0 {
 		maxTokens = 8192
 	}
+	thinkingMode := normalizeThinkingMode(cfg.ThinkingMode)
+	thinkingBgt := int64(cfg.ThinkingBgt)
+	if thinkingMode == thinkingModeFixed && thinkingBgt < 1024 {
+		thinkingBgt = 1024
+	}
 
 	// The SDK's vertex helpers panic on credential errors instead of returning them.
 	defer func() {
@@ -49,10 +56,12 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 	sdkClient := sdk.NewClient(vertexOpt)
 
 	return &Client{
-		client:      sdkClient,
-		model:       model,
-		maxTokens:   maxTokens,
-		temperature: cfg.Temperature,
+		client:       sdkClient,
+		model:        model,
+		maxTokens:    maxTokens,
+		temperature:  cfg.Temperature,
+		thinkingMode: thinkingMode,
+		thinkingBgt:  thinkingBgt,
 	}, nil
 }
 
@@ -81,12 +90,21 @@ func NewFromVertexEnv() (*Client, error) {
 			temperature = &f
 		}
 	}
+	thinkingMode := envTrimmed("VERTEX_THINKING_MODE")
+	thinkingBgt := 0
+	if v := envTrimmed("VERTEX_THINKING_BUDGET_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			thinkingBgt = n
+		}
+	}
 
 	return NewVertex(context.Background(), VertexConfig{
-		Project:     project,
-		Location:    location,
-		Model:       model,
-		MaxTokens:   maxTokens,
-		Temperature: temperature,
+		Project:      project,
+		Location:     location,
+		Model:        model,
+		MaxTokens:    maxTokens,
+		Temperature:  temperature,
+		ThinkingMode: thinkingMode,
+		ThinkingBgt:  thinkingBgt,
 	})
 }
