@@ -28,6 +28,8 @@ type Input struct {
 	Tools        []agentic.ToolDefinition
 	MaxTokens    int
 	Temperature  *float64
+	ThinkingMode string
+	ThinkingBgt  int
 }
 
 // Decision is the output from a single model call.
@@ -40,21 +42,31 @@ type Decision struct {
 
 // Config controls an Anthropic client.
 type Config struct {
-	APIKey      string
-	Model       string
-	BaseURL     string
-	MaxTokens   int
-	Temperature *float64
-	HTTPClient  *http.Client
+	APIKey       string
+	Model        string
+	BaseURL      string
+	MaxTokens    int
+	Temperature  *float64
+	ThinkingMode string
+	ThinkingBgt  int
+	HTTPClient   *http.Client
 }
 
 // Client calls the Anthropic Messages API.
 type Client struct {
-	client      anthropic.Client
-	model       string
-	maxTokens   int
-	temperature *float64
+	client       anthropic.Client
+	model        string
+	maxTokens    int
+	temperature  *float64
+	thinkingMode string
+	thinkingBgt  int64
 }
+
+const (
+	thinkingModeAdaptive = "adaptive"
+	thinkingModeFixed    = "fixed"
+	thinkingModeOff      = "off"
+)
 
 // New constructs an Anthropic client from config.
 func New(cfg Config) (*Client, error) {
@@ -71,6 +83,11 @@ func New(cfg Config) (*Client, error) {
 	if maxTokens <= 0 {
 		maxTokens = 1024
 	}
+	thinkingMode := normalizeThinkingMode(cfg.ThinkingMode)
+	thinkingBgt := int64(cfg.ThinkingBgt)
+	if thinkingMode == thinkingModeFixed && thinkingBgt < 1024 {
+		thinkingBgt = 1024
+	}
 
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
 	if baseURL := strings.TrimSpace(cfg.BaseURL); baseURL != "" {
@@ -83,10 +100,12 @@ func New(cfg Config) (*Client, error) {
 	client := anthropic.NewClient(opts...)
 
 	return &Client{
-		client:      client,
-		model:       model,
-		maxTokens:   maxTokens,
-		temperature: cfg.Temperature,
+		client:       client,
+		model:        model,
+		maxTokens:    maxTokens,
+		temperature:  cfg.Temperature,
+		thinkingMode: thinkingMode,
+		thinkingBgt:  thinkingBgt,
 	}, nil
 }
 
@@ -111,13 +130,22 @@ func NewFromEnv() (*Client, error) {
 			temperature = &f
 		}
 	}
+	thinkingMode := envTrimmed("ANTHROPIC_THINKING_MODE")
+	thinkingBgt := 0
+	if v := envTrimmed("ANTHROPIC_THINKING_BUDGET_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			thinkingBgt = n
+		}
+	}
 
 	return New(Config{
-		APIKey:      apiKey,
-		Model:       model,
-		BaseURL:     envTrimmed("ANTHROPIC_BASE_URL"),
-		MaxTokens:   maxTokens,
-		Temperature: temperature,
+		APIKey:       apiKey,
+		Model:        model,
+		BaseURL:      envTrimmed("ANTHROPIC_BASE_URL"),
+		MaxTokens:    maxTokens,
+		Temperature:  temperature,
+		ThinkingMode: thinkingMode,
+		ThinkingBgt:  thinkingBgt,
 	})
 }
 
@@ -157,6 +185,8 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 	if temperature != nil {
 		req.Temperature = anthropic.Float(*temperature)
 	}
+	mode, budget := c.resolveThinking(input.ThinkingMode, input.ThinkingBgt)
+	applyThinkingConfig(&req, mode, budget)
 
 	msg, err := c.client.Messages.New(ctx, req)
 	if err != nil {
@@ -367,4 +397,52 @@ func toolResultContent(result agentic.ToolResult) (string, bool) {
 
 func envTrimmed(key string) string {
 	return strings.TrimSpace(os.Getenv(key))
+}
+
+func normalizeThinkingMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "off", "disabled", "none":
+		return thinkingModeOff
+	case "adaptive":
+		return thinkingModeAdaptive
+	case "fixed", "enabled":
+		return thinkingModeFixed
+	default:
+		return thinkingModeOff
+	}
+}
+
+func (c *Client) resolveThinking(modeOverride string, budgetOverride int) (string, int64) {
+	mode := c.thinkingMode
+	if strings.TrimSpace(modeOverride) != "" {
+		mode = normalizeThinkingMode(modeOverride)
+	}
+	budget := c.thinkingBgt
+	if budgetOverride > 0 {
+		budget = int64(budgetOverride)
+	}
+	if mode == thinkingModeFixed && budget < 1024 {
+		budget = 1024
+	}
+	return mode, budget
+}
+
+func applyThinkingConfig(req *anthropic.MessageNewParams, mode string, budget int64) {
+	if req == nil {
+		return
+	}
+	switch mode {
+	case thinkingModeOff:
+		disabled := anthropic.NewThinkingConfigDisabledParam()
+		req.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
+	case thinkingModeFixed:
+		fixedBudget := budget
+		if fixedBudget < 1024 {
+			fixedBudget = 1024
+		}
+		req.Thinking = anthropic.ThinkingConfigParamOfEnabled(fixedBudget)
+	default:
+		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
+		req.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
+	}
 }
