@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -214,8 +215,7 @@ func appendHistory(messages []anthropic.MessageParam, history []message.AgentMes
 					if id == "" {
 						id = result.Name
 					}
-					content, isError := toolResultContent(result)
-					blocks = append(blocks, anthropic.NewToolResultBlock(id, content, isError))
+					blocks = append(blocks, toolResultToBlock(result, id))
 				}
 			}
 			i-- // compensate for the outer loop increment
@@ -322,6 +322,37 @@ func decodeArgs(input json.RawMessage) any {
 		return map[string]any{}
 	}
 	return payload
+}
+
+func toolResultToBlock(result agentic.ToolResult, id string) anthropic.ContentBlockParamUnion {
+	content, isError := toolResultContent(result)
+	if len(result.InlineData) == 0 {
+		return anthropic.NewToolResultBlock(id, content, isError)
+	}
+
+	parts := make([]anthropic.ToolResultBlockParamContentUnion, 0, 1+len(result.InlineData))
+	parts = append(parts, anthropic.ToolResultBlockParamContentUnion{
+		OfText: &anthropic.TextBlockParam{Text: content},
+	})
+	for _, data := range result.InlineData {
+		parts = append(parts, anthropic.ToolResultBlockParamContentUnion{
+			OfImage: &anthropic.ImageBlockParam{
+				Source: anthropic.ImageBlockParamSourceUnion{
+					OfBase64: &anthropic.Base64ImageSourceParam{
+						Data:      base64.StdEncoding.EncodeToString(data.Data),
+						MediaType: anthropic.Base64ImageSourceMediaType(data.MIMEType),
+					},
+				},
+			},
+		})
+	}
+	return anthropic.ContentBlockParamUnion{
+		OfToolResult: &anthropic.ToolResultBlockParam{
+			ToolUseID: id,
+			Content:   parts,
+			IsError:   anthropic.Bool(isError),
+		},
+	}
 }
 
 func toolResultContent(result agentic.ToolResult) (string, bool) {

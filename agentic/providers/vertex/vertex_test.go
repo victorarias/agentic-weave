@@ -2,6 +2,7 @@ package vertex
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -743,5 +744,104 @@ func TestBuildRequestAddsUserMessageWhenProvided(t *testing.T) {
 	if lastContent.Role != "user" || lastContent.Parts[0].Text != "what next?" {
 		t.Errorf("expected last content to be user text 'what next?', got role=%q text=%q",
 			lastContent.Role, lastContent.Parts[0].Text)
+	}
+}
+
+func TestAppendHistoryToolResultWithInlineData(t *testing.T) {
+	imageBytes := []byte("fake-png-data")
+	history := []message.AgentMessage{
+		{
+			Role: message.RoleAssistant,
+			ToolCalls: []agentic.ToolCall{
+				{ID: "call-img", Name: "evaluate_image", Input: json.RawMessage(`{"ref":"img-1"}`)},
+			},
+		},
+		{
+			Role: message.RoleTool,
+			ToolResults: []agentic.ToolResult{
+				{
+					ID:     "call-img",
+					Name:   "evaluate_image",
+					Output: json.RawMessage(`"Here is the image for evaluation"`),
+					InlineData: []agentic.InlineData{
+						{MIMEType: "image/png", Data: imageBytes},
+					},
+				},
+			},
+		},
+	}
+
+	contents := appendHistory(nil, history)
+
+	// Find the tool result content
+	var toolContent *vertexContent
+	for i := range contents {
+		if contents[i].Role == "user" && len(contents[i].Parts) > 0 && contents[i].Parts[0].FunctionResponse != nil {
+			toolContent = &contents[i]
+			break
+		}
+	}
+	if toolContent == nil {
+		t.Fatal("expected a user content with function response")
+	}
+
+	if len(toolContent.Parts) != 2 {
+		t.Fatalf("expected 2 parts (functionResponse + inlineData), got %d", len(toolContent.Parts))
+	}
+
+	// First part: function response
+	if toolContent.Parts[0].FunctionResponse == nil {
+		t.Error("first part should be a function response")
+	}
+
+	// Second part: inline data with base64-encoded image
+	inlinePart := toolContent.Parts[1]
+	if inlinePart.InlineData == nil {
+		t.Fatal("second part should have inline data")
+	}
+	if inlinePart.InlineData.MIMEType != "image/png" {
+		t.Errorf("expected mimeType=image/png, got %q", inlinePart.InlineData.MIMEType)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(inlinePart.InlineData.Data)
+	if err != nil {
+		t.Fatalf("failed to decode base64 data: %v", err)
+	}
+	if string(decoded) != string(imageBytes) {
+		t.Errorf("decoded image data mismatch: got %q, want %q", decoded, imageBytes)
+	}
+}
+
+func TestAppendHistoryToolResultWithoutInlineData(t *testing.T) {
+	// Verify that tool results without inline data still produce a single-part response
+	history := []message.AgentMessage{
+		{
+			Role: message.RoleAssistant,
+			ToolCalls: []agentic.ToolCall{
+				{ID: "call-text", Name: "search", Input: json.RawMessage(`{}`)},
+			},
+		},
+		{
+			Role: message.RoleTool,
+			ToolResults: []agentic.ToolResult{
+				{ID: "call-text", Name: "search", Output: json.RawMessage(`"found 3 results"`)},
+			},
+		},
+	}
+
+	contents := appendHistory(nil, history)
+
+	var toolContent *vertexContent
+	for i := range contents {
+		if contents[i].Role == "user" && len(contents[i].Parts) > 0 && contents[i].Parts[0].FunctionResponse != nil {
+			toolContent = &contents[i]
+			break
+		}
+	}
+	if toolContent == nil {
+		t.Fatal("expected a user content with function response")
+	}
+
+	if len(toolContent.Parts) != 1 {
+		t.Errorf("expected 1 part (functionResponse only), got %d", len(toolContent.Parts))
 	}
 }

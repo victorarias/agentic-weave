@@ -3,6 +3,7 @@ package vertex
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -370,17 +371,26 @@ func appendHistory(contents []vertexContent, history []message.AgentMessage) []v
 			}
 
 		case message.RoleTool:
-			// Tool results become function responses
+			// Tool results become function responses, with optional inline data
 			for _, result := range msg.ToolResults {
 				response := singleToolResultPayload(result)
-				contents = append(contents, vertexContent{
-					Role: "user",
-					Parts: []vertexPart{{
-						FunctionResponse: &vertexFunctionResponse{
-							Name:     result.Name,
-							Response: response,
+				parts := []vertexPart{{
+					FunctionResponse: &vertexFunctionResponse{
+						Name:     result.Name,
+						Response: response,
+					},
+				}}
+				for _, data := range result.InlineData {
+					parts = append(parts, vertexPart{
+						InlineData: &vertexInlineData{
+							MIMEType: data.MIMEType,
+							Data:     base64.StdEncoding.EncodeToString(data.Data),
 						},
-					}},
+					})
+				}
+				contents = append(contents, vertexContent{
+					Role:  "user",
+					Parts: parts,
 				})
 			}
 
@@ -462,7 +472,13 @@ type vertexPart struct {
 	Thought          string                  `json:"thought,omitempty"`
 	FunctionCall     *vertexFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *vertexFunctionResponse `json:"functionResponse,omitempty"`
+	InlineData       *vertexInlineData       `json:"inlineData,omitempty"`
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
+}
+
+type vertexInlineData struct {
+	MIMEType string `json:"mimeType"`
+	Data     string `json:"data"` // base64-encoded
 }
 
 // UnmarshalJSON handles both camelCase (thoughtSignature) and snake_case
