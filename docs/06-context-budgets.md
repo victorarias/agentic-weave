@@ -182,6 +182,10 @@ type Decision struct {
 }
 ```
 
+For Anthropic integrations, `agentic/providers/anthropic` includes
+`NewStreamingCompactor(...)` which implements this interface and supports
+purpose-specific prompt profiles.
+
 The loop helper remains optional, but makes "mono-like" integration a few lines:
 
 ```go

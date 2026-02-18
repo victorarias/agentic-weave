@@ -62,3 +62,25 @@ fmt.Println(decision.Reply)
 
 - Tool calls are returned as `agentic.ToolCall` values with raw JSON input.
 - Tool results should be provided via `History` as `message.AgentMessage` entries.
+
+## History Compaction
+
+The provider also exposes a reusable streaming compactor that implements
+`budget.Compactor`:
+
+```go
+client, err := anthropic.NewFromEnv()
+if err != nil {
+    // handle config error
+}
+
+compactor := anthropic.NewStreamingCompactor(
+    client,
+    anthropic.StaticCompactionPromptProfile{
+        SystemPrompt: anthropic.DefaultCompactionSystemPrompt,
+    },
+)
+```
+
+Use this when wiring `budget.Manager` so compaction can reuse the same Anthropic
+streaming client while still keeping a purpose-specific compaction prompt.
