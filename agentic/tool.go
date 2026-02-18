@@ -39,12 +39,19 @@ type ToolCall struct {
 	ThoughtSignature string          `json:"thought_signature,omitempty"`
 }
 
+// InlineData carries binary content (e.g., images) alongside a tool result.
+type InlineData struct {
+	MIMEType string `json:"mime_type"`
+	Data     []byte `json:"data"`
+}
+
 // ToolResult is the tool execution output.
 type ToolResult struct {
-	ID     string          `json:"id,omitempty"`
-	Name   string          `json:"name"`
-	Output json.RawMessage `json:"output,omitempty"`
-	Error  *ToolError      `json:"error,omitempty"`
+	ID         string          `json:"id,omitempty"`
+	Name       string          `json:"name"`
+	Output     json.RawMessage `json:"output,omitempty"`
+	InlineData []InlineData    `json:"inline_data,omitempty"`
+	Error      *ToolError      `json:"error,omitempty"`
 }
 
 // ToolError is a normalized tool error payload.
