@@ -38,6 +38,19 @@ type Decision struct {
 	FinishReason string
 }
 
+// ErrNoCandidates is returned when the model response contains no candidates.
+var ErrNoCandidates = errors.New("vertex gemini: no candidates in response")
+
+// APIError represents an HTTP error from the Vertex AI API.
+type APIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("vertex gemini error: status %d: %s", e.StatusCode, e.Body)
+}
+
 // Config controls a Vertex Gemini client.
 type Config struct {
 	Project     string
@@ -135,8 +148,9 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
-// NewFromEnv builds a Vertex Gemini client from environment variables.
-func NewFromEnv() (*Client, error) {
+// ConfigFromEnv builds a Config from environment variables without creating a client.
+// This allows callers to override fields (e.g. Model) before calling New().
+func ConfigFromEnv() Config {
 	cfg := Config{
 		Project:  envTrimmed("VERTEX_PROJECT"),
 		Location: envTrimmed("VERTEX_LOCATION"),
@@ -154,7 +168,12 @@ func NewFromEnv() (*Client, error) {
 			cfg.MaxTokens = v
 		}
 	}
-	return New(cfg)
+	return cfg
+}
+
+// NewFromEnv builds a Vertex Gemini client from environment variables.
+func NewFromEnv() (*Client, error) {
+	return New(ConfigFromEnv())
 }
 
 func envTrimmed(key string) string {
@@ -203,7 +222,7 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := readResponseBody(resp)
-		return Decision{}, fmt.Errorf("vertex gemini error: status %d: %s", resp.StatusCode, body)
+		return Decision{}, &APIError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	var parsed vertexResponse
@@ -211,7 +230,7 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 		return Decision{}, err
 	}
 	if len(parsed.Candidates) == 0 {
-		return Decision{}, errors.New("vertex gemini: no candidates in response")
+		return Decision{}, ErrNoCandidates
 	}
 
 	parts := parsed.Candidates[0].Content.Parts
