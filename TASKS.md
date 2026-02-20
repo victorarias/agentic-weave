@@ -2,7 +2,7 @@
 
 This file tracks current work items and progress.
 
-## Implementation Plan: POC Families (first set)
+## Archived Plan: POC Families (first set, archived 2026-02-20)
 
 ### Family: tui-rendering (branch family: feat/poc-tui-*)
 - [ ] PR 1: Bubble Tea renderer + minimal TUI shell
@@ -139,6 +139,37 @@ This file tracks current work items and progress.
 
 ---
 
+### Family: pi-mono-eval (branch family: chore/pi-mono-*)
+- [x] Investigation: Remote control + PTY feasibility in pi-mono extensions
+  - Description: Assess whether pi can be remotely controlled and whether PTY-style interaction can be enabled on demand via extensions.
+  - Findings:
+    - RPC mode already provides headless remote control over stdin/stdout JSON protocol.
+    - Extensions can inject/queue user messages and intercept user bash commands.
+    - Extensions can delegate tool execution (including bash/read/write/edit/etc.) to remote backends via pluggable operations.
+    - Interactive-mode raw terminal input interception is available via `ctx.ui.onTerminalInput`; this is not available in RPC mode.
+    - Full interactive PTY takeover is possible in interactive mode by suspending TUI and inheriting stdio (existing example).
+
+---
+
+## Active Initiative: Remote Agent Control Requirements (branch family: feat/requirements-*)
+
+### Family: requirements-discovery
+- [ ] Interview: Operational and control-plane requirements
+  - Description: Collect exact requirements for autonomous agent-to-agent control, attach/detach semantics, live inspection, and session lifecycle.
+  - Output:
+    - [ ] `docs/coding-agent/requirements/01-control-plane.md`
+    - [ ] `docs/coding-agent/requirements/02-session-lifecycle.md`
+    - [ ] `docs/coding-agent/requirements/03-attach-and-observability.md`
+
+- [ ] Spec Draft: State machine + command protocol
+  - Description: Produce a concrete session state model and remote command protocol draft from interview answers.
+  - Depends on: Interview
+  - Output:
+    - [ ] `docs/coding-agent/requirements/04-state-machine.md`
+    - [ ] `docs/coding-agent/requirements/05-control-protocol.md`
+
+---
+
 ## Modules (new/updated)
 - New: `cmd/opencode-tui` (POC app)
 - New: `internal/render` (renderer abstraction + diff buffer)
@@ -157,6 +188,9 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-02-20 21:36: Archived `docs/coding-agent` to `docs/archived/coding-agent` before requirements interviews.
+- 2026-02-20 21:35: Archived prior POC implementation plan and opened active requirements-discovery initiative for remote agent control design.
+- 2026-02-20 21:34: Investigated `badlogic/pi-mono` extension + RPC architecture for remote-control/PTTY feasibility; cloned to `/tmp/pi-mono-investigate` and documented results.
 - 2026-01-27 21:40: Updated POC plan + docs to reflect branch-only tree and optional git checkpoint file sync.
 - 2026-01-27 21:02: Marked tui-design-plan complete; docs added under docs/coding-agent.
 - 2026-01-27 21:00: Pruned completed initiatives and history entries per cleanup request.
