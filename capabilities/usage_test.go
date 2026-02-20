@@ -31,3 +31,16 @@ func TestNormalizeUsage(t *testing.T) {
 		t.Fatalf("expected total to be 3, got %d", u.Total)
 	}
 }
+
+func TestNormalizeUsageWithCache(t *testing.T) {
+	u := NormalizeUsageWithCache(10, 2, 0, 6, 4)
+	if u.Total != 12 {
+		t.Fatalf("expected total to be 12, got %d", u.Total)
+	}
+	if u.CacheReadInput != 6 {
+		t.Fatalf("expected cache read tokens to be 6, got %d", u.CacheReadInput)
+	}
+	if u.CacheCreationInput != 4 {
+		t.Fatalf("expected cache creation tokens to be 4, got %d", u.CacheCreationInput)
+	}
+}

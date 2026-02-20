@@ -2,9 +2,11 @@ package usage
 
 // Usage captures token usage for a single model response.
 type Usage struct {
-	Input  int
-	Output int
-	Total  int
+	Input              int
+	Output             int
+	Total              int
+	CacheReadInput     int
+	CacheCreationInput int
 }
 
 // StopReason describes why a generation stopped.

@@ -194,7 +194,13 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 	}
 
 	reply, calls := parseResponse(msg)
-	usageValue := capabilities.NormalizeUsage(int(msg.Usage.InputTokens), int(msg.Usage.OutputTokens), 0)
+	usageValue := capabilities.NormalizeUsageWithCache(
+		int(msg.Usage.InputTokens),
+		int(msg.Usage.OutputTokens),
+		0,
+		int(msg.Usage.CacheReadInputTokens),
+		int(msg.Usage.CacheCreationInputTokens),
+	)
 
 	return Decision{
 		Reply:      reply,

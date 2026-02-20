@@ -29,3 +29,14 @@ func StopReasonFromFinish(reason string) usage.StopReason {
 func NormalizeUsage(input, output, total int) usage.Usage {
 	return usage.Normalize(usage.Usage{Input: input, Output: output, Total: total})
 }
+
+// NormalizeUsageWithCache ensures total tokens are populated and carries cache usage details.
+func NormalizeUsageWithCache(input, output, total, cacheReadInput, cacheCreationInput int) usage.Usage {
+	return usage.Normalize(usage.Usage{
+		Input:              input,
+		Output:             output,
+		Total:              total,
+		CacheReadInput:     cacheReadInput,
+		CacheCreationInput: cacheCreationInput,
+	})
+}
