@@ -162,7 +162,13 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 
 			case "message_delta":
 				stopReason = string(ev.Delta.StopReason)
-				u := capabilities.NormalizeUsage(int(ev.Usage.InputTokens), int(ev.Usage.OutputTokens), 0)
+				u := capabilities.NormalizeUsageWithCache(
+					int(ev.Usage.InputTokens),
+					int(ev.Usage.OutputTokens),
+					0,
+					int(ev.Usage.CacheReadInputTokens),
+					int(ev.Usage.CacheCreationInputTokens),
+				)
 				usageValue = &u
 			}
 		}
