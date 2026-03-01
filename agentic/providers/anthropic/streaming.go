@@ -71,6 +71,9 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 	if len(input.Tools) > 0 {
 		req.Tools = toolDefsToAnthropic(input.Tools)
 	}
+	if err := applyToolChoice(&req, input.ToolChoice); err != nil {
+		return nil, err
+	}
 
 	if system := strings.TrimSpace(input.SystemPrompt); system != "" {
 		req.System = []anthropic.TextBlockParam{{Text: system}}

@@ -26,10 +26,25 @@ type Input struct {
 	UserMessage  string
 	History      []message.AgentMessage
 	Tools        []agentic.ToolDefinition
+	ToolChoice   *ToolChoice
 	MaxTokens    int
 	Temperature  *float64
 	ThinkingMode string
 	ThinkingBgt  int
+}
+
+// ToolChoice controls Anthropic tool selection behavior.
+//
+// Mode values:
+//   - "auto" (default): model chooses whether to call a tool.
+//   - "any": model must call at least one tool.
+//   - "none": model must not call tools.
+//   - "tool": model must call the specific tool in Name.
+//
+// Name is required when Mode is "tool".
+type ToolChoice struct {
+	Mode string
+	Name string
 }
 
 // Decision is the output from a single model call.
@@ -166,6 +181,9 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 
 	if len(input.Tools) > 0 {
 		req.Tools = toolDefsToAnthropic(input.Tools)
+	}
+	if err := applyToolChoice(&req, input.ToolChoice); err != nil {
+		return Decision{}, err
 	}
 
 	if system := strings.TrimSpace(input.SystemPrompt); system != "" {
@@ -399,6 +417,31 @@ func toolResultContent(result agentic.ToolResult) (string, bool) {
 		return "null", false
 	}
 	return string(result.Output), false
+}
+
+func applyToolChoice(req *anthropic.MessageNewParams, choice *ToolChoice) error {
+	if req == nil || choice == nil {
+		return nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(choice.Mode))
+	switch mode {
+	case "", "auto":
+		req.ToolChoice = anthropic.ToolChoiceUnionParam{OfAuto: &anthropic.ToolChoiceAutoParam{Type: "auto"}}
+	case "any":
+		req.ToolChoice = anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{Type: "any"}}
+	case "none":
+		none := anthropic.NewToolChoiceNoneParam()
+		req.ToolChoice = anthropic.ToolChoiceUnionParam{OfNone: &none}
+	case "tool":
+		name := strings.TrimSpace(choice.Name)
+		if name == "" {
+			return errors.New("anthropic: tool choice mode 'tool' requires a tool name")
+		}
+		req.ToolChoice = anthropic.ToolChoiceParamOfTool(name)
+	default:
+		return fmt.Errorf("anthropic: unsupported tool choice mode %q", choice.Mode)
+	}
+	return nil
 }
 
 func envTrimmed(key string) string {
