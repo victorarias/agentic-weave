@@ -22,15 +22,16 @@ import (
 // Input represents a single decision request to Anthropic Claude.
 // Tool calls and results should be included in History as AgentMessage entries.
 type Input struct {
-	SystemPrompt string
-	UserMessage  string
-	History      []message.AgentMessage
-	Tools        []agentic.ToolDefinition
-	ToolChoice   *ToolChoice
-	MaxTokens    int
-	Temperature  *float64
-	ThinkingMode string
-	ThinkingBgt  int
+	SystemPrompt     string
+	UserMessage      string
+	History          []message.AgentMessage
+	Tools            []agentic.ToolDefinition
+	ToolChoice       *ToolChoice
+	OutputJSONSchema json.RawMessage
+	MaxTokens        int
+	Temperature      *float64
+	ThinkingMode     string
+	ThinkingBgt      int
 }
 
 // ToolChoice controls Anthropic tool selection behavior.
@@ -183,6 +184,9 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 		req.Tools = toolDefsToAnthropic(input.Tools)
 	}
 	if err := applyToolChoice(&req, input.ToolChoice); err != nil {
+		return Decision{}, err
+	}
+	if err := applyOutputJSONSchema(&req, input.OutputJSONSchema); err != nil {
 		return Decision{}, err
 	}
 
@@ -440,6 +444,25 @@ func applyToolChoice(req *anthropic.MessageNewParams, choice *ToolChoice) error 
 		req.ToolChoice = anthropic.ToolChoiceParamOfTool(name)
 	default:
 		return fmt.Errorf("anthropic: unsupported tool choice mode %q", choice.Mode)
+	}
+	return nil
+}
+
+func applyOutputJSONSchema(req *anthropic.MessageNewParams, schemaRaw json.RawMessage) error {
+	if req == nil || len(schemaRaw) == 0 {
+		return nil
+	}
+
+	var schema map[string]any
+	if err := json.Unmarshal(schemaRaw, &schema); err != nil {
+		return fmt.Errorf("anthropic: invalid output json schema: %w", err)
+	}
+	if len(schema) == 0 {
+		return errors.New("anthropic: output json schema is empty")
+	}
+
+	req.OutputConfig = anthropic.OutputConfigParam{
+		Format: anthropic.JSONOutputFormatParam{Schema: schema},
 	}
 	return nil
 }
