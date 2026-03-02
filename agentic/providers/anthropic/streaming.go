@@ -82,6 +82,8 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 		req.System = []anthropic.TextBlockParam{{Text: system}}
 	}
 
+	applyPromptCaching(&req, c.cacheMode)
+
 	if input.MaxTokens > 0 {
 		req.MaxTokens = int64(input.MaxTokens)
 	}

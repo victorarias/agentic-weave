@@ -6,7 +6,7 @@ toolchain go1.24.12
 
 require (
 	github.com/alecthomas/chroma/v2 v2.15.0
-	github.com/victorarias/agentic-weave v0.0.0-20260211134204-4ade58884cb3
+	github.com/victorarias/agentic-weave v0.0.0-20260302160847-1272c963be47
 	github.com/yuin/gopher-lua v1.1.1
 	golang.org/x/term v0.34.0
 )
@@ -15,7 +15,7 @@ require (
 	cloud.google.com/go/auth v0.7.2 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.3 // indirect
 	cloud.google.com/go/compute/metadata v0.5.0 // indirect
-	github.com/anthropics/anthropic-sdk-go v1.21.0 // indirect
+	github.com/anthropics/anthropic-sdk-go v1.26.0 // indirect
 	github.com/dlclark/regexp2 v1.11.4 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect

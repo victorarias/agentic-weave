@@ -62,6 +62,7 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 		temperature:  cfg.Temperature,
 		thinkingMode: thinkingMode,
 		thinkingBgt:  thinkingBgt,
+		cacheMode:    CacheModeExplicit,
 	}, nil
 }
 
