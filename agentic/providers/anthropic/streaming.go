@@ -63,10 +63,9 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 	}
 
 	req := anthropic.MessageNewParams{
-		Model:        anthropic.Model(c.model),
-		MaxTokens:    int64(c.maxTokens),
-		Messages:     messages,
-		CacheControl: anthropic.NewCacheControlEphemeralParam(),
+		Model:     anthropic.Model(c.model),
+		MaxTokens: int64(c.maxTokens),
+		Messages:  messages,
 	}
 
 	if len(input.Tools) > 0 {
@@ -82,6 +81,8 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 	if system := strings.TrimSpace(input.SystemPrompt); system != "" {
 		req.System = []anthropic.TextBlockParam{{Text: system}}
 	}
+
+	applyPromptCaching(&req, c.cacheMode)
 
 	if input.MaxTokens > 0 {
 		req.MaxTokens = int64(input.MaxTokens)

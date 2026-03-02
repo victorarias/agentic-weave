@@ -68,6 +68,27 @@ type Config struct {
 	HTTPClient   *http.Client
 }
 
+// CacheMode controls how prompt caching breakpoints are applied.
+type CacheMode int
+
+const (
+	// CacheModeAutomatic uses the top-level cache_control field introduced in
+	// SDK v1.26. The API places a single breakpoint on the last cacheable block
+	// and advances it automatically as conversations grow.
+	//
+	// Supported on the Claude API and Azure AI Foundry.
+	// NOT yet supported on Amazon Bedrock or Google Vertex AI.
+	CacheModeAutomatic CacheMode = iota
+
+	// CacheModeExplicit sets cache_control on individual content blocks:
+	//   1. Last system prompt block
+	//   2. Last tool definition
+	//   3. Last content block in the final history message
+	//
+	// Supported on all platforms including Vertex AI and Bedrock.
+	CacheModeExplicit
+)
+
 // Client calls the Anthropic Messages API.
 type Client struct {
 	client       anthropic.Client
@@ -76,6 +97,7 @@ type Client struct {
 	temperature  *float64
 	thinkingMode string
 	thinkingBgt  int64
+	cacheMode    CacheMode
 }
 
 const (
@@ -122,6 +144,7 @@ func New(cfg Config) (*Client, error) {
 		temperature:  cfg.Temperature,
 		thinkingMode: thinkingMode,
 		thinkingBgt:  thinkingBgt,
+		cacheMode:    CacheModeAutomatic,
 	}, nil
 }
 
@@ -175,10 +198,9 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 	}
 
 	req := anthropic.MessageNewParams{
-		Model:        anthropic.Model(c.model),
-		MaxTokens:    int64(c.maxTokens),
-		Messages:     messages,
-		CacheControl: anthropic.NewCacheControlEphemeralParam(),
+		Model:     anthropic.Model(c.model),
+		MaxTokens: int64(c.maxTokens),
+		Messages:  messages,
 	}
 
 	if len(input.Tools) > 0 {
@@ -196,6 +218,8 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 			Text: system,
 		}}
 	}
+
+	applyPromptCaching(&req, c.cacheMode)
 
 	if input.MaxTokens > 0 {
 		req.MaxTokens = int64(input.MaxTokens)
