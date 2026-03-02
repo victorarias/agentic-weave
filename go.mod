@@ -5,7 +5,7 @@ go 1.24.0
 toolchain go1.24.12
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.21.0
+	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/joho/godotenv v1.5.1
 	golang.org/x/oauth2 v0.34.0
 )

@@ -63,9 +63,10 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 	}
 
 	req := anthropic.MessageNewParams{
-		Model:     anthropic.Model(c.model),
-		MaxTokens: int64(c.maxTokens),
-		Messages:  messages,
+		Model:        anthropic.Model(c.model),
+		MaxTokens:    int64(c.maxTokens),
+		Messages:     messages,
+		CacheControl: anthropic.NewCacheControlEphemeralParam(),
 	}
 
 	if len(input.Tools) > 0 {
