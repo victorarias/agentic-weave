@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"testing"
 
 	anthropicapi "github.com/anthropics/anthropic-sdk-go"
@@ -35,6 +36,39 @@ func TestApplyToolChoice(t *testing.T) {
 		}
 		if req.ToolChoice.OfTool.Name != "report" {
 			t.Fatalf("expected tool name report, got %q", req.ToolChoice.OfTool.Name)
+		}
+	})
+}
+
+func TestApplyOutputJSONSchema(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil schema keeps default", func(t *testing.T) {
+		req := anthropicapi.MessageNewParams{}
+		if err := applyOutputJSONSchema(&req, nil); err != nil {
+			t.Fatalf("applyOutputJSONSchema returned error: %v", err)
+		}
+	})
+
+	t.Run("invalid schema returns error", func(t *testing.T) {
+		req := anthropicapi.MessageNewParams{}
+		err := applyOutputJSONSchema(&req, json.RawMessage(`{"type":"object"`))
+		if err == nil {
+			t.Fatalf("expected invalid schema error")
+		}
+	})
+
+	t.Run("valid schema sets output config", func(t *testing.T) {
+		req := anthropicapi.MessageNewParams{}
+		err := applyOutputJSONSchema(&req, json.RawMessage(`{"type":"object","required":["x"],"properties":{"x":{"type":"string"}}}`))
+		if err != nil {
+			t.Fatalf("applyOutputJSONSchema returned error: %v", err)
+		}
+		if req.OutputConfig.Format.Schema == nil {
+			t.Fatalf("expected output json schema to be set")
+		}
+		if req.OutputConfig.Format.Schema["type"] != "object" {
+			t.Fatalf("expected schema type object, got %#v", req.OutputConfig.Format.Schema["type"])
 		}
 	})
 }
