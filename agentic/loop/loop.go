@@ -70,6 +70,7 @@ type Result struct {
 	Usage       *usage.Usage
 	StopReason  usage.StopReason
 	Exhausted   bool // true when the loop exited because it hit MaxTurns
+	Steps       int  // number of LLM Decide() calls in this turn
 }
 
 // Runner executes a tool-aware loop with optional compaction and truncation.
@@ -170,6 +171,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	// Extract tool calls and results from history for the current turn
 	toolCalls, toolResults := extractToolsFromHistory(historyMessages)
 
+	var aggregatedUsage usage.Usage
 	turn := 0
 	runID := time.Now().UnixNano()
 	for {
@@ -185,6 +187,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
+
+		aggregatedUsage = usage.Add(aggregatedUsage, decision.Usage)
 
 		for i := range decision.ToolCalls {
 			if decision.ToolCalls[i].ID == "" {
@@ -206,9 +210,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				Summary:     summary,
 				ToolCalls:   toolCalls,
 				ToolResults: toolResults,
-				Usage:       decision.Usage,
+				Usage:       &aggregatedUsage,
 				StopReason:  decision.StopReason,
 				Exhausted:   false,
+				Steps:       turn + 1,
 			}, nil
 		}
 
@@ -222,9 +227,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				Summary:     summary,
 				ToolCalls:   append(toolCalls, decision.ToolCalls...),
 				ToolResults: toolResults,
-				Usage:       decision.Usage,
+				Usage:       &aggregatedUsage,
 				StopReason:  decision.StopReason,
 				Exhausted:   true,
+				Steps:       turn + 1,
 			}, nil
 		}
 

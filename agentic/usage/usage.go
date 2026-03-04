@@ -9,6 +9,20 @@ type Usage struct {
 	CacheCreationInput int
 }
 
+// Add combines two Usage values by summing all token counts.
+// If b is nil, a is returned unchanged.
+func Add(a Usage, b *Usage) Usage {
+	if b == nil {
+		return a
+	}
+	return Normalize(Usage{
+		Input:              a.Input + b.Input,
+		Output:             a.Output + b.Output,
+		CacheReadInput:     a.CacheReadInput + b.CacheReadInput,
+		CacheCreationInput: a.CacheCreationInput + b.CacheCreationInput,
+	})
+}
+
 // StopReason describes why a generation stopped.
 type StopReason string
 

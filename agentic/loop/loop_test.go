@@ -13,6 +13,7 @@ import (
 	"github.com/victorarias/agentic-weave/agentic/history"
 	"github.com/victorarias/agentic-weave/agentic/message"
 	"github.com/victorarias/agentic-weave/agentic/truncate"
+	"github.com/victorarias/agentic-weave/agentic/usage"
 )
 
 type stepDecider struct {
@@ -513,4 +514,108 @@ func (s *failingReplaceStore) Load(_ context.Context) ([]message.AgentMessage, e
 
 func (s *failingReplaceStore) Replace(_ context.Context, _ []message.AgentMessage) error {
 	return s.err
+}
+
+// usageTrackingDecider returns per-step usage and completes after one tool call.
+type usageTrackingDecider struct {
+	calls int
+}
+
+func (d *usageTrackingDecider) Decide(_ context.Context, _ Input) (Decision, error) {
+	d.calls++
+	switch d.calls {
+	case 1:
+		// First call: tool call with cache write (new cache)
+		return Decision{
+			ToolCalls: []agentic.ToolCall{{
+				Name:  "echo",
+				Input: json.RawMessage(`{"text":"step1"}`),
+			}},
+			Usage: &usage.Usage{
+				Input: 50, Output: 10,
+				CacheReadInput: 0, CacheCreationInput: 500,
+			},
+		}, nil
+	case 2:
+		// Second call: tool call with cache hit
+		return Decision{
+			ToolCalls: []agentic.ToolCall{{
+				Name:  "echo",
+				Input: json.RawMessage(`{"text":"step2"}`),
+			}},
+			Usage: &usage.Usage{
+				Input: 5, Output: 15,
+				CacheReadInput: 500, CacheCreationInput: 10,
+			},
+		}, nil
+	default:
+		// Final reply with cache hit
+		return Decision{
+			Reply: "done",
+			Usage: &usage.Usage{
+				Input: 3, Output: 20,
+				CacheReadInput: 510, CacheCreationInput: 5,
+			},
+		}, nil
+	}
+}
+
+func TestRunAggregatesUsageAcrossSteps(t *testing.T) {
+	runner := New(Config{
+		Decider:  &usageTrackingDecider{},
+		Executor: stubExecutor{},
+		MaxTurns: 10,
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reply != "done" {
+		t.Fatalf("expected reply 'done', got %q", result.Reply)
+	}
+
+	// Verify Steps count: 3 Decide() calls (tool, tool, reply)
+	if result.Steps != 3 {
+		t.Fatalf("expected Steps=3, got %d", result.Steps)
+	}
+
+	// Verify aggregated usage: sum of all 3 steps
+	u := result.Usage
+	if u == nil {
+		t.Fatal("expected non-nil Usage")
+	}
+	if u.Input != 58 {
+		t.Fatalf("expected aggregated Input=58, got %d", u.Input)
+	}
+	if u.Output != 45 {
+		t.Fatalf("expected aggregated Output=45, got %d", u.Output)
+	}
+	if u.CacheReadInput != 1010 {
+		t.Fatalf("expected aggregated CacheReadInput=1010, got %d", u.CacheReadInput)
+	}
+	if u.CacheCreationInput != 515 {
+		t.Fatalf("expected aggregated CacheCreationInput=515, got %d", u.CacheCreationInput)
+	}
+	if u.Total != 103 {
+		t.Fatalf("expected aggregated Total=103, got %d", u.Total)
+	}
+}
+
+func TestRunSingleStepUsage(t *testing.T) {
+	// A single-step reply (no tool calls) should still return correct usage.
+	decider := &replyDecider{reply: "hello"}
+	runner := New(Config{Decider: decider})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Steps != 1 {
+		t.Fatalf("expected Steps=1, got %d", result.Steps)
+	}
+	// Usage comes from the decider which returns nil, so aggregated is zero-value.
+	if result.Usage == nil {
+		t.Fatal("expected non-nil Usage")
+	}
 }
