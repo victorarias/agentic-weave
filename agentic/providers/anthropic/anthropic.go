@@ -66,6 +66,13 @@ type Config struct {
 	ThinkingMode string
 	ThinkingBgt  int
 	HTTPClient   *http.Client
+
+	// CacheTTL sets the time-to-live for prompt cache breakpoints.
+	// Valid values: "" (default 5m), "5m", "1h".
+	// The 1h TTL costs more per cache write but keeps entries cached
+	// longer, which reduces misses for conversations with longer
+	// inter-turn gaps.
+	CacheTTL string
 }
 
 // CacheMode controls how prompt caching breakpoints are applied.
@@ -98,6 +105,7 @@ type Client struct {
 	thinkingMode string
 	thinkingBgt  int64
 	cacheMode    CacheMode
+	cacheTTL     anthropic.CacheControlEphemeralTTL
 }
 
 const (
@@ -145,6 +153,7 @@ func New(cfg Config) (*Client, error) {
 		thinkingMode: thinkingMode,
 		thinkingBgt:  thinkingBgt,
 		cacheMode:    CacheModeAutomatic,
+		cacheTTL:     parseCacheTTL(cfg.CacheTTL),
 	}, nil
 }
 
@@ -185,6 +194,7 @@ func NewFromEnv() (*Client, error) {
 		Temperature:  temperature,
 		ThinkingMode: thinkingMode,
 		ThinkingBgt:  thinkingBgt,
+		CacheTTL:     envTrimmed("ANTHROPIC_CACHE_TTL"),
 	})
 }
 
@@ -219,7 +229,7 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 		}}
 	}
 
-	applyPromptCaching(&req, c.cacheMode)
+	applyPromptCaching(&req, c.cacheMode, c.cacheTTL)
 
 	if input.MaxTokens > 0 {
 		req.MaxTokens = int64(input.MaxTokens)
@@ -494,6 +504,20 @@ func applyOutputJSONSchema(req *anthropic.MessageNewParams, schemaRaw json.RawMe
 
 func envTrimmed(key string) string {
 	return strings.TrimSpace(os.Getenv(key))
+}
+
+// parseCacheTTL normalises a TTL string into an SDK constant.
+// An empty string means "use API default" (5 minutes).
+func parseCacheTTL(raw string) anthropic.CacheControlEphemeralTTL {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1h":
+		return anthropic.CacheControlEphemeralTTLTTL1h
+	case "5m":
+		return anthropic.CacheControlEphemeralTTLTTL5m
+	default:
+		// Empty → omitzero → API default (5m).
+		return ""
+	}
 }
 
 func normalizeThinkingMode(mode string) string {
