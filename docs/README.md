@@ -10,3 +10,4 @@ Start here:
 - `06-context-budgets.md`
 - `07-vertex-provider.md`
 - `08-anthropic-provider.md`
+- `09-hodor-pr-review.md`
