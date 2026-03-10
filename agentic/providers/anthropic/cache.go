@@ -2,8 +2,17 @@ package anthropic
 
 import "github.com/anthropics/anthropic-sdk-go"
 
+// newCacheControl returns a CacheControlEphemeralParam with the given TTL.
+// An empty ttl means "use API default" (5 minutes) via omitzero.
+func newCacheControl(ttl anthropic.CacheControlEphemeralTTL) anthropic.CacheControlEphemeralParam {
+	return anthropic.CacheControlEphemeralParam{
+		Type: "ephemeral",
+		TTL:  ttl,
+	}
+}
+
 // applyPromptCaching sets cache breakpoints on the request according to the
-// client's configured CacheMode.
+// client's configured CacheMode and TTL.
 //
 // CacheModeAutomatic: sets the top-level CacheControl field. The API places a
 // single breakpoint on the last cacheable block and advances it automatically
@@ -15,15 +24,15 @@ import "github.com/anthropics/anthropic-sdk-go"
 //  3. Last content block in the final message
 //
 // Supported on all platforms including Google Vertex AI and Amazon Bedrock.
-func applyPromptCaching(req *anthropic.MessageNewParams, mode CacheMode) {
+func applyPromptCaching(req *anthropic.MessageNewParams, mode CacheMode, ttl anthropic.CacheControlEphemeralTTL) {
 	if req == nil {
 		return
 	}
 	switch mode {
 	case CacheModeAutomatic:
-		req.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		req.CacheControl = newCacheControl(ttl)
 	case CacheModeExplicit:
-		applyExplicitCacheBreakpoints(req)
+		applyExplicitCacheBreakpoints(req, ttl)
 	}
 }
 
@@ -33,8 +42,8 @@ func applyPromptCaching(req *anthropic.MessageNewParams, mode CacheMode) {
 //  1. Last system prompt block
 //  2. Last tool definition
 //  3. Last content block in the final message
-func applyExplicitCacheBreakpoints(req *anthropic.MessageNewParams) {
-	cc := anthropic.NewCacheControlEphemeralParam()
+func applyExplicitCacheBreakpoints(req *anthropic.MessageNewParams, ttl anthropic.CacheControlEphemeralTTL) {
+	cc := newCacheControl(ttl)
 
 	// 1. Last system prompt block.
 	if n := len(req.System); n > 0 {

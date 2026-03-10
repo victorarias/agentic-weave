@@ -19,6 +19,10 @@ type VertexConfig struct {
 	Temperature  *float64
 	ThinkingMode string
 	ThinkingBgt  int
+
+	// CacheTTL sets the time-to-live for prompt cache breakpoints.
+	// Valid values: "" (default 5m), "5m", "1h".
+	CacheTTL string
 }
 
 // NewVertex constructs an Anthropic client that uses Vertex AI as the backend.
@@ -63,6 +67,7 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 		thinkingMode: thinkingMode,
 		thinkingBgt:  thinkingBgt,
 		cacheMode:    CacheModeExplicit,
+		cacheTTL:     parseCacheTTL(cfg.CacheTTL),
 	}, nil
 }
 
@@ -107,5 +112,6 @@ func NewFromVertexEnv() (*Client, error) {
 		Temperature:  temperature,
 		ThinkingMode: thinkingMode,
 		ThinkingBgt:  thinkingBgt,
+		CacheTTL:     envTrimmed("ANTHROPIC_CACHE_TTL"),
 	})
 }
