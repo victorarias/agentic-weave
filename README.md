@@ -24,6 +24,7 @@ The sum is 42.
 - `docs/06-context-budgets.md` — design for optional context budgets + compaction
 - `docs/07-vertex-provider.md` — Vertex Gemini provider
 - `docs/08-anthropic-provider.md` — Anthropic Claude provider
+- `docs/09-hodor-pr-review.md` — advisory PR reviews with Hodor on Vertex AI Gemini 3 Flash Preview
 
 ## Examples
 - `examples/basic` — streaming agent loop

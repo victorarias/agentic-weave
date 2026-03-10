@@ -170,6 +170,19 @@ This file tracks current work items and progress.
 
 ---
 
+## Active Initiative: PR Review Automation (branch family: chore/hodor-review-*)
+
+### Family: hodor-pr-review
+- [x] Workflow: Hodor PR review via Vertex AI Gemini 3 Flash Preview
+  - Description: Replace the always-on Claude review workflow with Hodor, authenticated through Google Cloud, and keep the review advisory.
+  - Output:
+    - [x] `.github/workflows/hodor-review.yml`
+    - [x] `.github/hodor/v0.3.4-google-vertex.patch`
+    - [x] `.hodor/skills/hodor-review/SKILL.md`
+    - [x] `docs/09-hodor-pr-review.md`
+
+---
+
 ## Modules (new/updated)
 - New: `cmd/opencode-tui` (POC app)
 - New: `internal/render` (renderer abstraction + diff buffer)
@@ -188,6 +201,10 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-10 19:23: Mirrored `attn` secret naming in the Hodor workflow (`VERTEX_AI_SA`, `GOOGLE_CLOUD_PROJECT`) and defaulted `GOOGLE_CLOUD_LOCATION` to `global`.
+- 2026-03-10 19:19: Hardened Hodor workflow to skip fork PRs, moved review guidance into tracked `.hodor/skills`, and removed the always-on Claude review workflow.
+- 2026-03-10 19:15: Added advisory Hodor PR review workflow on GitHub Actions using Vertex AI `google-vertex/gemini-3-flash-preview`, plus a local upstream patch for Google/Vertex model parsing.
+- 2026-03-10 19:14: Added repository-specific Hodor review skill and documentation for Google Cloud auth/setup.
 - 2026-02-20 21:36: Archived `docs/coding-agent` to `docs/archived/coding-agent` before requirements interviews.
 - 2026-02-20 21:35: Archived prior POC implementation plan and opened active requirements-discovery initiative for remote agent control design.
 - 2026-02-20 21:34: Investigated `badlogic/pi-mono` extension + RPC architecture for remote-control/PTTY feasibility; cloned to `/tmp/pi-mono-investigate` and documented results.
