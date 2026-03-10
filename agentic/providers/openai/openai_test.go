@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/victorarias/agentic-weave/agentic"
@@ -62,6 +63,53 @@ func TestToolDefsToOpenAI(t *testing.T) {
 	}
 }
 
+func TestResponseFormatFromSchema_InvalidSchema(t *testing.T) {
+	_, err := responseFormatFromSchema([]byte(`{"type":`))
+	if err == nil {
+		t.Fatal("expected error for invalid schema")
+	}
+}
+
+func TestEmitToolUseEvents_PreservesOrderAndFallbackIDs(t *testing.T) {
+	events := make(chan providers.StreamEvent, 4)
+	toolAccums := map[int64]*toolAccum{
+		2: {name: "second", argsJSON: stringsBuilder(`{"b":2}`)},
+		1: {name: "first", argsJSON: stringsBuilder(`{"a":1}`)},
+	}
+	order := []int64{1, 2}
+
+	if err := emitToolUseEvents(toolAccums, order, events); err != nil {
+		t.Fatalf("emitToolUseEvents returned error: %v", err)
+	}
+	close(events)
+
+	var calls []agentic.ToolCall
+	for event := range events {
+		toolEvent, ok := event.(providers.ToolUseEvent)
+		if !ok {
+			t.Fatalf("unexpected event type %T", event)
+		}
+		calls = append(calls, toolEvent.Call)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(calls))
+	}
+	if calls[0].Name != "first" || calls[0].ID != "tool_call_1" {
+		t.Fatalf("unexpected first call: %+v", calls[0])
+	}
+	if calls[1].Name != "second" || calls[1].ID != "tool_call_2" {
+		t.Fatalf("unexpected second call: %+v", calls[1])
+	}
+}
+
+func TestEmitToolUseEvents_InvalidJSON(t *testing.T) {
+	events := make(chan providers.StreamEvent, 1)
+	toolAccums := map[int64]*toolAccum{0: {name: "bad", argsJSON: stringsBuilder(`{"a":`)}}
+	if err := emitToolUseEvents(toolAccums, []int64{0}, events); err == nil {
+		t.Fatal("expected error for invalid json")
+	}
+}
+
 func TestNormalizeStopReason(t *testing.T) {
 	tests := []struct {
 		input, expected string
@@ -96,6 +144,12 @@ func TestNormalizeReasoningEffort(t *testing.T) {
 			t.Errorf("normalizeReasoningEffort(%q) = %q, want %q", tc.input, got, tc.expected)
 		}
 	}
+}
+
+func stringsBuilder(v string) strings.Builder {
+	var b strings.Builder
+	b.WriteString(v)
+	return b
 }
 
 // Verify interface compliance at compile time.

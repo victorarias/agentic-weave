@@ -42,6 +42,12 @@ type Client struct {
 	reasoningEffort shared.ReasoningEffort
 }
 
+type toolAccum struct {
+	id       string
+	name     string
+	argsJSON strings.Builder
+}
+
 // New constructs an OpenAI client from config.
 func New(cfg Config) (*Client, error) {
 	apiKey := strings.TrimSpace(cfg.APIKey)
@@ -114,18 +120,11 @@ func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan prov
 
 	// Structured output.
 	if len(input.OutputJSONSchema) > 0 {
-		var schema map[string]any
-		if err := json.Unmarshal(input.OutputJSONSchema, &schema); err == nil && len(schema) > 0 {
-			params.ResponseFormat = oai.ChatCompletionNewParamsResponseFormatUnion{
-				OfJSONSchema: &oai.ResponseFormatJSONSchemaParam{
-					JSONSchema: oai.ResponseFormatJSONSchemaJSONSchemaParam{
-						Name:   "output",
-						Schema: schema,
-						Strict: oai.Bool(true),
-					},
-				},
-			}
+		responseFormat, err := responseFormatFromSchema(input.OutputJSONSchema)
+		if err != nil {
+			return nil, err
 		}
+		params.ResponseFormat = responseFormat
 	}
 
 	// Request usage in stream.
@@ -148,12 +147,8 @@ func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan prov
 func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk], events chan<- providers.StreamEvent) {
 	// Tool call accumulator: OpenAI streams tool calls in deltas
 	// identified by index, so we must reassemble them.
-	type toolAccum struct {
-		id       string
-		name     string
-		argsJSON strings.Builder
-	}
 	toolAccums := map[int64]*toolAccum{}
+	toolOrder := make([]int64, 0)
 
 	var (
 		finishReason string
@@ -186,17 +181,16 @@ func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk]
 			finishReason = choice.FinishReason
 		}
 
-		// Text delta.
 		if choice.Delta.Content != "" {
 			events <- providers.TextDeltaEvent{Delta: choice.Delta.Content}
 		}
 
-		// Tool call deltas.
 		for _, tc := range choice.Delta.ToolCalls {
 			accum, ok := toolAccums[tc.Index]
 			if !ok {
 				accum = &toolAccum{}
 				toolAccums[tc.Index] = accum
+				toolOrder = append(toolOrder, tc.Index)
 			}
 			if tc.ID != "" {
 				accum.id = tc.ID
@@ -209,24 +203,13 @@ func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk]
 			}
 		}
 
-		// When we get finish_reason="tool_calls", emit all accumulated tool calls.
 		if choice.FinishReason == "tool_calls" {
-			for _, accum := range toolAccums {
-				rawJSON := strings.TrimSpace(accum.argsJSON.String())
-				if rawJSON == "" {
-					rawJSON = "{}"
-				}
-				callID := accum.id
-				if callID == "" {
-					callID = accum.name
-				}
-				events <- providers.ToolUseEvent{Call: agentic.ToolCall{
-					ID:    callID,
-					Name:  accum.name,
-					Input: json.RawMessage(rawJSON),
-				}}
+			if err := emitToolUseEvents(toolAccums, toolOrder, events); err != nil {
+				events <- providers.ErrorEvent{Err: err}
+				return
 			}
 			toolAccums = map[int64]*toolAccum{}
+			toolOrder = toolOrder[:0]
 		}
 	}
 
@@ -235,17 +218,11 @@ func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk]
 		return
 	}
 
-	// Emit any remaining tool calls that weren't flushed by finish_reason.
-	for _, accum := range toolAccums {
-		rawJSON := strings.TrimSpace(accum.argsJSON.String())
-		if rawJSON == "" {
-			rawJSON = "{}"
+	if finishReason == "tool_calls" {
+		if err := emitToolUseEvents(toolAccums, toolOrder, events); err != nil {
+			events <- providers.ErrorEvent{Err: err}
+			return
 		}
-		events <- providers.ToolUseEvent{Call: agentic.ToolCall{
-			ID:    accum.id,
-			Name:  accum.name,
-			Input: json.RawMessage(rawJSON),
-		}}
 	}
 
 	if finishReason == "" {
@@ -255,6 +232,51 @@ func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk]
 		StopReason: normalizeStopReason(finishReason),
 		Usage:      usageVal,
 	}
+}
+
+func emitToolUseEvents(toolAccums map[int64]*toolAccum, toolOrder []int64, events chan<- providers.StreamEvent) error {
+	for _, idx := range toolOrder {
+		accum := toolAccums[idx]
+		if accum == nil {
+			continue
+		}
+		rawJSON := strings.TrimSpace(accum.argsJSON.String())
+		if rawJSON == "" {
+			rawJSON = "{}"
+		}
+		if !json.Valid([]byte(rawJSON)) {
+			return fmt.Errorf("openai stream: invalid tool call arguments for %q", accum.name)
+		}
+		callID := accum.id
+		if callID == "" {
+			callID = fmt.Sprintf("tool_call_%d", idx)
+		}
+		events <- providers.ToolUseEvent{Call: agentic.ToolCall{
+			ID:    callID,
+			Name:  accum.name,
+			Input: json.RawMessage(rawJSON),
+		}}
+	}
+	return nil
+}
+
+func responseFormatFromSchema(schemaRaw json.RawMessage) (oai.ChatCompletionNewParamsResponseFormatUnion, error) {
+	var schema map[string]any
+	if err := json.Unmarshal(schemaRaw, &schema); err != nil {
+		return oai.ChatCompletionNewParamsResponseFormatUnion{}, fmt.Errorf("openai: invalid output json schema: %w", err)
+	}
+	if len(schema) == 0 {
+		return oai.ChatCompletionNewParamsResponseFormatUnion{}, errors.New("openai: output json schema is empty")
+	}
+	return oai.ChatCompletionNewParamsResponseFormatUnion{
+		OfJSONSchema: &oai.ResponseFormatJSONSchemaParam{
+			JSONSchema: oai.ResponseFormatJSONSchemaJSONSchemaParam{
+				Name:   "output",
+				Schema: schema,
+				Strict: oai.Bool(true),
+			},
+		},
+	}, nil
 }
 
 // buildMessages converts the provider-agnostic input into OpenAI message params.
@@ -317,9 +339,9 @@ func buildMessages(systemPrompt string, history []message.AgentMessage, userMess
 			}
 
 		case message.RoleSystem:
-			// Compacted history summaries.
+			// Compacted history summaries should remain low-trust history, not privileged system instructions.
 			if strings.TrimSpace(msg.Content) != "" {
-				messages = append(messages, oai.SystemMessage("[Context Summary] "+msg.Content))
+				messages = append(messages, oai.UserMessage("[Context Summary] "+msg.Content))
 			}
 		}
 	}
