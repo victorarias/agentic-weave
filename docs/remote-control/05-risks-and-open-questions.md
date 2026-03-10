@@ -210,3 +210,27 @@ From the extension side, `ctx.switchSession(sessionPath)` works programmatically
 2. Don't let slow WebSocket clients block the PTY reader (buffered channels + drop policy)
 3. Ring buffer for catch-up on human attach (Coop uses 1 MiB circular buffer with offset-based replay)
 4. One reader goroutine for PTY lifetime — subscribers come and go, reader never restarts
+
+### Q13 — ACP Compatibility Stance — RESOLVED
+**Question**: Should we replace our relay protocol with Agent Client Protocol (ACP), or only learn from it?
+
+**Answer**: Learn from it, but do not replace the control plane with it.
+
+ACP is a strong fit for the **client ↔ running agent** boundary:
+- `initialize`
+- `session.new`
+- `session.load`
+- `session.prompt`
+- `session.update`
+- `session.cancel`
+- permission mediation
+
+ACP is **not** sufficient for the full remote-control problem we are solving:
+- host discovery and spawn routing
+- daemon-managed process launch
+- human attach / inject / takeover
+- raw PTY forwarding + resize
+- parent/child session hierarchy
+- attach locks and failure policies
+
+**Design implication**: Keep the relay / daemon / wrapper architecture, but make the session-facing API intentionally ACP-aligned so we can add an ACP adapter later without redesigning the runtime.

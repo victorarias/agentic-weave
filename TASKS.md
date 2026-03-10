@@ -201,6 +201,12 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-10 21:57: Added `docs/remote-control/08-walking-skeleton-implementation-handoff.md` with a concrete handoff plan for another agent: three real early tiers, smoke tests, stop-and-evaluate gates, explicit non-goals, and PR slicing guidance.
+- 2026-03-10 21:47: Folded Gastown learnings into the remote-control docs: added core design principles (`push, not scrape`, progressive integration tiers, adapter registry, explicit delivery semantics), a runtime preset/adapter registry section, and reworked the main architecture plan into walking-skeleton tiers with demoable end-to-end slices.
+- 2026-03-10 21:35: Added concrete `session.update` examples for every V1 kind (`lifecycle`, message, tool, permission, status, error, complete) so the protocol is easier to implement consistently.
+- 2026-03-10 21:31: Tightened the remote-control protocol docs: added identity model, capability-negotiation authority, closed `session.update` taxonomy, permission lifecycle invariants, error categories, reconnect/order rules, and explicit session-vs-runtime semantics.
+- 2026-03-10 21:22: Added `docs/remote-control/07-acp-shim.md` describing the minimum viable ACP-compatible shim: purpose, non-goals, ACP↔weave mapping, adapter-service recommendation, and acceptance criteria.
+- 2026-03-10 21:15: Refined the remote-control docs based on Agent Client Protocol (ACP): added ACP alignment stance, initialize/load/prompt/cancel/update semantics, permission-response + PTY resize protocol gaps, and ACP-focused test coverage notes.
 - 2026-03-10 19:23: Mirrored `attn` secret naming in the Hodor workflow (`VERTEX_AI_SA`, `GOOGLE_CLOUD_PROJECT`) and defaulted `GOOGLE_CLOUD_LOCATION` to `global`.
 - 2026-03-10 19:19: Hardened Hodor workflow to skip fork PRs, moved review guidance into tracked `.hodor/skills`, and removed the always-on Claude review workflow.
 - 2026-03-10 19:15: Added advisory Hodor PR review workflow on GitHub Actions using Vertex AI `google-vertex/gemini-3-flash-preview`, plus a local upstream patch for Google/Vertex model parsing.

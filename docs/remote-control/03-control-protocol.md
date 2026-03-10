@@ -2,6 +2,14 @@
 
 All messages are JSON over WebSocket. Every message has a common envelope.
 
+**ACP alignment note (2026-03-10):** this protocol is still a
+relay/control-plane protocol, not a pure Agent Client Protocol clone. But the
+client ↔ session lifecycle should intentionally track ACP where possible:
+`initialize`, `session.new`, `session.load`, `session.prompt`,
+`session.update`, `session.cancel`, and explicit permission mediation. Spawn,
+host routing, attach/takeover, PTY transport, and parent/child hierarchy remain
+weave-specific extensions.
+
 ## Envelope
 
 ```jsonc
@@ -15,11 +23,66 @@ All messages are JSON over WebSocket. Every message has a common envelope.
 }
 ```
 
+## Identity Model
+
+We need to keep four identities distinct.
+
+| Identity | Meaning | Lifetime | Exposed to whom? |
+|---|---|---|---|
+| `runtime_id` | One wrapper + one live pi-mono process tree | Until process exit | Relay / native clients / ops |
+| `session_id` | The weave conversation/session identity used by the relay protocol | Stable across runtime restarts when resumed | Relay clients |
+| `persisted_session_handle` | The durable pi-backed resume target (for example a JSONL path or future opaque handle) | Stable across shim / runtime restarts | Relay internals, adapters |
+| `client_session_id` | An adapter-facing session id such as an ACP shim session id | Defined by the adapter | Adapter clients only |
+
+Rules:
+- A **runtime** may die and be replaced while the **session** survives.
+- `session.spawn` creates a new runtime and normally a fresh session.
+- `session.load` creates a new runtime attached to an existing persisted session.
+- Human attach / takeover changes the control relationship around a runtime/session; it does not create a new session identity.
+
 ## 1. Commands (orchestrator/human → relay → wrapper)
+
+### Session / Client Handshake
+
+#### `initialize`
+ACP-aligned version + capability negotiation after `auth` succeeds.
+```jsonc
+{
+  "type": "command",
+  "payload": {
+    "command": "initialize",
+    "protocol_version": "wv-rc/0.1",
+    "capabilities": {
+      "session_prompt": true,
+      "session_load": true,
+      "session_update": true,
+      "session_cancel": true,
+      "permission_prompts": true,
+      "terminal": true,
+      "observe": true,
+      "inject": true,
+      "takeover": true
+    },
+    "_meta": {
+      "client_name": "huxie-orchestrator",
+      "client_version": "0.1.0"
+    }
+  }
+}
+```
+
+**Negotiation rule:**
+- the client advertises what it can handle
+- the server decides what it will enable for this connection
+- the `ack.data.capabilities` payload is authoritative for the rest of the session
+
+Clients must not assume that a capability they advertised was accepted.
 
 ### Session Lifecycle
 
 #### `session.spawn`
+Weave-specific remote creation command. Conceptually this wraps ACP-style
+`session.new` plus host selection / process launch.
 ```jsonc
 {
   "type": "command",
@@ -53,10 +116,30 @@ All messages are JSON over WebSocket. Every message has a common envelope.
 }
 ```
 
+#### `session.load`
+Load or resume a previously persisted pi-mono session on a host.
+```jsonc
+{
+  "type": "command",
+  "payload": {
+    "command": "session.load",
+    "host": "host-id",
+    "session_path": "/absolute/path/to/session.jsonl",
+    "config": {
+      "extensions": ["wv-bridge.ts"],
+      "working_dir": "/path"
+    }
+  }
+}
+```
+
 ### Agent Steering
 
 #### `agent.message`
 Send a message into the agent's conversation.
+
+`session.prompt` is the ACP-aligned alias for this command. Both should map to
+one internal prompt-turn primitive.
 ```jsonc
 {
   "payload": {
@@ -70,10 +153,25 @@ Send a message into the agent's conversation.
 
 #### `agent.cancel`
 Cancel the agent's current operation.
+
+`session.cancel` is the ACP-aligned alias for this command.
 ```jsonc
 {
   "payload": {
     "command": "agent.cancel"
+  }
+}
+```
+
+#### `session.permission_response`
+Resolve a pending permission request from the agent.
+```jsonc
+{
+  "payload": {
+    "command": "session.permission_response",
+    "request_id": "perm-uuid",
+    "decision": "allow|deny",
+    "reason": "optional human or policy note"
   }
 }
 ```
@@ -111,6 +209,18 @@ Cancel the agent's current operation.
 }
 ```
 
+#### `pty.resize`
+Resize the remote PTY while attached.
+```jsonc
+{
+  "payload": {
+    "command": "pty.resize",
+    "rows": 24,
+    "cols": 80
+  }
+}
+```
+
 ### Registry
 
 #### `registry.list_hosts`
@@ -142,6 +252,228 @@ Cancel the agent's current operation.
 ## 2. Events (wrapper/extension → relay → orchestrator/human)
 
 ### Session Events
+
+#### `session.update`
+Normalized ACP-inspired umbrella event. Rich clients can still consume the
+fine-grained events below, but generic clients should be able to drive their UI
+from `session.update` alone.
+```jsonc
+{
+  "type": "event",
+  "payload": {
+    "event": "session.update",
+    "seq": 42,
+    "kind": "lifecycle|message_delta|message_complete|tool_begin|tool_end|permission_request|permission_resolved|status|error|complete",
+    "run_state": "starting|running|waiting_permission|idle|failed|stopped",
+    "delta": {
+      "content": "I'll refactor the auth module now..."
+    }
+  }
+}
+```
+
+`session.update` is a **closed taxonomy** in V1. New kinds are a protocol
+change, not an ad-hoc extension.
+
+Required fields by kind:
+- `lifecycle`: `phase`, optionally `from_state`, `to_state`
+- `message_delta`: `message_id`, `delta.content`
+- `message_complete`: `message_id`, `content`
+- `tool_begin`: `tool_call_id`, `tool`
+- `tool_end`: `tool_call_id`, `tool`, `status`
+- `permission_request`: `request_id`, `tool`, `args`, `timeout_ms`
+- `permission_resolved`: `request_id`, `decision`
+- `status`: `run_state`, optional summary counters
+- `error`: `code`, `message`, optional `recoverable`
+- `complete`: final outcome summary
+
+Normalization rules:
+- generic clients should not need raw weave event names to function
+- tool internals should be summarized, not streamed as arbitrary internal event blobs
+- raw PTY output is **not** part of `session.update`; it remains a weave-specific channel
+
+### `session.update` examples
+
+#### `lifecycle`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 1,
+    "kind": "lifecycle",
+    "run_state": "starting",
+    "phase": "agent_boot",
+    "from_state": "starting",
+    "to_state": "autonomous"
+  }
+}
+```
+
+#### `message_delta`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 2,
+    "kind": "message_delta",
+    "run_state": "running",
+    "message_id": "msg-1",
+    "delta": {
+      "content": "I'll start by reading the auth module"
+    }
+  }
+}
+```
+
+#### `message_complete`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 3,
+    "kind": "message_complete",
+    "run_state": "running",
+    "message_id": "msg-1",
+    "content": "I'll start by reading the auth module and then refactor the token handling."
+  }
+}
+```
+
+#### `tool_begin`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 4,
+    "kind": "tool_begin",
+    "run_state": "running",
+    "tool_call_id": "tool-1",
+    "tool": "read",
+    "args": {
+      "path": "/workspace/server/auth.go"
+    }
+  }
+}
+```
+
+#### `tool_end`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 5,
+    "kind": "tool_end",
+    "run_state": "running",
+    "tool_call_id": "tool-1",
+    "tool": "read",
+    "status": "completed",
+    "duration_ms": 42
+  }
+}
+```
+
+#### `permission_request`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 6,
+    "kind": "permission_request",
+    "run_state": "waiting_permission",
+    "request_id": "perm-1",
+    "tool": "bash",
+    "args": {
+      "command": "go test ./..."
+    },
+    "timeout_ms": 30000
+  }
+}
+```
+
+#### `permission_resolved`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 7,
+    "kind": "permission_resolved",
+    "run_state": "running",
+    "request_id": "perm-1",
+    "decision": "allow"
+  }
+}
+```
+
+#### `status`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 8,
+    "kind": "status",
+    "run_state": "running",
+    "summary": {
+      "tool_calls": 3,
+      "input_tokens": 1200,
+      "output_tokens": 450
+    }
+  }
+}
+```
+
+#### `error`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 9,
+    "kind": "error",
+    "run_state": "failed",
+    "code": "context_window_exceeded",
+    "message": "Token limit reached",
+    "recoverable": true
+  }
+}
+```
+
+#### `complete`
+```jsonc
+{
+  "type": "event",
+  "session_id": "sess-123",
+  "payload": {
+    "event": "session.update",
+    "seq": 10,
+    "kind": "complete",
+    "run_state": "stopped",
+    "outcome": "completed",
+    "summary": {
+      "tool_calls": 4,
+      "messages": 2
+    }
+  }
+}
+```
+
+### Fine-grained session / agent events
 
 #### `session.state_changed`
 ```jsonc
@@ -196,16 +528,29 @@ Cancel the agent's current operation.
 
 #### `agent.tool_permission`
 Agent is asking for permission to execute a tool.
+
+`session.request_permission` is the ACP-aligned umbrella name for this flow.
 ```jsonc
 {
   "payload": {
     "event": "agent.tool_permission",
+    "request_id": "perm-uuid",
     "tool": "bash",
     "args": { "command": "rm -rf /tmp/build" },
     "timeout_ms": 30000             // auto-deny after timeout
   }
 }
 ```
+
+Permission invariants:
+1. `request_id` is unique within the session.
+2. A permission request may be resolved exactly once.
+3. Timeout resolves the request as deterministic `deny` if no decision arrives.
+4. Only one authority may answer at a time for a session: human in takeover/inject,
+   otherwise the orchestrator or server policy layer.
+5. Every resolved request must produce either a fine-grained follow-up event or a
+   normalized `session.update(kind=permission_resolved)`.
+6. A canceled or failed run implicitly closes all outstanding permission requests.
 
 #### `agent.error`
 ```jsonc
@@ -288,18 +633,32 @@ Raw terminal input from human (only in takeover mode).
 }
 ```
 
+### Error Categories
+
+External clients should think in these categories first:
+- `auth`
+- `unsupported`
+- `invalid_state`
+- `not_found`
+- `unavailable`
+- `permission_denied`
+- `internal`
+
+Weave-native error codes can be preserved in metadata, but clients should not be
+forced to understand every weave-specific code.
+
 ### Error Codes
 
-| Code | Meaning |
-|------|---------|
-| `SESSION_NOT_FOUND` | Session ID doesn't exist or is STOPPED |
-| `ATTACH_CONFLICT` | Another controller is already attached |
-| `HOST_UNAVAILABLE` | Target host is not registered or unreachable |
-| `AUTH_FAILED` | Invalid or expired token |
-| `INVALID_COMMAND` | Malformed or unknown command |
-| `INVALID_STATE` | Command not valid in current session state (e.g. inject while not attached) |
-| `SPAWN_FAILED` | Host daemon failed to launch wrapper+pi-mono |
-| `RATE_LIMITED` | Too many commands in short period |
+| Code | Category | Meaning |
+|------|----------|---------|
+| `SESSION_NOT_FOUND` | `not_found` | Session ID doesn't exist or is STOPPED |
+| `ATTACH_CONFLICT` | `invalid_state` | Another controller is already attached |
+| `HOST_UNAVAILABLE` | `unavailable` | Target host is not registered or unreachable |
+| `AUTH_FAILED` | `auth` | Invalid or expired token |
+| `INVALID_COMMAND` | `unsupported` | Malformed or unknown command |
+| `INVALID_STATE` | `invalid_state` | Command not valid in current session state (e.g. inject while not attached) |
+| `SPAWN_FAILED` | `internal` | Host daemon failed to launch wrapper+pi-mono |
+| `RATE_LIMITED` | `unavailable` | Too many commands in short period |
 
 ---
 
@@ -312,7 +671,13 @@ Every command receives an ack:
   "payload": {
     "ref_id": "msg-uuid-of-command",
     "status": "ok|rejected",
-    "reason": "..."                 // if rejected
+    "reason": "...",                // if rejected
+    "data": {                         // optional command-specific result
+      "session_id": "sess-uuid",
+      "capabilities": {
+        "session_update": true
+      }
+    }
   }
 }
 ```
@@ -334,6 +699,8 @@ All WebSocket connections start with a handshake:
   }
 }
 // Relay responds with ack or AUTH_FAILED error.
+// After auth succeeds, clients SHOULD send `initialize` before any
+// session-scoped commands.
 ```
 
 ---
@@ -341,7 +708,10 @@ All WebSocket connections start with a handshake:
 ## 6. Protocol Conventions
 
 1. **Message ordering**: relay preserves per-session ordering. Events from one session arrive in order.
-2. **Idempotency**: commands include a unique `id`. Relay deduplicates.
-3. **Heartbeat**: clients send `{"type":"command","payload":{"command":"ping"}}` every 30s. Relay responds with ack. Timeout after 90s → disconnect.
-4. **Backpressure**: if a client falls behind on events, relay drops oldest events and sends a `gap` event with the count of dropped messages.
-5. **Reconnection**: clients reconnect with `last_event_id` to resume from where they left off (within the relay's buffer window).
+2. **`session.update.seq` ordering**: `seq` is strictly increasing per session and never reused.
+3. **Idempotency**: commands include a unique `id`. Relay deduplicates.
+4. **Heartbeat**: clients send `{"type":"command","payload":{"command":"ping"}}` every 30s. Relay responds with ack. Timeout after 90s → disconnect.
+5. **Backpressure**: if a client falls behind on events, relay drops oldest events and sends a `gap` event with the count of dropped messages.
+6. **Reconnect/resume in V1**: reconnect is best-effort within the relay buffer window. Clients must tolerate gaps unless an explicit durable replay contract exists for that surface.
+7. **Capability authority**: after `initialize`, the server-accepted capability set is authoritative.
+8. **Session vs runtime**: commands target a stable `session_id`; runtimes may restart under that session according to failure policy.

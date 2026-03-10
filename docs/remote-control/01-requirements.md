@@ -77,6 +77,52 @@ weave/
 - Host daemon launches a wrapper+pi-mono pair.
 - Dynamic machine pool — hosts come and go.
 
+## Core Design Principles
+
+These principles should constrain implementation, especially early prototypes.
+
+1. **Push, not scrape.**
+   - Prefer structured events from the bridge/runtime.
+   - Do not make prompt-prefix parsing, PTY scraping, or process-name heuristics
+     the primary source of truth for readiness, busy/idle state, or tool activity.
+2. **Progressive integration tiers.**
+   - The architecture should support a walking skeleton that exercises the end-to-end
+     loop quickly, then deepens integration incrementally.
+3. **Runtime-specific details belong in adapters/presets.**
+   - Avoid scattering pi-specific assumptions across relay, orchestrator, and state machine code.
+4. **Delivery semantics must be explicit.**
+   - The system should distinguish between queued, idle-boundary, and interrupting delivery.
+5. **Hooks/plugins are integration helpers, not the control plane.**
+   - They may enrich lifecycle and permissions, but must not replace the relay protocol.
+
+## ACP Alignment Stance
+
+We should treat **Agent Client Protocol (ACP)** as the reference model for the
+**client ↔ agent session boundary**, but **not** as a replacement for the remote
+control plane itself.
+
+What ACP should shape:
+- lifecycle negotiation (`initialize` + protocol version)
+- capability negotiation (prompting, terminal, permissions, resume, streaming)
+- first-class session creation vs session load/resume
+- prompt/cancel semantics
+- a normalized streamed `session.update` surface
+- explicit permission requests / responses
+
+What remains weave-specific:
+- host discovery and spawn routing
+- relay session registry and attach locks
+- observe / inject / takeover modes
+- raw PTY forwarding and resize
+- parent/child session hierarchy
+- daemon/wrapper recovery policy
+
+Design implication:
+- the relay protocol should be able to expose an **ACP-aligned facade or adapter**
+  later without changing the underlying relay/daemon/wrapper architecture
+- remote-control-specific features should be expressed as capability-gated
+  extensions rather than leaking into the baseline prompt-turn lifecycle
+
 ## Architectural Decisions
 
 | Decision | Choice | Rationale |

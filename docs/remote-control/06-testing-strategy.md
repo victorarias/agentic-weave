@@ -72,6 +72,7 @@ type ScriptEntry struct {
 | Scenario | Purpose |
 |----------|---------|
 | `happy-path` | Agent ready → receive message → emit assistant response → emit tool call → emit tool result → done |
+| `initialize-capabilities` | Client authenticates, sends `initialize`, negotiates capabilities, then starts a session. Tests ACP-aligned handshake. |
 | `multi-turn` | Three rounds of orchestrator messages with assistant responses. Tests conversational steering. |
 | `slow-tool` | Tool execution takes 10s. Tests cancel behavior and steer-during-tool. |
 | `crash-mid-task` | Agent crashes after 2nd message. Tests failure detection and recovery. |
@@ -127,6 +128,7 @@ Implementation options (needs investigation):
 | `inject-followup` | Send followUp message during tool execution → verify delivery after tools complete |
 | `event-coverage` | Trigger all event types → verify extension emits each one over the bridge |
 | `session-resume` | Start session, crash, restart with `--session` → verify history is loaded |
+| `permission-roundtrip` | Agent requests tool permission → client responds allow/deny → verify extension/runtime behavior |
 | `extension-startup` | Verify bridge connection, ready handshake, extension metadata |
 
 ---
