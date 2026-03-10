@@ -1,6 +1,6 @@
 # Hodor PR Review
 
-This repository uses [Hodor](https://github.com/mr-karan/hodor) for advisory pull-request reviews, backed by **Vertex AI** using **Gemini 3.1 Pro Preview**.
+This repository uses [Hodor](https://github.com/mr-karan/hodor) for advisory pull-request reviews, backed by **Vertex AI** using **Gemini 3 Flash Preview**.
 
 ## What runs
 
@@ -12,7 +12,7 @@ The workflow at `.github/workflows/hodor-review.yml`:
 - clones **Hodor v0.3.4**
 - applies the local patch at `.github/hodor/v0.3.4-google-vertex.patch`
 - authenticates to Google Cloud from GitHub Actions
-- runs Hodor with `google-vertex/gemini-3.1-pro-preview`
+- runs Hodor with `google-vertex/gemini-3-flash-preview`
 - posts the review back to the PR as an advisory comment
 
 ## Why a local patch is needed
