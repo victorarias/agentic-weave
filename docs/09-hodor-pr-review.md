@@ -8,6 +8,7 @@ The workflow at `.github/workflows/hodor-review.yml`:
 
 - triggers on non-draft pull requests (`opened`, `synchronize`, `ready_for_review`, `reopened`)
 - skips forked PRs by default so Google Cloud credentials are not exposed to untrusted contributions
+- checks out the repository with full history so PR diffs against the base branch are available
 - clones **Hodor v0.3.4**
 - applies the local patch at `.github/hodor/v0.3.4-google-vertex.patch`
 - authenticates to Google Cloud from GitHub Actions

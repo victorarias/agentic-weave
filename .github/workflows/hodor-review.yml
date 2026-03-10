@@ -22,12 +22,13 @@ jobs:
     env:
       HODOR_VERSION: v0.3.4
       HODOR_MODEL: google-vertex/gemini-3.1-pro-preview
+      GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
       GOOGLE_CLOUD_LOCATION: ${{ vars.GOOGLE_CLOUD_LOCATION }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Bun
