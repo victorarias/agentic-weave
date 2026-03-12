@@ -23,13 +23,14 @@ type Decider interface {
 
 // Input captures state for a single decision step.
 type Input struct {
-	SystemPrompt string
-	UserMessage  string
-	History      []message.AgentMessage
-	Tools        []agentic.ToolDefinition
-	ToolCalls    []agentic.ToolCall
-	ToolResults  []agentic.ToolResult
-	Turn         int
+	SystemPrompt   string
+	UserMessage    string
+	History        []message.AgentMessage
+	Tools          []agentic.ToolDefinition
+	ToolCalls      []agentic.ToolCall
+	ToolResults    []agentic.ToolResult
+	UserInlineData []agentic.InlineData // Images from the initial user message (first turn only).
+	Turn           int
 }
 
 // Decision is the result of a decision step.
@@ -55,9 +56,10 @@ type Config struct {
 
 // Request provides the conversation input.
 type Request struct {
-	SystemPrompt string
-	UserMessage  string
-	History      []message.AgentMessage
+	SystemPrompt   string
+	UserMessage    string
+	History        []message.AgentMessage
+	UserInlineData []agentic.InlineData // Images attached to the user message.
 }
 
 // Result captures the final output.
@@ -146,11 +148,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	userMessage := strings.TrimSpace(req.UserMessage)
-	if userMessage != "" {
+	if userMessage != "" || len(req.UserInlineData) > 0 {
 		userMsg := message.AgentMessage{
-			Role:      message.RoleUser,
-			Content:   userMessage,
-			Timestamp: time.Now(),
+			Role:       message.RoleUser,
+			Content:    userMessage,
+			InlineData: req.UserInlineData,
+			Timestamp:  time.Now(),
 		}
 		historyMessages = append(historyMessages, userMsg)
 		if err := r.appendHistory(ctx, userMsg); err != nil {
@@ -175,14 +178,22 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	turn := 0
 	runID := time.Now().UnixNano()
 	for {
+		// Only pass user inline data on the first Decide() call — after
+		// that it's already in history as part of the user message.
+		var turnInlineData []agentic.InlineData
+		if turn == 0 {
+			turnInlineData = req.UserInlineData
+		}
+
 		decision, err := r.cfg.Decider.Decide(ctx, Input{
-			SystemPrompt: req.SystemPrompt,
-			UserMessage:  userMessage,
-			History:      historyMessages,
-			Tools:        tools,
-			ToolCalls:    toolCalls,
-			ToolResults:  toolResults,
-			Turn:         turn,
+			SystemPrompt:   req.SystemPrompt,
+			UserMessage:    userMessage,
+			History:        historyMessages,
+			Tools:          tools,
+			ToolCalls:      toolCalls,
+			ToolResults:    toolResults,
+			UserInlineData: turnInlineData,
+			Turn:           turn,
 		})
 		if err != nil {
 			return Result{}, err

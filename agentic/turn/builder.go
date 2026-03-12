@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/loop"
 	"github.com/victorarias/agentic-weave/agentic/message"
 )
@@ -126,11 +127,15 @@ func (b *Builder) Assemble(userMessage string) Assembled {
 }
 
 // Request is a convenience around Assemble() for loop.Run().
-func (b *Builder) Request(userMessage string, history []message.AgentMessage) loop.Request {
+func (b *Builder) Request(userMessage string, history []message.AgentMessage, inlineData ...[]agentic.InlineData) loop.Request {
 	assembled := b.Assemble(userMessage)
-	return loop.Request{
+	req := loop.Request{
 		SystemPrompt: assembled.SystemPrompt,
 		UserMessage:  assembled.UserMessage,
 		History:      history,
 	}
+	if len(inlineData) > 0 {
+		req.UserInlineData = inlineData[0]
+	}
+	return req
 }

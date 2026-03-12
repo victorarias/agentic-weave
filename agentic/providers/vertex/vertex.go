@@ -23,11 +23,12 @@ import (
 // Input represents a single decision request to Vertex Gemini.
 // Tool calls and results should be included in History as AgentMessage entries.
 type Input struct {
-	SystemPrompt string
-	UserMessage  string
-	History      []message.AgentMessage
-	Tools        []agentic.ToolDefinition
-	GoogleSearch bool // Enable grounding with Google Search
+	SystemPrompt   string
+	UserMessage    string
+	History        []message.AgentMessage
+	Tools          []agentic.ToolDefinition
+	GoogleSearch   bool                 // Enable grounding with Google Search
+	UserInlineData []agentic.InlineData // Images attached to the user message.
 
 	// Labels are per-request key-value pairs for cost attribution.
 	// Merged on top of Config.Labels (per-request wins on key conflict).
@@ -339,12 +340,22 @@ func (c *Client) buildRequest(input Input) ([]byte, error) {
 	// When history ends with a tool result and no new user message is provided,
 	// the model resumes thinking directly after the function response.
 	userMessage := strings.TrimSpace(input.UserMessage)
-	if userMessage != "" {
+	if userMessage != "" || len(input.UserInlineData) > 0 {
+		parts := make([]vertexPart, 0, 1+len(input.UserInlineData))
+		if userMessage != "" {
+			parts = append(parts, vertexPart{Text: userMessage})
+		}
+		for _, data := range input.UserInlineData {
+			parts = append(parts, vertexPart{
+				InlineData: &vertexInlineData{
+					MIMEType: data.MIMEType,
+					Data:     base64.StdEncoding.EncodeToString(data.Data),
+				},
+			})
+		}
 		contents = append(contents, vertexContent{
-			Role: "user",
-			Parts: []vertexPart{{
-				Text: userMessage,
-			}},
+			Role:  "user",
+			Parts: parts,
 		})
 	}
 
@@ -408,12 +419,22 @@ func appendHistory(contents []vertexContent, history []message.AgentMessage) []v
 	for _, msg := range history {
 		switch msg.Role {
 		case message.RoleUser:
-			if strings.TrimSpace(msg.Content) != "" {
+			if strings.TrimSpace(msg.Content) != "" || len(msg.InlineData) > 0 {
+				parts := make([]vertexPart, 0, 1+len(msg.InlineData))
+				if strings.TrimSpace(msg.Content) != "" {
+					parts = append(parts, vertexPart{Text: msg.Content})
+				}
+				for _, data := range msg.InlineData {
+					parts = append(parts, vertexPart{
+						InlineData: &vertexInlineData{
+							MIMEType: data.MIMEType,
+							Data:     base64.StdEncoding.EncodeToString(data.Data),
+						},
+					})
+				}
 				contents = append(contents, vertexContent{
-					Role: "user",
-					Parts: []vertexPart{{
-						Text: msg.Content,
-					}},
+					Role:  "user",
+					Parts: parts,
 				})
 			}
 
