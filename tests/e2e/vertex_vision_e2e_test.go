@@ -1,11 +1,11 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"image"
 	"image/color"
 	"image/png"
-	"bytes"
 	"os"
 	"strings"
 	"testing"

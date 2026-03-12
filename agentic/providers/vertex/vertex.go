@@ -27,8 +27,8 @@ type Input struct {
 	UserMessage    string
 	History        []message.AgentMessage
 	Tools          []agentic.ToolDefinition
-	GoogleSearch   bool                   // Enable grounding with Google Search
-	UserInlineData []agentic.InlineData   // Images attached to the user message.
+	GoogleSearch   bool                 // Enable grounding with Google Search
+	UserInlineData []agentic.InlineData // Images attached to the user message.
 
 	// Labels are per-request key-value pairs for cost attribution.
 	// Merged on top of Config.Labels (per-request wins on key conflict).

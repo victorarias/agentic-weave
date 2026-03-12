@@ -23,14 +23,14 @@ type Decider interface {
 
 // Input captures state for a single decision step.
 type Input struct {
-	SystemPrompt    string
-	UserMessage     string
-	History         []message.AgentMessage
-	Tools           []agentic.ToolDefinition
-	ToolCalls       []agentic.ToolCall
-	ToolResults     []agentic.ToolResult
-	UserInlineData  []agentic.InlineData // Images from the initial user message (first turn only).
-	Turn            int
+	SystemPrompt   string
+	UserMessage    string
+	History        []message.AgentMessage
+	Tools          []agentic.ToolDefinition
+	ToolCalls      []agentic.ToolCall
+	ToolResults    []agentic.ToolResult
+	UserInlineData []agentic.InlineData // Images from the initial user message (first turn only).
+	Turn           int
 }
 
 // Decision is the result of a decision step.
@@ -56,10 +56,10 @@ type Config struct {
 
 // Request provides the conversation input.
 type Request struct {
-	SystemPrompt    string
-	UserMessage     string
-	History         []message.AgentMessage
-	UserInlineData  []agentic.InlineData // Images attached to the user message.
+	SystemPrompt   string
+	UserMessage    string
+	History        []message.AgentMessage
+	UserInlineData []agentic.InlineData // Images attached to the user message.
 }
 
 // Result captures the final output.
@@ -148,7 +148,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	userMessage := strings.TrimSpace(req.UserMessage)
-	if userMessage != "" {
+	if userMessage != "" || len(req.UserInlineData) > 0 {
 		userMsg := message.AgentMessage{
 			Role:       message.RoleUser,
 			Content:    userMessage,

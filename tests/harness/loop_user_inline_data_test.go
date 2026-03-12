@@ -151,3 +151,58 @@ func TestLoopUserInlineDataInHistoryReachesDecider(t *testing.T) {
 		t.Errorf("unexpected reply: %q", result.Reply)
 	}
 }
+
+func TestLoopUserInlineDataOnlyNoText(t *testing.T) {
+	imageData := []byte("screenshot-no-text")
+
+	executor := executorFunc{
+		listFn: func(ctx context.Context) ([]agentic.ToolDefinition, error) {
+			return []agentic.ToolDefinition{{Name: "echo"}}, nil
+		},
+		execFn: func(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+			return agentic.ToolResult{
+				Name:   call.Name,
+				Output: json.RawMessage(`"ok"`),
+			}, nil
+		},
+	}
+
+	decider := &scriptedDecider{
+		script: []loop.Decision{
+			{ToolCalls: []agentic.ToolCall{{Name: "echo", Input: json.RawMessage(`{}`)}}},
+			{Reply: "I analyzed the image"},
+		},
+	}
+
+	result, _, err := runScenario(t, loop.Config{
+		Decider:  decider,
+		Executor: executor,
+	}, loop.Request{
+		UserMessage:    "",
+		UserInlineData: []agentic.InlineData{{MIMEType: "image/png", Data: imageData}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The image-only message must be persisted in history so turn 1
+	// (after tool execution) still has access to it.
+	if len(decider.inputs) < 2 {
+		t.Fatalf("expected at least 2 decider inputs, got %d", len(decider.inputs))
+	}
+
+	// Turn 1: image should be in history even though text was empty.
+	var foundInHistory bool
+	for _, msg := range decider.inputs[1].History {
+		if msg.Role == message.RoleUser && len(msg.InlineData) > 0 {
+			foundInHistory = true
+		}
+	}
+	if !foundInHistory {
+		t.Error("image-only user message was not persisted in history for turn 1")
+	}
+
+	if result.Reply != "I analyzed the image" {
+		t.Errorf("unexpected reply: %q", result.Reply)
+	}
+}
