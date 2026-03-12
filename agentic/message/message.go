@@ -24,6 +24,7 @@ type AgentMessage struct {
 	Content     string
 	ToolCalls   []agentic.ToolCall
 	ToolResults []agentic.ToolResult
+	InlineData  []agentic.InlineData // User-provided images; not counted in BudgetContent.
 	Timestamp   time.Time
 }
 

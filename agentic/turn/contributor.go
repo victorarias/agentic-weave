@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/loop"
 	"github.com/victorarias/agentic-weave/agentic/message"
 )
@@ -142,7 +143,8 @@ type AssemblerInput struct {
 	UserMessage  string
 
 	// Pass-through to loop.Request.
-	History []message.AgentMessage
+	History        []message.AgentMessage
+	UserInlineData []agentic.InlineData // Images attached to the user message.
 }
 
 // Plan is the built turn plus captured per-turn hooks.
@@ -205,9 +207,10 @@ func (a *Assembler) Plan(ctx context.Context, in AssemblerInput) (Plan, error) {
 	assembled := builder.Assemble(in.UserMessage)
 	return Plan{
 		Request: loop.Request{
-			SystemPrompt: assembled.SystemPrompt,
-			UserMessage:  assembled.UserMessage,
-			History:      in.History,
+			SystemPrompt:   assembled.SystemPrompt,
+			UserMessage:    assembled.UserMessage,
+			History:        in.History,
+			UserInlineData: in.UserInlineData,
 		},
 		Assembled: assembled,
 		hooks:     hooks,
