@@ -22,44 +22,54 @@ func TestNormalizeThinkingMode(t *testing.T) {
 }
 
 func TestResolveThinkingDefaultsAndOverrides(t *testing.T) {
-	c := &Client{thinkingMode: thinkingModeOff, thinkingBgt: 0}
-	mode, budget := c.resolveThinking("", 0)
-	if mode != thinkingModeOff || budget != 0 {
-		t.Fatalf("expected off/0, got %q/%d", mode, budget)
+	c := &Client{thinkingMode: thinkingModeOff, thinkingEffort: thinkingEffortHigh, thinkingBgt: 0}
+	mode, effort, budget := c.resolveThinking("", "", 0)
+	if mode != thinkingModeOff || effort != "" || budget != 0 {
+		t.Fatalf("expected off/empty/0, got %q/%q/%d", mode, effort, budget)
 	}
 
-	c = &Client{thinkingMode: thinkingModeFixed, thinkingBgt: 0}
-	mode, budget = c.resolveThinking("", 0)
-	if mode != thinkingModeFixed || budget < 1024 {
-		t.Fatalf("expected fixed budget >= 1024, got %q/%d", mode, budget)
+	c = &Client{thinkingMode: thinkingModeFixed, thinkingEffort: thinkingEffortHigh, thinkingBgt: 0}
+	mode, effort, budget = c.resolveThinking("", "", 0)
+	if mode != thinkingModeFixed || effort != "" || budget < 1024 {
+		t.Fatalf("expected fixed/empty/budget>=1024, got %q/%q/%d", mode, effort, budget)
 	}
 
-	mode, budget = c.resolveThinking("off", 0)
-	if mode != thinkingModeOff || budget != 0 {
-		t.Fatalf("expected off/0, got %q/%d", mode, budget)
+	mode, effort, budget = c.resolveThinking("off", "medium", 0)
+	if mode != thinkingModeOff || effort != "" || budget != 0 {
+		t.Fatalf("expected off/empty/0, got %q/%q/%d", mode, effort, budget)
 	}
 
-	mode, budget = c.resolveThinking("fixed", 2048)
-	if mode != thinkingModeFixed || budget != 2048 {
-		t.Fatalf("expected fixed/2048, got %q/%d", mode, budget)
+	c = &Client{thinkingMode: thinkingModeAdaptive, thinkingEffort: thinkingEffortHigh, thinkingBgt: 0}
+	mode, effort, budget = c.resolveThinking("", "medium", 0)
+	if mode != thinkingModeAdaptive || effort != thinkingEffortMedium || budget != 0 {
+		t.Fatalf("expected adaptive/medium/0, got %q/%q/%d", mode, effort, budget)
+	}
+
+	mode, effort, budget = c.resolveThinking("fixed", "medium", 2048)
+	if mode != thinkingModeFixed || effort != "" || budget != 2048 {
+		t.Fatalf("expected fixed/empty/2048, got %q/%q/%d", mode, effort, budget)
 	}
 }
 
 func TestApplyThinkingConfig(t *testing.T) {
 	req := sdk.MessageNewParams{}
-	applyThinkingConfig(&req, thinkingModeAdaptive, 0)
+	applyThinkingConfig(&req, thinkingModeAdaptive, thinkingEffortMedium, 0)
 	if req.Thinking.OfAdaptive == nil {
 		t.Fatalf("expected adaptive thinking config")
 	}
+	extra := req.Thinking.OfAdaptive.ExtraFields()
+	if got := extra["effort"]; got != thinkingEffortMedium {
+		t.Fatalf("expected effort %q, got %#v", thinkingEffortMedium, got)
+	}
 
 	req = sdk.MessageNewParams{}
-	applyThinkingConfig(&req, thinkingModeOff, 0)
+	applyThinkingConfig(&req, thinkingModeOff, "", 0)
 	if req.Thinking.OfDisabled == nil {
 		t.Fatalf("expected disabled thinking config")
 	}
 
 	req = sdk.MessageNewParams{}
-	applyThinkingConfig(&req, thinkingModeFixed, 100)
+	applyThinkingConfig(&req, thinkingModeFixed, "", 100)
 	if req.Thinking.OfEnabled == nil {
 		t.Fatalf("expected fixed thinking config")
 	}

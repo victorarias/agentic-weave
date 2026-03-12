@@ -12,13 +12,14 @@ import (
 
 // VertexConfig controls an Anthropic client that routes through Vertex AI.
 type VertexConfig struct {
-	Project      string
-	Location     string
-	Model        string
-	MaxTokens    int
-	Temperature  *float64
-	ThinkingMode string
-	ThinkingBgt  int
+	Project        string
+	Location       string
+	Model          string
+	MaxTokens      int
+	Temperature    *float64
+	ThinkingMode   string
+	ThinkingEffort string
+	ThinkingBgt    int
 
 	// CacheTTL sets the time-to-live for prompt cache breakpoints.
 	// Valid values: "" (default 5m), "5m", "1h".
@@ -43,6 +44,7 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 		maxTokens = 8192
 	}
 	thinkingMode := normalizeThinkingMode(cfg.ThinkingMode)
+	thinkingEffort := normalizeThinkingEffort(cfg.ThinkingEffort)
 	thinkingBgt := int64(cfg.ThinkingBgt)
 	if thinkingMode == thinkingModeFixed && thinkingBgt < 1024 {
 		thinkingBgt = 1024
@@ -60,14 +62,15 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 	sdkClient := sdk.NewClient(vertexOpt)
 
 	return &Client{
-		client:       sdkClient,
-		model:        model,
-		maxTokens:    maxTokens,
-		temperature:  cfg.Temperature,
-		thinkingMode: thinkingMode,
-		thinkingBgt:  thinkingBgt,
-		cacheMode:    CacheModeExplicit,
-		cacheTTL:     parseCacheTTL(cfg.CacheTTL),
+		client:         sdkClient,
+		model:          model,
+		maxTokens:      maxTokens,
+		temperature:    cfg.Temperature,
+		thinkingMode:   thinkingMode,
+		thinkingEffort: thinkingEffort,
+		thinkingBgt:    thinkingBgt,
+		cacheMode:      CacheModeExplicit,
+		cacheTTL:       parseCacheTTL(cfg.CacheTTL),
 	}, nil
 }
 
@@ -97,6 +100,7 @@ func NewFromVertexEnv() (*Client, error) {
 		}
 	}
 	thinkingMode := envTrimmed("VERTEX_THINKING_MODE")
+	thinkingEffort := envTrimmed("VERTEX_THINKING_EFFORT")
 	thinkingBgt := 0
 	if v := envTrimmed("VERTEX_THINKING_BUDGET_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -105,13 +109,14 @@ func NewFromVertexEnv() (*Client, error) {
 	}
 
 	return NewVertex(context.Background(), VertexConfig{
-		Project:      project,
-		Location:     location,
-		Model:        model,
-		MaxTokens:    maxTokens,
-		Temperature:  temperature,
-		ThinkingMode: thinkingMode,
-		ThinkingBgt:  thinkingBgt,
-		CacheTTL:     envTrimmed("ANTHROPIC_CACHE_TTL"),
+		Project:        project,
+		Location:       location,
+		Model:          model,
+		MaxTokens:      maxTokens,
+		Temperature:    temperature,
+		ThinkingMode:   thinkingMode,
+		ThinkingEffort: thinkingEffort,
+		ThinkingBgt:    thinkingBgt,
+		CacheTTL:       envTrimmed("ANTHROPIC_CACHE_TTL"),
 	})
 }

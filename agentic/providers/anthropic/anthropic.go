@@ -31,6 +31,7 @@ type Input struct {
 	MaxTokens        int
 	Temperature      *float64
 	ThinkingMode     string
+	ThinkingEffort   string
 	ThinkingBgt      int
 }
 
@@ -58,14 +59,18 @@ type Decision struct {
 
 // Config controls an Anthropic client.
 type Config struct {
-	APIKey       string
-	Model        string
-	BaseURL      string
-	MaxTokens    int
-	Temperature  *float64
+	APIKey      string
+	Model       string
+	BaseURL     string
+	MaxTokens   int
+	Temperature *float64
+	// ThinkingMode controls extended thinking mode: adaptive, fixed, or off.
 	ThinkingMode string
-	ThinkingBgt  int
-	HTTPClient   *http.Client
+	// ThinkingEffort only applies when ThinkingMode is adaptive.
+	ThinkingEffort string
+	// ThinkingBgt only applies when ThinkingMode is fixed/enabled.
+	ThinkingBgt int
+	HTTPClient  *http.Client
 
 	// CacheTTL sets the time-to-live for prompt cache breakpoints.
 	// Valid values: "" (default 5m), "5m", "1h".
@@ -98,20 +103,26 @@ const (
 
 // Client calls the Anthropic Messages API.
 type Client struct {
-	client       anthropic.Client
-	model        string
-	maxTokens    int
-	temperature  *float64
-	thinkingMode string
-	thinkingBgt  int64
-	cacheMode    CacheMode
-	cacheTTL     anthropic.CacheControlEphemeralTTL
+	client         anthropic.Client
+	model          string
+	maxTokens      int
+	temperature    *float64
+	thinkingMode   string
+	thinkingEffort string
+	thinkingBgt    int64
+	cacheMode      CacheMode
+	cacheTTL       anthropic.CacheControlEphemeralTTL
 }
 
 const (
 	thinkingModeAdaptive = "adaptive"
 	thinkingModeFixed    = "fixed"
 	thinkingModeOff      = "off"
+
+	thinkingEffortLow    = "low"
+	thinkingEffortMedium = "medium"
+	thinkingEffortHigh   = "high"
+	thinkingEffortMax    = "max"
 )
 
 // New constructs an Anthropic client from config.
@@ -130,6 +141,7 @@ func New(cfg Config) (*Client, error) {
 		maxTokens = 1024
 	}
 	thinkingMode := normalizeThinkingMode(cfg.ThinkingMode)
+	thinkingEffort := normalizeThinkingEffort(cfg.ThinkingEffort)
 	thinkingBgt := int64(cfg.ThinkingBgt)
 	if thinkingMode == thinkingModeFixed && thinkingBgt < 1024 {
 		thinkingBgt = 1024
@@ -146,14 +158,15 @@ func New(cfg Config) (*Client, error) {
 	client := anthropic.NewClient(opts...)
 
 	return &Client{
-		client:       client,
-		model:        model,
-		maxTokens:    maxTokens,
-		temperature:  cfg.Temperature,
-		thinkingMode: thinkingMode,
-		thinkingBgt:  thinkingBgt,
-		cacheMode:    CacheModeAutomatic,
-		cacheTTL:     parseCacheTTL(cfg.CacheTTL),
+		client:         client,
+		model:          model,
+		maxTokens:      maxTokens,
+		temperature:    cfg.Temperature,
+		thinkingMode:   thinkingMode,
+		thinkingEffort: thinkingEffort,
+		thinkingBgt:    thinkingBgt,
+		cacheMode:      CacheModeAutomatic,
+		cacheTTL:       parseCacheTTL(cfg.CacheTTL),
 	}, nil
 }
 
@@ -179,6 +192,7 @@ func NewFromEnv() (*Client, error) {
 		}
 	}
 	thinkingMode := envTrimmed("ANTHROPIC_THINKING_MODE")
+	thinkingEffort := envTrimmed("ANTHROPIC_THINKING_EFFORT")
 	thinkingBgt := 0
 	if v := envTrimmed("ANTHROPIC_THINKING_BUDGET_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -187,14 +201,15 @@ func NewFromEnv() (*Client, error) {
 	}
 
 	return New(Config{
-		APIKey:       apiKey,
-		Model:        model,
-		BaseURL:      envTrimmed("ANTHROPIC_BASE_URL"),
-		MaxTokens:    maxTokens,
-		Temperature:  temperature,
-		ThinkingMode: thinkingMode,
-		ThinkingBgt:  thinkingBgt,
-		CacheTTL:     envTrimmed("ANTHROPIC_CACHE_TTL"),
+		APIKey:         apiKey,
+		Model:          model,
+		BaseURL:        envTrimmed("ANTHROPIC_BASE_URL"),
+		MaxTokens:      maxTokens,
+		Temperature:    temperature,
+		ThinkingMode:   thinkingMode,
+		ThinkingEffort: thinkingEffort,
+		ThinkingBgt:    thinkingBgt,
+		CacheTTL:       envTrimmed("ANTHROPIC_CACHE_TTL"),
 	})
 }
 
@@ -242,8 +257,8 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 	if temperature != nil {
 		req.Temperature = anthropic.Float(*temperature)
 	}
-	mode, budget := c.resolveThinking(input.ThinkingMode, input.ThinkingBgt)
-	applyThinkingConfig(&req, mode, budget)
+	mode, effort, budget := c.resolveThinking(input.ThinkingMode, input.ThinkingEffort, input.ThinkingBgt)
+	applyThinkingConfig(&req, mode, effort, budget)
 
 	msg, err := c.client.Messages.New(ctx, req)
 	if err != nil {
@@ -533,10 +548,25 @@ func normalizeThinkingMode(mode string) string {
 	}
 }
 
-func (c *Client) resolveThinking(modeOverride string, budgetOverride int) (string, int64) {
+func normalizeThinkingEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "":
+		return ""
+	case thinkingEffortLow, thinkingEffortMedium, thinkingEffortHigh, thinkingEffortMax:
+		return strings.ToLower(strings.TrimSpace(effort))
+	default:
+		return ""
+	}
+}
+
+func (c *Client) resolveThinking(modeOverride string, effortOverride string, budgetOverride int) (string, string, int64) {
 	mode := c.thinkingMode
 	if strings.TrimSpace(modeOverride) != "" {
 		mode = normalizeThinkingMode(modeOverride)
+	}
+	effort := c.thinkingEffort
+	if strings.TrimSpace(effortOverride) != "" {
+		effort = normalizeThinkingEffort(effortOverride)
 	}
 	budget := c.thinkingBgt
 	if budgetOverride > 0 {
@@ -545,10 +575,13 @@ func (c *Client) resolveThinking(modeOverride string, budgetOverride int) (strin
 	if mode == thinkingModeFixed && budget < 1024 {
 		budget = 1024
 	}
-	return mode, budget
+	if mode != thinkingModeAdaptive {
+		effort = ""
+	}
+	return mode, effort, budget
 }
 
-func applyThinkingConfig(req *anthropic.MessageNewParams, mode string, budget int64) {
+func applyThinkingConfig(req *anthropic.MessageNewParams, mode string, effort string, budget int64) {
 	if req == nil {
 		return
 	}
@@ -564,6 +597,9 @@ func applyThinkingConfig(req *anthropic.MessageNewParams, mode string, budget in
 		req.Thinking = anthropic.ThinkingConfigParamOfEnabled(fixedBudget)
 	default:
 		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
+		if normalizedEffort := normalizeThinkingEffort(effort); normalizedEffort != "" {
+			adaptive.SetExtraFields(map[string]any{"effort": normalizedEffort})
+		}
 		req.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 	}
 }
