@@ -95,8 +95,8 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 	if temperature != nil {
 		req.Temperature = anthropic.Float(*temperature)
 	}
-	mode, budget := c.resolveThinking(input.ThinkingMode, input.ThinkingBgt)
-	applyThinkingConfig(&req, mode, budget)
+	mode, effort, budget := c.resolveThinking(input.ThinkingMode, input.ThinkingEffort, input.ThinkingBgt)
+	applyThinkingConfig(&req, mode, effort, budget)
 
 	stream := c.client.Messages.NewStreaming(ctx, req)
 
