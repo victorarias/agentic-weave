@@ -23,6 +23,13 @@ type Input struct {
 
 	// OutputJSONSchema, if set, instructs the model to produce structured JSON output.
 	OutputJSONSchema json.RawMessage
+
+	// Labels are arbitrary key-value pairs attached to the API request for
+	// cost attribution, filtering, and tracking. Provider support varies:
+	//   - Vertex AI: sent as "labels" in the request body (up to 64 pairs)
+	//   - OpenAI: sent as "metadata" on chat completions (up to 16 pairs)
+	//   - Anthropic: not yet supported by the API; field is accepted but ignored
+	Labels map[string]string
 }
 
 // StreamEvent is emitted by Streamer.Stream.
