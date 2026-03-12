@@ -111,5 +111,75 @@ func TestCollectDecision_BuildsDecision(t *testing.T) {
 	}
 }
 
+func TestApplyOutputJSONSchema_NormalizesAdditionalPropertiesForObjects(t *testing.T) {
+	req := anthropic.MessageNewParams{}
+	err := applyOutputJSONSchema(&req, json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"user":{
+				"type":"object",
+				"properties":{
+					"name":{"type":"string"}
+				}
+			},
+			"implicit_object":{
+				"properties":{
+					"slug":{"type":"string"}
+				}
+			},
+			"items":{
+				"type":"array",
+				"items":{
+					"type":"object",
+					"properties":{
+						"id":{"type":"string"},
+						"meta":{
+							"type":"object",
+							"properties":{"x":{"type":"number"}},
+							"additionalProperties":true
+						}
+					},
+					"additionalProperties":{"type":"string"}
+				}
+			},
+			"payload":{
+				"type":"object",
+				"const":{"type":"object","nested":true}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	schema := req.OutputConfig.Format.Schema
+	if schema["additionalProperties"] != false {
+		t.Fatalf("expected top-level additionalProperties=false, got %#v", schema["additionalProperties"])
+	}
+	props, _ := schema["properties"].(map[string]any)
+	user, _ := props["user"].(map[string]any)
+	if user["additionalProperties"] != false {
+		t.Fatalf("expected nested object additionalProperties=false, got %#v", user["additionalProperties"])
+	}
+	implicitObject, _ := props["implicit_object"].(map[string]any)
+	if implicitObject["additionalProperties"] != false {
+		t.Fatalf("expected implicit object additionalProperties=false, got %#v", implicitObject["additionalProperties"])
+	}
+	items, _ := props["items"].(map[string]any)
+	itemSchema, _ := items["items"].(map[string]any)
+	if itemSchema["additionalProperties"] != false {
+		t.Fatalf("expected array item object additionalProperties=false, got %#v", itemSchema["additionalProperties"])
+	}
+	itemProps, _ := itemSchema["properties"].(map[string]any)
+	meta, _ := itemProps["meta"].(map[string]any)
+	if meta["additionalProperties"] != false {
+		t.Fatalf("expected explicit additionalProperties=true to normalize to false, got %#v", meta["additionalProperties"])
+	}
+	payload, _ := props["payload"].(map[string]any)
+	constValue, _ := payload["const"].(map[string]any)
+	if _, exists := constValue["additionalProperties"]; exists {
+		t.Fatalf("expected const object to remain untouched, got %#v", constValue)
+	}
+}
+
 // Compile-time check: Stream exists with the expected method expression type.
 var _ func(*Client, context.Context, Input) (<-chan StreamEvent, error) = (*Client).Stream

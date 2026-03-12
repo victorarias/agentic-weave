@@ -511,10 +511,92 @@ func applyOutputJSONSchema(req *anthropic.MessageNewParams, schemaRaw json.RawMe
 		return errors.New("anthropic: output json schema is empty")
 	}
 
+	normalized, ok := normalizeAnthropicOutputSchema(schema).(map[string]any)
+	if !ok || len(normalized) == 0 {
+		return errors.New("anthropic: normalized output json schema is empty")
+	}
+
 	req.OutputConfig = anthropic.OutputConfigParam{
-		Format: anthropic.JSONOutputFormatParam{Schema: schema},
+		Format: anthropic.JSONOutputFormatParam{Schema: normalized},
 	}
 	return nil
+}
+
+func normalizeAnthropicOutputSchema(value any) any {
+	return normalizeAnthropicOutputSchemaNode(value, true)
+}
+
+func normalizeAnthropicOutputSchemaNode(value any, isSchemaNode bool) any {
+	if !isSchemaNode {
+		return value
+	}
+
+	switch v := value.(type) {
+	case map[string]any:
+		normalized := make(map[string]any, len(v)+1)
+		for key, child := range v {
+			normalized[key] = normalizeAnthropicOutputSchemaChild(key, child)
+		}
+		if isAnthropicObjectSchema(normalized) {
+			normalized["additionalProperties"] = false
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, len(v))
+		for i, child := range v {
+			normalized[i] = normalizeAnthropicOutputSchemaNode(child, true)
+		}
+		return normalized
+	default:
+		return value
+	}
+}
+
+func isAnthropicObjectSchema(schema map[string]any) bool {
+	typeName, _ := schema["type"].(string)
+	if strings.EqualFold(strings.TrimSpace(typeName), "object") {
+		return true
+	}
+	for _, key := range []string{"properties", "patternProperties", "additionalProperties", "required", "dependentSchemas", "propertyNames", "minProperties", "maxProperties"} {
+		if _, ok := schema[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAnthropicOutputSchemaChild(key string, value any) any {
+	switch key {
+	case "properties", "$defs", "definitions", "patternProperties", "dependentSchemas":
+		children, ok := value.(map[string]any)
+		if !ok {
+			return value
+		}
+		normalized := make(map[string]any, len(children))
+		for childKey, childValue := range children {
+			normalized[childKey] = normalizeAnthropicOutputSchemaNode(childValue, true)
+		}
+		return normalized
+	case "items", "contains", "not", "if", "then", "else":
+		return normalizeAnthropicOutputSchemaNode(value, true)
+	case "additionalProperties":
+		if schemaMap, ok := value.(map[string]any); ok {
+			return normalizeAnthropicOutputSchemaNode(schemaMap, true)
+		}
+		return value
+	case "anyOf", "allOf", "oneOf", "prefixItems":
+		items, ok := value.([]any)
+		if !ok {
+			return value
+		}
+		normalized := make([]any, len(items))
+		for i, item := range items {
+			normalized[i] = normalizeAnthropicOutputSchemaNode(item, true)
+		}
+		return normalized
+	default:
+		return value
+	}
 }
 
 func envTrimmed(key string) string {
