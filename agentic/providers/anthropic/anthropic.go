@@ -511,10 +511,40 @@ func applyOutputJSONSchema(req *anthropic.MessageNewParams, schemaRaw json.RawMe
 		return errors.New("anthropic: output json schema is empty")
 	}
 
+	normalized, ok := normalizeAnthropicOutputSchema(schema).(map[string]any)
+	if !ok || len(normalized) == 0 {
+		return errors.New("anthropic: normalized output json schema is empty")
+	}
+
 	req.OutputConfig = anthropic.OutputConfigParam{
-		Format: anthropic.JSONOutputFormatParam{Schema: schema},
+		Format: anthropic.JSONOutputFormatParam{Schema: normalized},
 	}
 	return nil
+}
+
+func normalizeAnthropicOutputSchema(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		normalized := make(map[string]any, len(v)+1)
+		for key, child := range v {
+			normalized[key] = normalizeAnthropicOutputSchema(child)
+		}
+		typeName, _ := normalized["type"].(string)
+		if strings.EqualFold(strings.TrimSpace(typeName), "object") {
+			if current, ok := normalized["additionalProperties"]; !ok || current == true {
+				normalized["additionalProperties"] = false
+			}
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, len(v))
+		for i, child := range v {
+			normalized[i] = normalizeAnthropicOutputSchema(child)
+		}
+		return normalized
+	default:
+		return value
+	}
 }
 
 func envTrimmed(key string) string {
