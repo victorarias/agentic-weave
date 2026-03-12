@@ -122,6 +122,11 @@ func TestApplyOutputJSONSchema_NormalizesAdditionalPropertiesForObjects(t *testi
 					"name":{"type":"string"}
 				}
 			},
+			"implicit_object":{
+				"properties":{
+					"slug":{"type":"string"}
+				}
+			},
 			"items":{
 				"type":"array",
 				"items":{
@@ -133,7 +138,8 @@ func TestApplyOutputJSONSchema_NormalizesAdditionalPropertiesForObjects(t *testi
 							"properties":{"x":{"type":"number"}},
 							"additionalProperties":true
 						}
-					}
+					},
+					"additionalProperties":{"type":"string"}
 				}
 			},
 			"payload":{
@@ -153,6 +159,10 @@ func TestApplyOutputJSONSchema_NormalizesAdditionalPropertiesForObjects(t *testi
 	user, _ := props["user"].(map[string]any)
 	if user["additionalProperties"] != false {
 		t.Fatalf("expected nested object additionalProperties=false, got %#v", user["additionalProperties"])
+	}
+	implicitObject, _ := props["implicit_object"].(map[string]any)
+	if implicitObject["additionalProperties"] != false {
+		t.Fatalf("expected implicit object additionalProperties=false, got %#v", implicitObject["additionalProperties"])
 	}
 	items, _ := props["items"].(map[string]any)
 	itemSchema, _ := items["items"].(map[string]any)

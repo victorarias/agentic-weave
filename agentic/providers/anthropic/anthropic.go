@@ -537,11 +537,8 @@ func normalizeAnthropicOutputSchemaNode(value any, isSchemaNode bool) any {
 		for key, child := range v {
 			normalized[key] = normalizeAnthropicOutputSchemaChild(key, child)
 		}
-		typeName, _ := normalized["type"].(string)
-		if strings.EqualFold(strings.TrimSpace(typeName), "object") {
-			if current, ok := normalized["additionalProperties"]; !ok || current == true {
-				normalized["additionalProperties"] = false
-			}
+		if isAnthropicObjectSchema(normalized) {
+			normalized["additionalProperties"] = false
 		}
 		return normalized
 	case []any:
@@ -553,6 +550,19 @@ func normalizeAnthropicOutputSchemaNode(value any, isSchemaNode bool) any {
 	default:
 		return value
 	}
+}
+
+func isAnthropicObjectSchema(schema map[string]any) bool {
+	typeName, _ := schema["type"].(string)
+	if strings.EqualFold(strings.TrimSpace(typeName), "object") {
+		return true
+	}
+	for _, key := range []string{"properties", "patternProperties", "additionalProperties", "required", "dependentSchemas", "propertyNames", "minProperties", "maxProperties"} {
+		if _, ok := schema[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeAnthropicOutputSchemaChild(key string, value any) any {
