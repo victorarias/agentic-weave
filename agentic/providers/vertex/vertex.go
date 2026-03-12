@@ -28,6 +28,10 @@ type Input struct {
 	History      []message.AgentMessage
 	Tools        []agentic.ToolDefinition
 	GoogleSearch bool // Enable grounding with Google Search
+
+	// Labels are per-request key-value pairs for cost attribution.
+	// Merged on top of Config.Labels (per-request wins on key conflict).
+	Labels map[string]string
 }
 
 // Decision is the output from a single model call.
@@ -62,6 +66,11 @@ type Config struct {
 	HTTPClient  *http.Client
 	TokenSource oauth2.TokenSource
 	APIKey      string // Optional: use API key auth instead of OAuth2
+
+	// Labels are default key-value pairs attached to every API request
+	// for cost attribution and filtering in GCP billing exports.
+	// Per-request labels (on Input) are merged on top of these defaults.
+	Labels map[string]string
 }
 
 // Client calls the Vertex AI Gemini REST API.
@@ -75,6 +84,7 @@ type Client struct {
 	client      *http.Client
 	cred        oauth2.TokenSource
 	apiKey      string
+	labels      map[string]string
 }
 
 // New constructs a Vertex Gemini client from config.
@@ -114,6 +124,7 @@ func New(cfg Config) (*Client, error) {
 			maxTokens:   maxTokens,
 			client:      client,
 			apiKey:      apiKey,
+			labels:      cfg.Labels,
 		}, nil
 	}
 
@@ -145,6 +156,7 @@ func New(cfg Config) (*Client, error) {
 		maxTokens:   maxTokens,
 		client:      client,
 		cred:        ts,
+		labels:      cfg.Labels,
 	}, nil
 }
 
@@ -168,7 +180,29 @@ func ConfigFromEnv() Config {
 			cfg.MaxTokens = v
 		}
 	}
+	if labels := envTrimmed("VERTEX_LABELS"); labels != "" {
+		cfg.Labels = parseLabels(labels)
+	}
 	return cfg
+}
+
+// parseLabels parses a comma-separated list of key=value pairs.
+// Example: "service=conductor-bot,team=drm"
+func parseLabels(raw string) map[string]string {
+	labels := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		key, value, _ := strings.Cut(pair, "=")
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		labels[key] = strings.TrimSpace(value)
+	}
+	return labels
 }
 
 // NewFromEnv builds a Vertex Gemini client from environment variables.
@@ -346,7 +380,27 @@ func (c *Client) buildRequest(input Input) ([]byte, error) {
 		request.Tools = append(request.Tools, vertexTool{GoogleSearch: &vertexGoogleSearch{}})
 	}
 
+	if merged := c.mergeLabels(input.Labels); len(merged) > 0 {
+		request.Labels = merged
+	}
+
 	return json.Marshal(request)
+}
+
+// mergeLabels combines client-level labels with per-request labels.
+// Per-request labels take precedence on key conflicts.
+func (c *Client) mergeLabels(inputLabels map[string]string) map[string]string {
+	if len(c.labels) == 0 && len(inputLabels) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(c.labels)+len(inputLabels))
+	for k, v := range c.labels {
+		merged[k] = v
+	}
+	for k, v := range inputLabels {
+		merged[k] = v
+	}
+	return merged
 }
 
 // appendHistory converts AgentMessage history to Vertex AI content format.
@@ -475,6 +529,7 @@ type vertexRequest struct {
 	Contents          []vertexContent         `json:"contents"`
 	Tools             []vertexTool            `json:"tools,omitempty"`
 	GenerationConfig  vertexGenerationConfig  `json:"generationConfig,omitempty"`
+	Labels            map[string]string       `json:"labels,omitempty"`
 }
 
 type vertexSystemInstruction struct {

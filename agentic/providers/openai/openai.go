@@ -118,6 +118,11 @@ func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan prov
 		params.Tools = toolDefsToOpenAI(input.Tools)
 	}
 
+	// Labels → OpenAI metadata.
+	if len(input.Labels) > 0 {
+		params.Metadata = shared.Metadata(input.Labels)
+	}
+
 	// Structured output.
 	if len(input.OutputJSONSchema) > 0 {
 		responseFormat, err := responseFormatFromSchema(input.OutputJSONSchema)

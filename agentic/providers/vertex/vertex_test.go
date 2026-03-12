@@ -811,6 +811,171 @@ func TestAppendHistoryToolResultWithInlineData(t *testing.T) {
 	}
 }
 
+func TestBuildRequestIncludesConfigLabels(t *testing.T) {
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+		labels:      map[string]string{"service": "conductor-bot", "team": "drm"},
+	}
+
+	reqBody, err := client.buildRequest(Input{UserMessage: "hello"})
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	var req vertexRequest
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	if len(req.Labels) != 2 {
+		t.Fatalf("expected 2 labels, got %d", len(req.Labels))
+	}
+	if req.Labels["service"] != "conductor-bot" {
+		t.Errorf("expected service=conductor-bot, got %q", req.Labels["service"])
+	}
+	if req.Labels["team"] != "drm" {
+		t.Errorf("expected team=drm, got %q", req.Labels["team"])
+	}
+}
+
+func TestBuildRequestMergesInputLabelsOverConfigLabels(t *testing.T) {
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+		labels:      map[string]string{"service": "default", "team": "drm"},
+	}
+
+	input := Input{
+		UserMessage: "hello",
+		Labels:      map[string]string{"service": "conductor-bot", "env": "prod"},
+	}
+
+	reqBody, err := client.buildRequest(input)
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	var req vertexRequest
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	if len(req.Labels) != 3 {
+		t.Fatalf("expected 3 labels, got %d: %v", len(req.Labels), req.Labels)
+	}
+	if req.Labels["service"] != "conductor-bot" {
+		t.Errorf("per-request label should override config: got service=%q", req.Labels["service"])
+	}
+	if req.Labels["team"] != "drm" {
+		t.Errorf("config label should be preserved: got team=%q", req.Labels["team"])
+	}
+	if req.Labels["env"] != "prod" {
+		t.Errorf("per-request label should be included: got env=%q", req.Labels["env"])
+	}
+}
+
+func TestBuildRequestOmitsLabelsWhenEmpty(t *testing.T) {
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+	}
+
+	reqBody, err := client.buildRequest(Input{UserMessage: "hello"})
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	// Verify "labels" key is not present in JSON (omitempty)
+	if strings.Contains(string(reqBody), `"labels"`) {
+		t.Error("expected labels to be omitted from JSON when empty")
+	}
+}
+
+func TestParseLabels(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected map[string]string
+	}{
+		{
+			name:     "single pair",
+			input:    "service=conductor-bot",
+			expected: map[string]string{"service": "conductor-bot"},
+		},
+		{
+			name:     "multiple pairs",
+			input:    "service=conductor-bot,team=drm,env=prod",
+			expected: map[string]string{"service": "conductor-bot", "team": "drm", "env": "prod"},
+		},
+		{
+			name:     "with spaces",
+			input:    " service = conductor-bot , team = drm ",
+			expected: map[string]string{"service": "conductor-bot", "team": "drm"},
+		},
+		{
+			name:     "empty value",
+			input:    "service=",
+			expected: map[string]string{"service": ""},
+		},
+		{
+			name:     "trailing comma",
+			input:    "service=conductor-bot,",
+			expected: map[string]string{"service": "conductor-bot"},
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: map[string]string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseLabels(tc.input)
+			if len(got) != len(tc.expected) {
+				t.Fatalf("expected %d labels, got %d: %v", len(tc.expected), len(got), got)
+			}
+			for k, want := range tc.expected {
+				if got[k] != want {
+					t.Errorf("label %q: expected %q, got %q", k, want, got[k])
+				}
+			}
+		})
+	}
+}
+
+func TestConfigFromEnvParsesLabels(t *testing.T) {
+	t.Setenv("VERTEX_PROJECT", "")
+	t.Setenv("VERTEX_MODEL", "")
+	t.Setenv("VERTEX_LOCATION", "")
+	t.Setenv("VERTEX_API_BASE", "")
+	t.Setenv("VERTEX_AI_API_KEY", "")
+	t.Setenv("VERTEX_TEMPERATURE", "")
+	t.Setenv("VERTEX_MAX_TOKENS", "")
+	t.Setenv("VERTEX_LABELS", "service=conductor-bot,team=drm")
+
+	cfg := ConfigFromEnv()
+	if len(cfg.Labels) != 2 {
+		t.Fatalf("expected 2 labels, got %d: %v", len(cfg.Labels), cfg.Labels)
+	}
+	if cfg.Labels["service"] != "conductor-bot" {
+		t.Errorf("expected service=conductor-bot, got %q", cfg.Labels["service"])
+	}
+	if cfg.Labels["team"] != "drm" {
+		t.Errorf("expected team=drm, got %q", cfg.Labels["team"])
+	}
+}
+
 func TestAppendHistoryToolResultWithoutInlineData(t *testing.T) {
 	// Verify that tool results without inline data still produce a single-part response
 	history := []message.AgentMessage{
