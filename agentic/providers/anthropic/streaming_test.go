@@ -135,6 +135,10 @@ func TestApplyOutputJSONSchema_NormalizesAdditionalPropertiesForObjects(t *testi
 						}
 					}
 				}
+			},
+			"payload":{
+				"type":"object",
+				"const":{"type":"object","nested":true}
 			}
 		}
 	}`))
@@ -159,6 +163,11 @@ func TestApplyOutputJSONSchema_NormalizesAdditionalPropertiesForObjects(t *testi
 	meta, _ := itemProps["meta"].(map[string]any)
 	if meta["additionalProperties"] != false {
 		t.Fatalf("expected explicit additionalProperties=true to normalize to false, got %#v", meta["additionalProperties"])
+	}
+	payload, _ := props["payload"].(map[string]any)
+	constValue, _ := payload["const"].(map[string]any)
+	if _, exists := constValue["additionalProperties"]; exists {
+		t.Fatalf("expected const object to remain untouched, got %#v", constValue)
 	}
 }
 
