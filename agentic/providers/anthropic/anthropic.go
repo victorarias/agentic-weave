@@ -597,9 +597,10 @@ func applyThinkingConfig(req *anthropic.MessageNewParams, mode string, effort st
 		req.Thinking = anthropic.ThinkingConfigParamOfEnabled(fixedBudget)
 	default:
 		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
-		if normalizedEffort := normalizeThinkingEffort(effort); normalizedEffort != "" {
-			adaptive.SetExtraFields(map[string]any{"effort": normalizedEffort})
-		}
 		req.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
+	}
+
+	if normalizedEffort := normalizeThinkingEffort(effort); normalizedEffort != "" {
+		req.OutputConfig.Effort = anthropic.OutputConfigEffort(normalizedEffort)
 	}
 }

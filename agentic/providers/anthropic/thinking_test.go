@@ -57,15 +57,17 @@ func TestApplyThinkingConfig(t *testing.T) {
 	if req.Thinking.OfAdaptive == nil {
 		t.Fatalf("expected adaptive thinking config")
 	}
-	extra := req.Thinking.OfAdaptive.ExtraFields()
-	if got := extra["effort"]; got != thinkingEffortMedium {
-		t.Fatalf("expected effort %q, got %#v", thinkingEffortMedium, got)
+	if req.OutputConfig.Effort != sdk.OutputConfigEffortMedium {
+		t.Fatalf("expected output_config effort %q, got %q", sdk.OutputConfigEffortMedium, req.OutputConfig.Effort)
 	}
 
 	req = sdk.MessageNewParams{}
 	applyThinkingConfig(&req, thinkingModeOff, "", 0)
 	if req.Thinking.OfDisabled == nil {
 		t.Fatalf("expected disabled thinking config")
+	}
+	if req.OutputConfig.Effort != "" {
+		t.Fatalf("expected empty output_config effort, got %q", req.OutputConfig.Effort)
 	}
 
 	req = sdk.MessageNewParams{}
@@ -75,5 +77,8 @@ func TestApplyThinkingConfig(t *testing.T) {
 	}
 	if req.Thinking.OfEnabled.BudgetTokens < 1024 {
 		t.Fatalf("expected minimum fixed budget of 1024, got %d", req.Thinking.OfEnabled.BudgetTokens)
+	}
+	if req.OutputConfig.Effort != "" {
+		t.Fatalf("expected empty output_config effort for fixed mode, got %q", req.OutputConfig.Effort)
 	}
 }
