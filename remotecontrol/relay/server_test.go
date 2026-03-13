@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -121,6 +123,110 @@ func TestRelaySessionStatusUsesRegistry(t *testing.T) {
 	}
 }
 
+func TestRelaySpawnLoadAndRuntimeStop(t *testing.T) {
+	tempDir := t.TempDir()
+	launcher := newFakeLauncher(t)
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir, StartupTimeout: 5 * time.Second, Launcher: launcher})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+	srv.cfg.PublicURL = relayURL
+
+	clientConn := dialWS(t, relayURL)
+	defer clientConn.Close()
+	authenticateWS(t, clientConn, protocol.RoleClient, "secret", "")
+
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-spawn", "", "test-client", "spawn-1", protocol.SessionSpawnCommand{
+		Command: protocol.CommandSessionSpawn,
+	})
+	if err != nil {
+		t.Fatalf("new spawn envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write spawn: %v", err)
+	}
+	spawnAck := awaitWSAckEnvelope(t, clientConn, "spawn-1")
+	spawnPayload := decodeAckPayload(t, spawnAck)
+	firstRuntimeID := nestedString(spawnPayload.Data, "runtime", "id")
+	persistedHandle := stringValue(spawnPayload.Data["persisted_session_handle"])
+	if firstRuntimeID == "" || persistedHandle == "" {
+		t.Fatalf("expected runtime id and persisted handle: %#v", spawnPayload.Data)
+	}
+
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-spawn", "", "test-client", "init-spawn", protocol.InitializeCommand{
+		Command:         protocol.CommandInitialize,
+		ProtocolVersion: protocol.Version,
+	})
+	if err != nil {
+		t.Fatalf("new init envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init after spawn: %v", err)
+	}
+	awaitWSAck(t, clientConn, "init-spawn")
+	awaitReadyEvent(t, clientConn)
+
+	stopEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-spawn", "", "test-client", "stop-1", protocol.RuntimeStopCommand{
+		Command: protocol.CommandRuntimeStop,
+	})
+	if err != nil {
+		t.Fatalf("new stop envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(stopEnv); err != nil {
+		t.Fatalf("write stop: %v", err)
+	}
+	stopAck := awaitWSAckEnvelope(t, clientConn, "stop-1")
+	stopPayload := decodeAckPayload(t, stopAck)
+	if connected, _ := stopPayload.Data["wrapper_connected"].(bool); connected {
+		t.Fatalf("expected wrapper to be disconnected: %#v", stopPayload.Data)
+	}
+
+	loadEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-spawn", "", "test-client", "load-1", protocol.SessionLoadCommand{
+		Command: protocol.CommandSessionLoad,
+	})
+	if err != nil {
+		t.Fatalf("new load envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(loadEnv); err != nil {
+		t.Fatalf("write load: %v", err)
+	}
+	loadAck := awaitWSAckEnvelope(t, clientConn, "load-1")
+	loadPayload := decodeAckPayload(t, loadAck)
+	secondRuntimeID := nestedString(loadPayload.Data, "runtime", "id")
+	if secondRuntimeID == "" || secondRuntimeID == firstRuntimeID {
+		t.Fatalf("expected a new runtime id after load: first=%s second=%s payload=%#v", firstRuntimeID, secondRuntimeID, loadPayload.Data)
+	}
+	if stringValue(loadPayload.Data["persisted_session_handle"]) != persistedHandle {
+		t.Fatalf("expected persisted handle to survive load: %#v", loadPayload.Data)
+	}
+
+	initLoadEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-spawn", "", "test-client", "init-load", protocol.InitializeCommand{
+		Command:         protocol.CommandInitialize,
+		ProtocolVersion: protocol.Version,
+	})
+	if err != nil {
+		t.Fatalf("new init-load envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(initLoadEnv); err != nil {
+		t.Fatalf("write init after load: %v", err)
+	}
+	awaitWSAck(t, clientConn, "init-load")
+	awaitReadyEvent(t, clientConn)
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-spawn", "", "test-client", "prompt-1", protocol.SessionPromptCommand{
+		Command: protocol.CommandSessionPrompt,
+		Message: "say hello",
+	})
+	if err != nil {
+		t.Fatalf("new prompt envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt after load: %v", err)
+	}
+	awaitWSAck(t, clientConn, "prompt-1")
+	awaitMessageComplete(t, clientConn, "hello world")
+}
+
 func TestRelayRejectsInvalidToken(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -147,6 +253,75 @@ func TestRelayRejectsInvalidToken(t *testing.T) {
 	if env.Type != protocol.MessageError {
 		t.Fatalf("expected error, got %#v", env)
 	}
+}
+
+type fakeLaunchState struct {
+	cancel context.CancelFunc
+}
+
+type fakeLauncher struct {
+	t      *testing.T
+	mu     sync.Mutex
+	states map[string]*fakeLaunchState
+}
+
+func newFakeLauncher(t *testing.T) *fakeLauncher {
+	return &fakeLauncher{t: t, states: make(map[string]*fakeLaunchState)}
+}
+
+func (l *fakeLauncher) Spawn(_ context.Context, req LaunchRequest) error {
+	l.mu.Lock()
+	if l.states[req.SessionID] != nil {
+		l.mu.Unlock()
+		return errRuntimeAlreadyManaged
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	state := &fakeLaunchState{cancel: cancel}
+	l.states[req.SessionID] = state
+	l.mu.Unlock()
+
+	if req.PersistedSessionHandle != "" {
+		if err := os.MkdirAll(filepath.Dir(req.PersistedSessionHandle), 0o755); err != nil {
+			return err
+		}
+		if _, err := os.Stat(req.PersistedSessionHandle); err != nil {
+			if err := os.WriteFile(req.PersistedSessionHandle, nil, 0o644); err != nil {
+				return err
+			}
+		}
+	}
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       req.SessionID,
+		PiBin:           helperProcessPath(l.t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--", "--session=" + req.PersistedSessionHandle},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() {
+		_ = wrapper.RunRelay(ctx, req.RelayURL, req.Token)
+		l.mu.Lock()
+		if l.states[req.SessionID] == state {
+			delete(l.states, req.SessionID)
+		}
+		l.mu.Unlock()
+	}()
+	return nil
+}
+
+func (l *fakeLauncher) Stop(sessionID string) error {
+	l.mu.Lock()
+	state := l.states[sessionID]
+	if state != nil {
+		delete(l.states, sessionID)
+	}
+	l.mu.Unlock()
+	if state == nil {
+		return os.ErrNotExist
+	}
+	state.cancel()
+	return nil
 }
 
 func TestFakePIProcess(t *testing.T) {
@@ -283,6 +458,25 @@ func awaitWSAckEnvelope(t *testing.T, conn *websocket.Conn, id string) protocol.
 			t.Fatalf("received error for %s: %s", id, payload.Error)
 		}
 	}
+}
+
+func decodeAckPayload(t *testing.T, env protocol.Envelope) protocol.AckPayload {
+	t.Helper()
+	var payload protocol.AckPayload
+	if err := env.DecodePayload(&payload); err != nil {
+		t.Fatalf("decode ack payload: %v", err)
+	}
+	return payload
+}
+
+func nestedString(data map[string]any, key, nested string) string {
+	inner, _ := data[key].(map[string]any)
+	return stringValue(inner[nested])
+}
+
+func stringValue(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func awaitReadyEvent(t *testing.T, conn *websocket.Conn) {

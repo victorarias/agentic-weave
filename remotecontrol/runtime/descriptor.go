@@ -21,6 +21,7 @@ func PiRPC() Descriptor {
 		Transport:      "rpc",
 		ResumeStrategy: "session-file",
 		Capabilities: map[string]bool{
+			"session_status":     true,
 			"session_prompt":     true,
 			"session_cancel":     true,
 			"session_update":     true,

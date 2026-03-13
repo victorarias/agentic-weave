@@ -1,6 +1,6 @@
 # Control Protocol
 
-**Status (2026-03-13):** Tier 0 local protocol and Tier 1 single-session relay routing are implemented for `auth`, `initialize`, `session.status`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update`. Tier 2 cleanup work has also started with an explicit session/runtime registry seam, but spawn/load and attach/takeover remain future tiers.
+**Status (2026-03-13):** Tier 0 local protocol, Tier 1 single-session relay routing, and the Tier 2 spawn/load identity skeleton are implemented for `auth`, `initialize`, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update`. Attach/takeover and richer host routing remain future tiers.
 
 All messages are JSON over WebSocket. Every message has a common envelope.
 
@@ -101,6 +101,7 @@ Expected `ack.data` shape:
 {
   "session": { "id": "sess-uuid" },
   "runtime": { "id": "rt-uuid", "kind": "pi", "transport": "rpc" },
+  "persisted_session_handle": "/path/to/session.jsonl",
   "wrapper_connected": true,
   "updated_at": "2026-03-13T21:45:00Z"
 }
@@ -155,6 +156,20 @@ Load or resume a previously persisted pi-mono session on a host.
       "extensions": ["pi-bridge.ts"],
       "working_dir": "/path"
     }
+  }
+}
+```
+
+#### `runtime.stop`
+Stop the currently attached runtime while preserving the logical session record.
+This is a native weave control-plane command used by the Tier 2 walking
+skeleton to force runtime replacement before a later `session.load`.
+```jsonc
+{
+  "type": "command",
+  "session_id": "sess-uuid",
+  "payload": {
+    "command": "runtime.stop"
   }
 }
 ```

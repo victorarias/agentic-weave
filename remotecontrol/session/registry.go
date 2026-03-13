@@ -9,10 +9,11 @@ import (
 )
 
 type Record struct {
-	Session          protocol.SessionInfo `json:"session"`
-	Runtime          protocol.RuntimeInfo `json:"runtime"`
-	WrapperConnected bool                 `json:"wrapper_connected"`
-	UpdatedAt        time.Time            `json:"updated_at"`
+	Session                protocol.SessionInfo `json:"session"`
+	Runtime                protocol.RuntimeInfo `json:"runtime"`
+	PersistedSessionHandle string               `json:"persisted_session_handle,omitempty"`
+	WrapperConnected       bool                 `json:"wrapper_connected"`
+	UpdatedAt              time.Time            `json:"updated_at"`
 }
 
 type Registry struct {
@@ -24,15 +25,30 @@ func NewRegistry() *Registry {
 	return &Registry{records: make(map[string]Record)}
 }
 
-func (r *Registry) SetConnected(sessionID string, runtime protocol.RuntimeInfo) Record {
+func (r *Registry) Ensure(sessionID, persistedHandle string) Record {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	record := Record{
-		Session:          protocol.SessionInfo{ID: sessionID},
-		Runtime:          runtime,
-		WrapperConnected: true,
-		UpdatedAt:        time.Now().UTC(),
+	record := r.records[sessionID]
+	record.Session = protocol.SessionInfo{ID: sessionID}
+	if persistedHandle != "" {
+		record.PersistedSessionHandle = persistedHandle
 	}
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = record
+	return record
+}
+
+func (r *Registry) SetConnected(sessionID string, runtime protocol.RuntimeInfo, persistedHandle string) Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record := r.records[sessionID]
+	record.Session = protocol.SessionInfo{ID: sessionID}
+	record.Runtime = runtime
+	if persistedHandle != "" {
+		record.PersistedSessionHandle = persistedHandle
+	}
+	record.WrapperConnected = true
+	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = record
 	return record
 }

@@ -21,6 +21,9 @@ const (
 	CommandAuth          = "auth"
 	CommandInitialize    = "initialize"
 	CommandSessionStatus = "session.status"
+	CommandSessionSpawn  = "session.spawn"
+	CommandSessionLoad   = "session.load"
+	CommandRuntimeStop   = "runtime.stop"
 	CommandSessionPrompt = "session.prompt"
 	CommandSessionCancel = "session.cancel"
 
@@ -62,6 +65,20 @@ type InitializeCommand struct {
 }
 
 type SessionStatusCommand struct {
+	Command string `json:"command"`
+}
+
+type SessionSpawnCommand struct {
+	Command     string `json:"command"`
+	SessionPath string `json:"session_path,omitempty"`
+}
+
+type SessionLoadCommand struct {
+	Command     string `json:"command"`
+	SessionPath string `json:"session_path,omitempty"`
+}
+
+type RuntimeStopCommand struct {
 	Command string `json:"command"`
 }
 

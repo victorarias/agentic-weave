@@ -22,7 +22,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|status|prompt|cancel> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|status|spawn|load|kill-runtime|prompt|cancel> [message]")
 	}
 	switch os.Args[1] {
 	case "local":
@@ -30,7 +30,7 @@ func run() error {
 	case "relay":
 		return runRelay(os.Args[2:])
 	default:
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|status|prompt|cancel> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|status|spawn|load|kill-runtime|prompt|cancel> [message]")
 	}
 }
 
@@ -45,6 +45,9 @@ func runLocal(args []string) error {
 	subcmd, message, err := parseSubcommand(fs.Args())
 	if err != nil {
 		return err
+	}
+	if subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" {
+		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	}
 
 	conn, err := net.Dial("unix", *socket)
@@ -84,19 +87,21 @@ func runRelay(args []string) error {
 	if err := client.authenticate(*jsonMode); err != nil {
 		return err
 	}
-	if err := client.initialize(*sessionID, *jsonMode); err != nil {
-		return err
+	if shouldInitializeRelay(subcmd) {
+		if err := client.initialize(*sessionID, *jsonMode); err != nil {
+			return err
+		}
 	}
 	return client.execute(subcmd, message, *sessionID, *jsonMode)
 }
 
 func parseSubcommand(args []string) (string, string, error) {
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("missing subcommand: init, status, prompt, or cancel")
+		return "", "", fmt.Errorf("missing subcommand: init, status, spawn, load, kill-runtime, prompt, or cancel")
 	}
 	subcmd := args[0]
 	switch subcmd {
-	case "init", "status", "cancel":
+	case "init", "status", "spawn", "load", "kill-runtime", "cancel":
 		return subcmd, "", nil
 	case "prompt":
 		if len(args) < 2 {
@@ -165,6 +170,8 @@ func (c *localClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 			return err
 		}
 		return printStatus(ack, jsonMode)
+	case "spawn", "load", "kill-runtime":
+		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
 		if err != nil {
@@ -274,6 +281,45 @@ func (c *relayClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 			return err
 		}
 		return printStatus(ack, jsonMode)
+	case "spawn":
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "spawn-1", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		ack, err := waitForAckEnvelope(c.events, "spawn-1", jsonMode)
+		if err != nil {
+			return err
+		}
+		return printStatus(ack, jsonMode)
+	case "load":
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "load-1", protocol.SessionLoadCommand{Command: protocol.CommandSessionLoad})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		ack, err := waitForAckEnvelope(c.events, "load-1", jsonMode)
+		if err != nil {
+			return err
+		}
+		return printStatus(ack, jsonMode)
+	case "kill-runtime":
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "kill-runtime-1", protocol.RuntimeStopCommand{Command: protocol.CommandRuntimeStop})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		ack, err := waitForAckEnvelope(c.events, "kill-runtime-1", jsonMode)
+		if err != nil {
+			return err
+		}
+		return printStatus(ack, jsonMode)
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
 		if err != nil {
@@ -375,6 +421,9 @@ func printStatus(env protocol.Envelope, jsonMode bool) error {
 	fmt.Fprintf(os.Stdout, "runtime_id=%s\n", stringValue(runtimeMap["id"]))
 	fmt.Fprintf(os.Stdout, "runtime_kind=%s\n", stringValue(runtimeMap["kind"]))
 	fmt.Fprintf(os.Stdout, "runtime_transport=%s\n", stringValue(runtimeMap["transport"]))
+	if persisted := stringValue(ack.Data["persisted_session_handle"]); persisted != "" {
+		fmt.Fprintf(os.Stdout, "persisted_session_handle=%s\n", persisted)
+	}
 	if wrapperConnected, ok := ack.Data["wrapper_connected"].(bool); ok {
 		fmt.Fprintf(os.Stdout, "wrapper_connected=%t\n", wrapperConnected)
 	}
@@ -422,6 +471,15 @@ func streamUntilComplete(events <-chan protocol.Envelope, errCh <-chan error, js
 				return nil
 			}
 		}
+	}
+}
+
+func shouldInitializeRelay(subcmd string) bool {
+	switch subcmd {
+	case "init", "prompt", "cancel":
+		return true
+	default:
+		return false
 	}
 }
 

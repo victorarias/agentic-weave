@@ -198,14 +198,14 @@ This file tracks current work items and progress.
     - [x] inspector relay mode (`cmd/weave-inspect relay ...`)
     - [x] Go relay routing tests and real relay smoke test against pi for init/prompt
 
-- [ ] PR 3: Tier 2 cleanup scaffold before spawn/load
+- [x] PR 3: Tier 2 cleanup scaffold before spawn/load
   - Description: Pay down the Tier 0/1 prototype debt before adding identity and resume features.
   - Depends on: PR 2
   - Output:
     - [x] wrapper internals split more clearly between runtime control and peer transport
     - [x] initial runtime descriptor seam (`remotecontrol/runtime`)
     - [x] explicit session registry / identity model in code (`remotecontrol/session`, `session.status`)
-    - [ ] spawn/load implementation on top of the cleaned seams
+    - [x] spawn/load implementation on top of the cleaned seams (`session.spawn`, `runtime.stop`, `session.load`)
 
 ---
 
@@ -240,6 +240,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-13 22:14: Finished the first Tier 2 spawn/load skeleton: added relay-managed `session.spawn`, `runtime.stop`, and `session.load`, extended `weave-inspect` with `spawn` / `kill-runtime` / `load`, added relay launcher + spawn/load tests, and verified a real pi-backed `spawn → prompt → runtime.stop → load → prompt` smoke flow returning `SPAWN_OK` then `LOAD_OK`.
 - 2026-03-13 21:54: Added an explicit session/runtime registry seam for Tier 2 cleanup: new `remotecontrol/session` registry, relay-backed `session.status`, inspector support for `status`, and tests that assert `session_id` vs `runtime_id` are exposed cleanly.
 - 2026-03-13 21:41: Started the Tier 2 cleanup pass: split wrapper internals into clearer runtime-control vs peer-transport files and added an initial `remotecontrol/runtime` descriptor seam so spawn/load work has a cleaner base.
 - 2026-03-13 21:30: Strengthened the Tier 2 planning docs with an explicit hard gate: do not start Tier 3 until the Tier 2 cleanup/refactor work has landed and the wrapper/relay/runtime boundaries are no longer prototype-mushy.

@@ -291,8 +291,9 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 			return nil
 		}
 		return w.sendAck(p, env.ID, protocol.CommandSessionStatus, map[string]any{
-			"session": protocol.SessionInfo{ID: w.cfg.SessionID},
-			"runtime": protocol.RuntimeInfo{ID: w.runtimeID, Kind: "pi", Transport: w.descriptor.Transport},
+			"session":                  protocol.SessionInfo{ID: w.cfg.SessionID},
+			"runtime":                  protocol.RuntimeInfo{ID: w.runtimeID, Kind: "pi", Transport: w.descriptor.Transport},
+			"persisted_session_handle": stringValue(w.bootstrapState["sessionFile"]),
 			"runtime_descriptor": map[string]any{
 				"name":                w.descriptor.Name,
 				"command":             w.descriptor.Command,

@@ -1,6 +1,6 @@
 # Walking Skeleton Implementation Handoff
 
-**Status:** Active handoff plan — Tier 0 and Tier 1 implemented; Tier 2+ still pending
+**Status:** Active handoff plan — Tier 0, Tier 1, and the first Tier 2 spawn/load skeleton are implemented; Tier 3+ still pending
 **Date:** 2026-03-10
 **Audience:** another implementation agent
 **Related:**
@@ -242,9 +242,8 @@ weave-relay --addr :8080 --token dev-token
 weave-wrapper --relay ws://localhost:8080 --token dev-token --session demo-1
 
 # terminal 3
-weave-inspect connect --relay ws://localhost:8080 --token dev-token
-weave-inspect init
-weave-inspect prompt demo-1 "readme-level summary please"
+weave-inspect relay --relay ws://localhost:8080/ws --token dev-token --session demo-1 init
+weave-inspect relay --relay ws://localhost:8080/ws --token dev-token --session demo-1 prompt "readme-level summary please"
 ```
 
 Expected:
@@ -275,6 +274,8 @@ Expected:
 Make **session identity** and **runtime replacement** real before building more user-facing features.
 
 This is the tier where the architecture becomes trustworthy.
+
+**Status note (2026-03-13):** a first working skeleton now exists: relay-managed local wrapper spawning, explicit session/runtime registry state, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, and a real pi-backed resume smoke test.
 
 ## Deliverable
 
@@ -335,15 +336,15 @@ This must be config/data-driven enough to prevent scattered pi-specific branches
 Human-run demo:
 ```bash
 # spawn a new session
-weave-inspect spawn --session demo-2
-weave-inspect prompt demo-2 "say one sentence"
+weave-inspect relay --relay ws://localhost:8080/ws --token dev-token --session demo-2 spawn
+weave-inspect relay --relay ws://localhost:8080/ws --token dev-token --session demo-2 prompt "say one sentence"
 
 # stop runtime
-weave-inspect kill-runtime demo-2
+weave-inspect relay --relay ws://localhost:8080/ws --token dev-token --session demo-2 kill-runtime
 
 # load existing session into a new runtime
-weave-inspect load demo-2
-weave-inspect prompt demo-2 "continue"
+weave-inspect relay --relay ws://localhost:8080/ws --token dev-token --session demo-2 load
+weave-inspect relay --relay ws://localhost:8080/ws --token dev-token --session demo-2 prompt "continue"
 ```
 
 Expected:

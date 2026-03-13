@@ -1,6 +1,6 @@
 # V1 Architecture and Phased Plan
 
-**Status (2026-03-13):** Tier 0 and Tier 1 are complete and validated. Tier 2 cleanup is now underway. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, and the first session/runtime registry seam in `remotecontrol/session`. Spawn/load is still the next major build step.
+**Status (2026-03-13):** Tier 0, Tier 1, and the first Tier 2 spawn/load identity skeleton are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes plus relay `spawn` / `load` / `kill-runtime` / `status`), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test now works end-to-end; Tier 3 remains gated on keeping the cleanup boundaries intact.
 
 ## Architecture Overview
 
@@ -234,6 +234,8 @@ Deliverables:
 ### Tier 2 — Spawn / Load / Identity Skeleton
 
 **Goal**: make session identity and recovery real before adding more features.
+
+**Status note (2026-03-13):** the current skeleton now includes a relay-managed local spawn/load path, explicit `session.status`, and a real `spawn → prompt → runtime.stop → load → prompt` smoke test against pi session persistence.
 
 **Mandatory cleanup at the start of Tier 2:** before adding spawn/load behavior,
 refactor the Tier 0/1 prototype so responsibilities are cleaner.
