@@ -1,12 +1,14 @@
 # Remote Agent Control — Requirements
 
+**Status (2026-03-13):** Active. Tier 0 is now implemented with a local RPC-backed wrapper around `pi --mode rpc`; relay, daemon, interactive PTY attach/takeover, and ACP shim work remain future tiers.
+
 Gathered 2026-02-20 via structured interview.
 
 ## Naming
 
 - **weave** — the monorepo and project name
 - **weave-core** — the existing agentic loop library (`core/`)
-- **wv-*** — all remote control tooling: `wv-relay`, `wv-wrapper`, `wv-daemon`, `wv-inspect`, `wv-bridge`, `wv-protocol`, `wv-fakepimono`
+- **weave-*** — all remote control tooling: `weave-relay`, `weave-wrapper`, `weave-daemon`, `weave-inspect`, `pi-bridge`, `weave-protocol`, `weave-fakepi`
 
 ## Monorepo Layout
 
@@ -15,20 +17,20 @@ weave/
 ├── go.work                          # Go workspace
 ├── core/                            # weave-core (existing agentic loop lib)
 │   └── go.mod                       #   github.com/victorarias/weave/core
-├── wv-protocol/                     # shared Go types (orchestrator imports this)
-│   └── go.mod                       #   github.com/victorarias/weave/wv-protocol
-├── wv-relay/                        # relay server
+├── weave-protocol/                     # shared Go types (orchestrator imports this)
+│   └── go.mod                       #   github.com/victorarias/weave/weave-protocol
+├── weave-relay/                        # relay server
 │   └── go.mod
-├── wv-wrapper/                      # PTY wrapper (one per agent)
+├── weave-wrapper/                      # PTY wrapper (one per agent)
 │   └── go.mod
-├── wv-daemon/                       # host daemon (one per machine)
+├── weave-daemon/                       # host daemon (one per machine)
 │   └── go.mod
-├── wv-inspect/                      # CLI inspector / dev tools
+├── weave-inspect/                      # CLI inspector / dev tools
 │   └── go.mod
-├── wv-fakepimono/                   # test harness (fake pi-mono)
+├── weave-fakepi/                   # test harness (fake pi-mono)
 │   └── go.mod
 ├── extensions/
-│   └── wv-bridge/                   # pi-mono extension (TypeScript)
+│   └── pi-bridge/                   # pi-mono extension (TypeScript)
 │       ├── package.json
 │       └── src/
 ├── docs/
@@ -40,14 +42,14 @@ weave/
 
 | Component | Dir | Language | Role |
 |-----------|-----|----------|------|
-| **Orchestrator** | *(external repo)* | Go | Assigns tasks, steers agents. Imports `wv-protocol`. We spec its interface only. |
-| **wv-relay** | `wv-relay/` | Go | WebSocket multiplexer, session registry, spawn coordination, recovery. |
-| **wv-wrapper** | `wv-wrapper/` | Go | PTY proxy around pi-mono. Connects to relay. Multiplexes structured + raw I/O. |
-| **wv-bridge** | `extensions/wv-bridge/` | TypeScript | Pi-mono extension. Message injection, event streaming, tool interception. |
-| **wv-daemon** | `wv-daemon/` | Go | Host daemon. Listens for spawn commands, launches wrapper+pi-mono pairs. |
-| **wv-protocol** | `wv-protocol/` | Go | Shared types (messages, enums, state machine). Imported by orchestrator. |
-| **wv-inspect** | `wv-inspect/` | Go | CLI inspector for debugging and observability. |
-| **wv-fakepimono** | `wv-fakepimono/` | Go | Test harness. Fake pi-mono that speaks the bridge protocol. |
+| **Orchestrator** | *(external repo)* | Go | Assigns tasks, steers agents. Imports `weave-protocol`. We spec its interface only. |
+| **weave-relay** | `weave-relay/` | Go | WebSocket multiplexer, session registry, spawn coordination, recovery. |
+| **weave-wrapper** | `weave-wrapper/` | Go | PTY proxy around pi-mono. Connects to relay. Multiplexes structured + raw I/O. |
+| **pi-bridge** | `extensions/pi-bridge/` | TypeScript | Pi-mono extension. Message injection, event streaming, tool interception. |
+| **weave-daemon** | `weave-daemon/` | Go | Host daemon. Listens for spawn commands, launches wrapper+pi-mono pairs. |
+| **weave-protocol** | `weave-protocol/` | Go | Shared types (messages, enums, state machine). Imported by orchestrator. |
+| **weave-inspect** | `weave-inspect/` | Go | CLI inspector for debugging and observability. |
+| **weave-fakepi** | `weave-fakepi/` | Go | Test harness. Fake pi runtime that can speak pi RPC (and later the bridge protocol if needed). |
 
 ## Core Requirements
 
@@ -132,22 +134,30 @@ Design implication:
 | Auth | Token-based | Simple, stateless. Sufficient for v1. |
 | Persistence | Agent-side (pi-mono JSONL) + ephemeral relay buffer | Accept pi-mono coupling for v1. |
 | Failure handling | Configurable per-task | Auto-restart, mark-failed, or checkpoint-retry. |
-| Pi-mono coupling | Accept for v1 | Use pi's RPC format directly. Abstract in v2. |
-| Agent runtime mode | Always interactive | Wrapper owns PTY; extension handles structured protocol. |
+| Pi-mono coupling | Accept for v1 | Use pi's RPC format first; add the interactive extension bridge only when PTY attach/takeover is needed. |
+| Agent runtime mode | Tiered | Tier 0 uses RPC mode for the walking skeleton; later tiers can add interactive PTY ownership. |
 | Agent roles | Deferred | Generic agents for v1. Role system designed later. |
 
 ## Runtime Model
 
+Tier 0 walking skeleton:
+
 ```
-  Orchestrator ──JSON/WS──► Relay ──JSON/WS──► Wrapper ──extension-bridge──► Pi-mono Extension
-                                                  │                              │
-                                                  │ PTY ◄────────────────────► pi-mono TUI
+  Client ──JSON/Unix socket──► Wrapper ──JSONL stdin/stdout──► pi --mode rpc
+```
+
+Later interactive/attach tiers:
+
+```
+  Orchestrator ──JSON/WS──► Relay ──JSON/WS──► Wrapper ──local bridge──► pi-bridge extension
+                                                  │                           │
+                                                  │ PTY ◄──────────────────► pi interactive TUI
                                                   │
   Human (SSH/web) ◄──PTY/WS──────────────────────┘
 ```
 
-- Pi-mono always runs in **interactive mode**.
-- Wrapper owns the virtual PTY that pi-mono is attached to.
-- **Structured channel**: JSON over WebSocket (wrapper ↔ relay ↔ orchestrator). Extension injects/extracts semantic messages.
-- **Raw PTY channel**: wrapper forwards terminal I/O to an attached human.
+- Tier 0 prefers **pi RPC mode** to prove the control loop quickly.
+- Later attach/takeover tiers can run pi in **interactive mode** with wrapper-owned PTY.
+- **Structured channel** always stays authoritative for orchestration semantics.
+- **Raw PTY channel** is a later layer for human takeover, not the primary source of truth.
 - When a human attaches in takeover mode, orchestrator input is paused.

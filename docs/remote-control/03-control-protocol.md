@@ -1,5 +1,7 @@
 # Control Protocol
 
+**Status (2026-03-13):** Tier 0 local protocol is implemented for `initialize`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update` over a local Unix socket. Relay/WebSocket sections remain the planned Tier 1+ shape.
+
 All messages are JSON over WebSocket. Every message has a common envelope.
 
 **ACP alignment note (2026-03-10):** this protocol is still a
@@ -51,7 +53,7 @@ ACP-aligned version + capability negotiation after `auth` succeeds.
   "type": "command",
   "payload": {
     "command": "initialize",
-    "protocol_version": "wv-rc/0.1",
+    "protocol_version": "weave-rc/0.1",
     "capabilities": {
       "session_prompt": true,
       "session_load": true,
@@ -90,7 +92,7 @@ Weave-specific remote creation command. Conceptually this wraps ACP-style
     "command": "session.spawn",
     "host": "host-id",              // target host (or omit for relay to pick)
     "config": {
-      "extensions": ["wv-bridge.ts"],
+      "extensions": ["pi-bridge.ts"],
       "system_prompt": "...",       // optional override
       "model": "claude-opus-4-6",   // optional
       "working_dir": "/path",
@@ -126,7 +128,7 @@ Load or resume a previously persisted pi-mono session on a host.
     "host": "host-id",
     "session_path": "/absolute/path/to/session.jsonl",
     "config": {
-      "extensions": ["wv-bridge.ts"],
+      "extensions": ["pi-bridge.ts"],
       "working_dir": "/path"
     }
   }
@@ -494,7 +496,7 @@ Normalization rules:
   "payload": {
     "event": "session.agent_ready",
     "pid": 12345,
-    "extensions_loaded": ["wv-bridge.ts"]
+    "extensions_loaded": ["pi-bridge.ts"]
   }
 }
 ```

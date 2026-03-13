@@ -106,11 +106,11 @@ For MVP, the tradeoff is worth it.
 ```text
 ACP Client
   ↕ JSON-RPC / ACP
-wv-acp-shim
+weave-acp-shim
   ↕ weave remote-control protocol
-wv-relay
+weave-relay
   ↕
-wv-daemon / wv-wrapper / wv-bridge / pi-mono
+weave-daemon / weave-wrapper / pi-bridge / pi-mono
 ```
 
 The shim owns:

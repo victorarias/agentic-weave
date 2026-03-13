@@ -1,6 +1,6 @@
 # Walking Skeleton Implementation Handoff
 
-**Status:** Proposed handoff plan
+**Status:** Active handoff plan — Tier 0 implemented locally; Tier 1+ still pending
 **Date:** 2026-03-10
 **Audience:** another implementation agent
 **Related:**
@@ -59,8 +59,8 @@ it while preserving the architecture.
 The first useful success is **not** “remote multi-host orchestration works.”
 
 The first useful success is:
-- a local wrapper can launch pi
-- a simple client can send a prompt through the bridge
+- a local wrapper can launch pi in RPC mode
+- a simple client can send a prompt through the wrapper socket
 - pi emits structured updates back
 - cancel works
 - the session stops cleanly
@@ -80,14 +80,14 @@ They are the real walking skeleton.
 
 ## Goal
 
-Prove the core **client ↔ wrapper ↔ bridge ↔ pi** loop locally.
+Prove the core **client ↔ wrapper ↔ pi RPC** loop locally.
 No relay. No daemon. No host routing. No attach. No ACP shim.
 
 ## Deliverable
 
 A local command/demo where:
-1. wrapper starts pi in interactive mode
-2. bridge connects
+1. wrapper starts `pi --mode rpc`
+2. wrapper exposes a Unix socket control surface
 3. local client sends one prompt
 4. pi emits structured `session.update`
 5. client sees streaming output
@@ -98,8 +98,8 @@ A local command/demo where:
 
 ### Build
 - a minimal wrapper process
-- a minimal local bridge transport (Unix domain socket)
-- a minimal pi extension / bridge implementation
+- a minimal local control transport (Unix domain socket)
+- a normalization layer from pi RPC events to our session protocol
 - a minimal local dev client or CLI command
 
 ### Required protocol support
@@ -125,33 +125,31 @@ Do **not** implement tool events yet unless they come nearly for free.
 
 These are suggestions, not a hard law.
 
-- `wv-wrapper/`
+- `cmd/weave-wrapper/`
   - wrapper main
-  - local socket server/client
-  - pi process launch
-- `extensions/wv-bridge/`
-  - startup/connect
-  - prompt injection
-  - event forwarding
-- `wv-protocol/`
+  - local socket server
+  - pi process launch in RPC mode
+- `remotecontrol/protocol/`
   - shared envelope types
   - `initialize`, `session.prompt`, `session.cancel`
   - `session.update` schema
+- `remotecontrol/local/`
+  - pi RPC client glue
+  - event normalization
 - optional local test/dev client:
-  - `wv-inspect local` or a tiny `cmd/wv-local-dev`
+  - `cmd/weave-inspect/` with a `local` mode
 
 ## Tier 0 smoke test
 
 Human-run demo:
 ```bash
 # terminal 1
-wv-wrapper --local --session demo-1
+weave-wrapper --socket /tmp/weave-demo-1.sock --session demo-1
 
 # terminal 2
-wv-local-dev connect --socket /tmp/wv-demo-1.sock
-wv-local-dev init
-wv-local-dev prompt "say hello and then summarize this repo"
-wv-local-dev cancel
+weave-inspect local --socket /tmp/weave-demo-1.sock init
+weave-inspect local --socket /tmp/weave-demo-1.sock prompt "say hello and then summarize this repo"
+weave-inspect local --socket /tmp/weave-demo-1.sock cancel
 ```
 
 Expected:
@@ -163,8 +161,8 @@ Expected:
 
 ## Tier 0 acceptance criteria
 
-- pi launches from wrapper
-- extension connects reliably
+- pi launches from wrapper in RPC mode
+- wrapper socket accepts a local client reliably
 - a prompt is delivered without tmux/send-keys hacks
 - structured updates flow back to client
 - cancel works at least once in a real run
@@ -172,7 +170,7 @@ Expected:
 
 ## Tier 0 stop-and-evaluate questions
 
-1. Is the bridge stable enough to keep building on?
+1. Is the RPC-backed wrapper seam stable enough to keep building on?
 2. Does `session.update` feel expressive enough already?
 3. Are we relying on hidden pi behavior we should isolate now?
 4. Did we accidentally make PTY scraping necessary for core flow?
@@ -221,15 +219,15 @@ Support these through the relay:
 
 ## Suggested implementation shape
 
-- `wv-relay/`
+- `weave-relay/`
   - auth
   - client registry
   - session routing table
   - ordered event fanout
-- `wv-wrapper/`
+- `weave-wrapper/`
   - relay client mode
   - session registration
-- `wv-protocol/`
+- `weave-protocol/`
   - auth + ack + error envelopes
   - capability ack payload
 
@@ -238,15 +236,15 @@ Support these through the relay:
 Human-run demo:
 ```bash
 # terminal 1
-wv-relay --addr :8080 --token dev-token
+weave-relay --addr :8080 --token dev-token
 
 # terminal 2
-wv-wrapper --relay ws://localhost:8080 --token dev-token --session demo-1
+weave-wrapper --relay ws://localhost:8080 --token dev-token --session demo-1
 
 # terminal 3
-wv-inspect connect --relay ws://localhost:8080 --token dev-token
-wv-inspect init
-wv-inspect prompt demo-1 "readme-level summary please"
+weave-inspect connect --relay ws://localhost:8080 --token dev-token
+weave-inspect init
+weave-inspect prompt demo-1 "readme-level summary please"
 ```
 
 Expected:
@@ -323,15 +321,15 @@ This must be config/data-driven enough to prevent scattered pi-specific branches
 Human-run demo:
 ```bash
 # spawn a new session
-wv-inspect spawn --session demo-2
-wv-inspect prompt demo-2 "say one sentence"
+weave-inspect spawn --session demo-2
+weave-inspect prompt demo-2 "say one sentence"
 
 # stop runtime
-wv-inspect kill-runtime demo-2
+weave-inspect kill-runtime demo-2
 
 # load existing session into a new runtime
-wv-inspect load demo-2
-wv-inspect prompt demo-2 "continue"
+weave-inspect load demo-2
+weave-inspect prompt demo-2 "continue"
 ```
 
 Expected:
@@ -401,11 +399,11 @@ Add:
 
 Human-run demo:
 ```bash
-wv-inspect prompt demo-3 --delivery deliver_when_idle "normal request"
-wv-inspect prompt demo-3 --delivery interrupt "stop and summarize"
+weave-inspect prompt demo-3 --delivery deliver_when_idle "normal request"
+weave-inspect prompt demo-3 --delivery interrupt "stop and summarize"
 # runtime requests permission for a command
-wv-inspect allow demo-3 perm-1
-wv-inspect deny demo-3 perm-2
+weave-inspect allow demo-3 perm-1
+weave-inspect deny demo-3 perm-2
 ```
 
 Expected:
@@ -441,7 +439,7 @@ A second agent should implement this as **three narrow PRs**, not one giant bran
 
 ## PR 1 — Tier 0
 - local wrapper
-- bridge handshake
+- RPC handshake + local socket protocol
 - prompt/cancel
 - normalized updates
 - local smoke demo

@@ -1,5 +1,7 @@
 # V1 Architecture and Phased Plan
 
+**Status (2026-03-13):** Tier 0 is complete and validated locally against a real `pi --mode rpc` process. The implemented pieces are `cmd/weave-wrapper`, `cmd/weave-inspect` (local mode), `remotecontrol/protocol`, and `remotecontrol/local`. Tier 1 (relay) is the next build step.
+
 ## Architecture Overview
 
 ```
@@ -13,7 +15,7 @@
                          │ WebSocket (JSON)
                          ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                        WV-RELAY (Go)                        │
+│                     WEAVE-RELAY (Go)                        │
 │                                                                      │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────────┐ │
 │  │  Session     │  │  Registry    │  │  Auth    │  │  Event       │ │
@@ -31,7 +33,7 @@
            │ WebSocket                          │ WebSocket
            ▼                                    ▼
 ┌──────────────────────┐             ┌─────────────────────────┐
-│  WV-DAEMON (Go)    │             │  HUMAN CLIENT           │
+│ WEAVE-DAEMON (Go)  │             │  HUMAN CLIENT           │
 │  (one per machine)   │             │  (web UI or CLI)        │
 │                      │             │                         │
 │  Receives: spawn,    │             │  Sends: attach, detach, │
@@ -44,7 +46,7 @@
            │ (spawns)
            ▼
 ┌──────────────────────────────────────────────┐
-│  WV-WRAPPER (Go, one per agent)                 │
+│  WEAVE-WRAPPER (Go, one per agent)              │
 │                                              │
 │  ┌────────────┐  ┌───────────────────┐       │
 │  │ PTY Master │  │ Relay WS Client   │       │
@@ -59,7 +61,7 @@
 │  │         PI-MONO (interactive mode)    │   │
 │  │                                       │   │
 │  │  ┌─────────────────────────────────┐  │   │
-│  │  │  wv-bridge extension (TS)    │  │   │
+│  │  │  pi-bridge extension (TS)    │  │   │
 │  │  │                                 │  │   │
 │  │  │  - Receives commands from       │  │   │
 │  │  │    wrapper via bridge           │  │   │
@@ -155,18 +157,26 @@ A good early slice is one where:
 
 Even if nothing else exists yet, that slice exercises the core architecture.
 
-## Wrapper ↔ Extension Bridge
+## Tier 0 Runtime Integration Strategy
 
-The wrapper (Go) and extension (TS, inside pi-mono) need a local communication channel. Options:
+For the first walking skeleton, prefer **pi RPC mode over stdin/stdout** instead of
+starting with the interactive PTY + extension bridge path.
 
-| Option | Pros | Cons |
-|--------|------|------|
-| Unix domain socket | Bidirectional, fast, well-supported | Need to coordinate socket path |
-| Localhost TCP | Simple, debuggable with curl/netcat | Port management |
-| Stdin pipe passthrough | Pi-mono already reads stdin | Conflicts with interactive mode |
-| Named pipe (FIFO) | Simple, no networking | Unidirectional (need two) |
+Why:
+- RPC mode already gives us a structured process-integration API.
+- It proves the control protocol, event normalization, and cancel path faster.
+- It avoids building a bridge and PTY supervision before we know the basic
+  session model feels right.
 
-**Recommendation for v1**: Unix domain socket. The wrapper creates it at a known path (e.g. `/tmp/wv-<session-id>.sock`), passes the path to pi-mono via env var, the extension connects on startup.
+That means Tier 0 should look like:
+- local client ↔ Unix socket ↔ Go wrapper ↔ `pi --mode rpc`
+
+The **interactive PTY + `pi-bridge` extension** path still matters for later
+attach/takeover tiers, but it should come after the RPC-backed control loop is
+real and stable.
+
+For later tiers that do need an in-process bridge, the preferred local transport
+remains a Unix domain socket.
 
 ## Phased Implementation Plan
 
@@ -180,15 +190,15 @@ partially useful.
 
 Deliverables:
 1. **Go wrapper** that:
-   - spawns pi-mono in interactive mode with a virtual PTY
-   - creates a Unix domain socket for the bridge
-   - sends `initialize`, `session.prompt`, and `session.cancel` over the bridge
-   - receives structured events from the extension
-2. **TypeScript extension** (`wv-bridge.ts`) that:
-   - connects to the socket on startup
-   - injects one prompt into pi-mono
-   - emits `session.agent_ready`
-   - emits normalized `session.update`
+   - spawns `pi --mode rpc`
+   - exposes a Unix domain socket for local control
+   - accepts `initialize`, `session.prompt`, and `session.cancel`
+   - normalizes pi RPC events into `session.agent_ready` and `session.update`
+2. **Tiny local dev client / inspector** that:
+   - connects to the wrapper socket
+   - initializes capabilities
+   - sends one prompt
+   - prints streaming updates
 3. **Smoke test**:
    - start wrapper
    - send one prompt
@@ -196,7 +206,7 @@ Deliverables:
    - cancel a second prompt
    - stop cleanly
 
-**Rule:** do not add relay or registry work until this end-to-end slice is real.
+**Rule:** do not add relay, PTY takeover, or extension/bridge work until this RPC-backed end-to-end slice is real.
 
 ### Tier 1 — Single-Session Relay Skeleton
 
@@ -250,7 +260,7 @@ Deliverables:
    - `queue`
    - `deliver_when_idle`
    - `interrupt`
-3. Clear mapping from delivery policy to pi bridge behavior
+3. Clear mapping from delivery policy to pi RPC / runtime behavior
 
 **Smoke test:** send normal prompt while busy, then interrupting prompt, then a permission-gated tool call.
 

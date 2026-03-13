@@ -170,6 +170,27 @@ This file tracks current work items and progress.
 
 ---
 
+## Active Initiative: Remote Agent Control Walking Skeleton (branch family: feat/remote-control-*)
+
+### Family: tier0-local-skeleton
+- [x] Cleanup: remove abandoned `cmd/wv` CLI prototype and stale plan doc
+  - Description: Delete the in-repo TUI coding-agent experiment so the repo clearly targets pi-based orchestration only.
+  - Output:
+    - [x] `cmd/wv/` removed
+    - [x] `docs/plans/wv-coding-agent-cli.md` removed
+    - [x] `AGENTS.md` updated to point new coding-agent work at pi-based orchestration
+
+- [x] PR 1: Tier 0 local pi wrapper + protocol + dev client
+  - Description: Build the walking-skeleton local control loop for pi: local transport, `initialize`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update`.
+  - Depends on: cleanup
+  - Output:
+    - [x] local wrapper process (`cmd/weave-wrapper`, `remotecontrol/local`)
+    - [x] shared protocol types (`remotecontrol/protocol`)
+    - [x] tiny local dev client / inspector command (`cmd/weave-inspect` local mode)
+    - [x] smoke demo for prompt/stream/cancel/clean shutdown against a real pi process
+
+---
+
 ## Active Initiative: PR Review Automation (branch family: chore/hodor-review-*)
 
 ### Family: hodor-pr-review
@@ -201,6 +222,9 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-13 21:02: Ran the Tier 0 flow against a real local pi process: `weave-wrapper` bootstrapped pi RPC successfully, `weave-inspect` initialized and prompted, and a socket-level manual test confirmed cancel followed by completion.
+- 2026-03-13 20:52: Added the Tier 0 pi orchestration scaffold: `remotecontrol/protocol` envelope/update types, `remotecontrol/local` wrapper around `pi --mode rpc`, `cmd/weave-wrapper`, `cmd/weave-inspect`, fake-pi-backed tests, and doc updates that rename the stack to `weave-*` and make RPC the walking-skeleton starting point.
+- 2026-03-13 20:35: Removed the abandoned `cmd/wv` CLI prototype and deleted `docs/plans/wv-coding-agent-cli.md` so the repository clearly targets pi-based orchestration instead of a homegrown TUI agent.
 - 2026-03-10 21:57: Added `docs/remote-control/08-walking-skeleton-implementation-handoff.md` with a concrete handoff plan for another agent: three real early tiers, smoke tests, stop-and-evaluate gates, explicit non-goals, and PR slicing guidance.
 - 2026-03-10 21:47: Folded Gastown learnings into the remote-control docs: added core design principles (`push, not scrape`, progressive integration tiers, adapter registry, explicit delivery semantics), a runtime preset/adapter registry section, and reworked the main architecture plan into walking-skeleton tiers with demoable end-to-end slices.
 - 2026-03-10 21:35: Added concrete `session.update` examples for every V1 kind (`lifecycle`, message, tool, permission, status, error, complete) so the protocol is easier to implement consistently.

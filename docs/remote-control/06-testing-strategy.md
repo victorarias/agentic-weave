@@ -1,15 +1,17 @@
 # Testing Strategy
 
+**Status (2026-03-13):** Tier 0 coverage exists in Go tests (`remotecontrol/protocol`, `remotecontrol/local`) and has been smoke-tested against a real local pi process for init, prompt, and cancel.
+
 ## Three Test Tiers
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Tier 1: FAKE PI-MONO (Go)                                     │
+│  Tier 1: FAKE PI (Go)                                          │
 │  Speed: milliseconds    Cost: zero    Runs: every commit        │
 │                                                                 │
-│  Go fake process speaks the bridge protocol.                    │
+│  Go fake process speaks the pi RPC protocol used by the wrapper.│
 │  Tests: wrapper, relay, host daemon, state machine, protocol.   │
-│  No Node.js, no LLM, no pi-mono.                               │
+│  No Node.js, no LLM, no real pi runtime.                        │
 ├─────────────────────────────────────────────────────────────────┤
 │  Tier 2: REAL PI-MONO + MOCK MODEL                              │
 │  Speed: seconds         Cost: zero    Runs: CI / pre-merge      │
@@ -29,18 +31,17 @@
 
 ---
 
-## Tier 1: Fake Pi-mono (`fakepimono`)
+## Tier 1: Fake pi (`weave-fakepi`)
 
-A Go binary that impersonates pi-mono from the wrapper's perspective.
+A Go binary that impersonates pi from the wrapper's perspective.
 
 ### What it does
 
-1. **Connects** to the Unix domain socket bridge (same as the real extension would).
-2. **Accepts** commands (`agent.message`, `agent.cancel`, etc.) over the bridge.
-3. **Emits** events (`agent.assistant_message`, `agent.tool_call`, etc.) on a scripted schedule.
-4. **Writes** PTY output (ANSI-formatted terminal output simulating a TUI).
-5. **Reads** PTY input (simulating human keystrokes in takeover mode).
-6. **Responds** to session lifecycle (ready handshake, graceful shutdown, simulated crashes).
+1. **Speaks** the pi RPC JSONL protocol over stdin/stdout.
+2. **Accepts** commands (`prompt`, `abort`, `get_state`, etc.).
+3. **Emits** events (`agent_start`, `message_update`, `tool_execution_*`, etc.) on a scripted schedule.
+4. **Simulates** slow runs, aborts, crashes, and malformed output.
+5. **Lets** wrapper/protocol tests run without Node.js, auth, or a real model.
 
 ### Interface
 
@@ -83,7 +84,7 @@ type ScriptEntry struct {
 
 ### What this tests
 
-- **Wrapper**: PTY management, bridge protocol, relay connection, event forwarding.
+- **Wrapper**: RPC process management, local socket protocol, relay connection, event forwarding.
 - **Relay**: Session state machine, routing, attach locks, event buffering, error handling.
 - **Host daemon**: Process lifecycle, spawn/kill, crash detection, restart logic.
 - **Protocol**: Serialization, envelope handling, ack/error flows, idempotency.
@@ -114,9 +115,9 @@ Implementation options (needs investigation):
 
 ### What this tests
 
-- **wv-bridge extension**: Real TS code running in real pi-mono. Message injection, event extraction, bridge communication.
-- **Pi-mono lifecycle**: Real startup, session loading, extension initialization, shutdown.
-- **Event fidelity**: Do the events we receive over the bridge match what pi-mono actually does?
+- **pi RPC integration**: Real pi startup, command/response handling, and streamed events in RPC mode.
+- **Pi lifecycle**: Real startup, session loading, and shutdown.
+- **Event fidelity**: Do the events we receive from pi RPC match what pi actually does?
 - **Session resume**: Real JSONL persistence, `--session <path>` reload.
 
 ### Scenarios
@@ -126,10 +127,10 @@ Implementation options (needs investigation):
 | `inject-idle` | Send message when agent is idle → verify it enters conversation and triggers response |
 | `inject-steer` | Send steer message during tool execution → verify tool is interrupted |
 | `inject-followup` | Send followUp message during tool execution → verify delivery after tools complete |
-| `event-coverage` | Trigger all event types → verify extension emits each one over the bridge |
+| `event-coverage` | Trigger all event types → verify pi RPC emits each one and wrapper normalization stays stable |
 | `session-resume` | Start session, crash, restart with `--session` → verify history is loaded |
-| `permission-roundtrip` | Agent requests tool permission → client responds allow/deny → verify extension/runtime behavior |
-| `extension-startup` | Verify bridge connection, ready handshake, extension metadata |
+| `permission-roundtrip` | Agent requests tool permission → client responds allow/deny → verify wrapper/runtime behavior |
+| `rpc-startup` | Verify wrapper bootstrap (`get_state`), ready handshake, and runtime metadata |
 
 ---
 
@@ -148,27 +149,27 @@ Small set of end-to-end tests with real Claude API calls. Run sparingly.
 
 ---
 
-## Dev Inspector CLI (`wv-inspect`)
+## Dev Inspector CLI (`weave-inspect`)
 
 A Go CLI tool for humans to debug and observe the system. Connects to the relay as a client.
 
 ### Commands
 
 ```
-wv-inspect hosts                     # list registered hosts
-wv-inspect sessions                  # list all sessions with state
-wv-inspect session <id>              # show session detail (state, config, parent, host)
-wv-inspect events <session-id>       # tail live events (like `tail -f`)
-wv-inspect events <session-id> \
+weave-inspect hosts                     # list registered hosts
+weave-inspect sessions                  # list all sessions with state
+weave-inspect session <id>              # show session detail (state, config, parent, host)
+weave-inspect events <session-id>       # tail live events (like `tail -f`)
+weave-inspect events <session-id> \
     --filter type=agent.tool_call       # filter by event type
-wv-inspect events <session-id> \
+weave-inspect events <session-id> \
     --since 5m                          # replay last 5 minutes from buffer
-wv-inspect state <session-id>        # show current state machine state + transition history
-wv-inspect attach <session-id>       # attach in observe mode (raw event stream)
-wv-inspect send <session-id> \
+weave-inspect state <session-id>        # show current state machine state + transition history
+weave-inspect attach <session-id>       # attach in observe mode (raw event stream)
+weave-inspect send <session-id> \
     --message "do X"                    # inject a message (for debugging)
-wv-inspect kill <session-id>         # kill a session
-wv-inspect relay-stats               # relay health: connections, buffer usage, uptime
+weave-inspect kill <session-id>         # kill a session
+weave-inspect relay-stats               # relay health: connections, buffer usage, uptime
 ```
 
 ### Output modes
@@ -181,31 +182,31 @@ wv-inspect relay-stats               # relay health: connections, buffer usage, 
 
 ```bash
 # Terminal 1: start relay
-wv-relay --addr :8080 --token dev-token
+weave-relay --addr :8080 --token dev-token
 
 # Terminal 2: start a fake agent for testing
-wv-wrapper --relay ws://localhost:8080 --token dev-token --fake happy-path
+weave-wrapper --relay ws://localhost:8080 --token dev-token --fake happy-path
 
 # Terminal 3: inspect
-wv-inspect sessions
+weave-inspect sessions
 # → sess-abc123  AUTONOMOUS  host-local  uptime=12s  events=5
 
-wv-inspect events sess-abc123 -f
+weave-inspect events sess-abc123 -f
 # → 15:04:01 session.agent_ready     pid=12345
 # → 15:04:02 agent.assistant_message  "I'll start by reading the file..."
 # → 15:04:03 agent.tool_call          bash: cat main.go  [started]
 # → 15:04:04 agent.tool_call          bash: cat main.go  [completed 320ms]
 # → ...
 
-wv-inspect state sess-abc123
+weave-inspect state sess-abc123
 # → Current: AUTONOMOUS
 # → History:
 # →   15:04:00 STARTING → AUTONOMOUS  (trigger: agent.ready)
 
-wv-inspect send sess-abc123 --message "stop and summarize what you've done"
+weave-inspect send sess-abc123 --message "stop and summarize what you've done"
 # → ack: ok
 
-wv-inspect events sess-abc123 -f --filter type=agent.error
+weave-inspect events sess-abc123 -f --filter type=agent.error
 # (waits for errors...)
 ```
 
@@ -228,7 +229,7 @@ wv-inspect events sess-abc123 -f --filter type=agent.error
 |---------|------|
 | `relay_test.go` | State machine transitions, routing, auth, buffering. Uses `fakepimono` + fake wrapper clients. |
 | `protocol_test.go` | Serialization round-trips for all message types. Fuzz testing on envelope parsing. |
-| `wv-inspect` v1 | `hosts`, `sessions`, `events`, `state` commands |
+| `weave-inspect` v1 | `hosts`, `sessions`, `events`, `state` commands |
 
 ### Phase 3 (Host Daemon)
 
@@ -243,7 +244,7 @@ wv-inspect events sess-abc123 -f --filter type=agent.error
 | Harness | What |
 |---------|------|
 | `attach_test.go` | Lock acquisition, mode switching, PTY forwarding. Uses `fakepimono` with `pty-echo` scenario. |
-| `wv-inspect` v2 | `attach` and `send` commands. Used for manual testing of observe/inject/takeover. |
+| `weave-inspect` v2 | `attach` and `send` commands. Used for manual testing of observe/inject/takeover. |
 | Manual test script | Step-by-step script: start agent, attach observe, escalate inject, escalate takeover, type commands, deescalate, detach. |
 
 ### Phase 5+ (Web UI, Subagents)
