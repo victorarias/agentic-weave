@@ -1,6 +1,6 @@
 # Control Protocol
 
-**Status (2026-03-13):** Tier 0 local protocol is implemented for `initialize`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update` over a local Unix socket. Relay/WebSocket sections remain the planned Tier 1+ shape.
+**Status (2026-03-13):** Tier 0 local protocol and Tier 1 single-session relay routing are implemented for `auth`, `initialize`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update`. Multi-session orchestration, spawn/load, and attach/takeover remain future tiers.
 
 All messages are JSON over WebSocket. Every message has a common envelope.
 

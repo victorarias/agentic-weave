@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/victorarias/agentic-weave/remotecontrol/protocol"
 )
 
@@ -37,9 +38,9 @@ type Wrapper struct {
 
 	listener *net.UnixListener
 
-	clientsMu sync.Mutex
-	clients   map[int64]*clientConn
-	nextID    int64
+	peersMu sync.Mutex
+	peers   map[int64]peer
+	nextID  int64
 
 	piInMu sync.Mutex
 	piIn   io.WriteCloser
@@ -52,19 +53,30 @@ type Wrapper struct {
 	closed chan struct{}
 }
 
-type clientConn struct {
-	id          int64
-	conn        net.Conn
-	mu          sync.Mutex
-	initialized bool
-}
-
 type piResponse struct {
 	ID      string
 	Command string
 	Success bool
 	Error   string
 	Data    map[string]any
+}
+
+type peer interface {
+	writeEnvelope(protocol.Envelope) error
+	setInitialized(bool)
+	initialized() bool
+}
+
+type localPeer struct {
+	conn net.Conn
+	mu   sync.Mutex
+	init bool
+}
+
+type relayPeer struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+	init bool
 }
 
 func NewWrapper(cfg Config) *Wrapper {
@@ -86,7 +98,7 @@ func NewWrapper(cfg Config) *Wrapper {
 	return &Wrapper{
 		cfg:       cfg,
 		runtimeID: fmt.Sprintf("rt-%d", time.Now().UTC().UnixNano()),
-		clients:   make(map[int64]*clientConn),
+		peers:     make(map[int64]peer),
 		pending:   make(map[string]chan piResponse),
 		closed:    make(chan struct{}),
 	}
@@ -109,28 +121,11 @@ func (w *Wrapper) Run(ctx context.Context) error {
 		close(w.closed)
 	}()
 
-	cmd, stdout, stderr, err := w.startPi(ctx)
+	procErr, cleanup, err := w.startRuntime(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-	}()
-
-	procErr := make(chan error, 1)
-	go func() {
-		procErr <- cmd.Wait()
-	}()
-	go w.logStderr(stderr)
-	go w.readPiOutput(stdout)
-
-	state, err := w.bootstrap(ctx)
-	if err != nil {
-		return err
-	}
-	w.bootstrapState = state
+	defer cleanup()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -152,6 +147,123 @@ func (w *Wrapper) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (w *Wrapper) RunRelay(ctx context.Context, relayURL, token string) error {
+	procErr, cleanup, err := w.startRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		cleanup()
+		close(w.closed)
+	}()
+
+	conn, _, err := websocket.DefaultDialer.Dial(relayURL, nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	rpeer := &relayPeer{conn: conn}
+	peerID := w.registerPeer(rpeer)
+	defer w.unregisterPeer(peerID)
+
+	if err := w.authRelay(conn, token); err != nil {
+		return err
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- w.readRelay(ctx, rpeer)
+	}()
+
+	select {
+	case err := <-procErr:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			w.broadcastUpdate(protocol.SessionUpdate{Kind: protocol.UpdateError, Message: "pi process exited", Details: map[string]any{"error": err.Error()}})
+			return err
+		}
+		return nil
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (w *Wrapper) authRelay(conn *websocket.Conn, token string) error {
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, w.cfg.SessionID, w.runtimeID, "weave-wrapper", "auth-wrapper", protocol.AuthCommand{
+		Command: protocol.CommandAuth,
+		Token:   token,
+		Role:    protocol.RoleWrapper,
+	})
+	if err != nil {
+		return err
+	}
+	if err := conn.WriteJSON(env); err != nil {
+		return err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(w.cfg.StartupTimeout))
+	defer conn.SetReadDeadline(time.Time{})
+	var ack protocol.Envelope
+	if err := conn.ReadJSON(&ack); err != nil {
+		return err
+	}
+	if ack.Type != protocol.MessageAck || ack.ID != "auth-wrapper" {
+		return fmt.Errorf("unexpected relay auth response: type=%s id=%s", ack.Type, ack.ID)
+	}
+	return nil
+}
+
+func (w *Wrapper) readRelay(ctx context.Context, p *relayPeer) error {
+	for {
+		var env protocol.Envelope
+		if err := p.conn.ReadJSON(&env); err != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			return err
+		}
+		if env.Type != protocol.MessageCommand {
+			continue
+		}
+		if err := w.handleCommand(ctx, p, env); err != nil {
+			return err
+		}
+	}
+}
+
+func (w *Wrapper) startRuntime(ctx context.Context) (<-chan error, func(), error) {
+	cmd, stdout, stderr, err := w.startPi(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}
+
+	procErr := make(chan error, 1)
+	go func() {
+		procErr <- cmd.Wait()
+	}()
+	go w.logStderr(stderr)
+	go w.readPiOutput(stdout)
+
+	state, err := w.bootstrap(ctx)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	w.bootstrapState = state
+	return procErr, cleanup, nil
 }
 
 func (w *Wrapper) startPi(ctx context.Context) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error) {
@@ -217,42 +329,38 @@ func (w *Wrapper) acceptLoop(ctx context.Context) error {
 			}
 			return err
 		}
-		client := &clientConn{id: atomic.AddInt64(&w.nextID, 1), conn: conn}
-		w.clientsMu.Lock()
-		w.clients[client.id] = client
-		w.clientsMu.Unlock()
-		go w.handleClient(ctx, client)
+		p := &localPeer{conn: conn}
+		id := w.registerPeer(p)
+		go w.handleLocalPeer(ctx, id, p)
 	}
 }
 
-func (w *Wrapper) handleClient(ctx context.Context, client *clientConn) {
+func (w *Wrapper) handleLocalPeer(ctx context.Context, id int64, p *localPeer) {
 	defer func() {
-		_ = client.conn.Close()
-		w.clientsMu.Lock()
-		delete(w.clients, client.id)
-		w.clientsMu.Unlock()
+		_ = p.conn.Close()
+		w.unregisterPeer(id)
 	}()
 
-	_ = protocol.ReadJSONL(client.conn, func(line []byte) error {
+	_ = protocol.ReadJSONL(p.conn, func(line []byte) error {
 		env, err := protocol.DecodeEnvelope(line)
 		if err != nil {
-			_ = w.sendError(client, "", err)
+			_ = w.sendError(p, "", err)
 			return nil
 		}
 		if env.Type != protocol.MessageCommand {
-			_ = w.sendError(client, env.ID, fmt.Errorf("expected command envelope, got %s", env.Type))
+			_ = w.sendError(p, env.ID, fmt.Errorf("expected command envelope, got %s", env.Type))
 			return nil
 		}
-		return w.handleCommand(ctx, client, env)
+		return w.handleCommand(ctx, p, env)
 	})
 }
 
-func (w *Wrapper) handleCommand(ctx context.Context, client *clientConn, env protocol.Envelope) error {
+func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelope) error {
 	var meta struct {
 		Command string `json:"command"`
 	}
 	if err := env.DecodePayload(&meta); err != nil {
-		_ = w.sendError(client, env.ID, err)
+		_ = w.sendError(p, env.ID, err)
 		return nil
 	}
 
@@ -260,12 +368,12 @@ func (w *Wrapper) handleCommand(ctx context.Context, client *clientConn, env pro
 	case protocol.CommandInitialize:
 		var init protocol.InitializeCommand
 		if err := env.DecodePayload(&init); err != nil {
-			_ = w.sendError(client, env.ID, err)
+			_ = w.sendError(p, env.ID, err)
 			return nil
 		}
-		client.initialized = true
+		p.setInitialized(true)
 		capabilities := wrapperCapabilities()
-		if err := w.sendAck(client, env.ID, protocol.CommandInitialize, map[string]any{
+		if err := w.sendAck(p, env.ID, protocol.CommandInitialize, map[string]any{
 			"protocol_version": protocol.Version,
 			"capabilities":     capabilities,
 		}); err != nil {
@@ -278,52 +386,52 @@ func (w *Wrapper) handleCommand(ctx context.Context, client *clientConn, env pro
 			Session:         protocol.SessionInfo{ID: w.cfg.SessionID},
 			Runtime:         protocol.RuntimeInfo{ID: w.runtimeID, Kind: "pi", Transport: "rpc"},
 		}
-		return w.sendEvent(client, ready)
+		return w.sendEvent(p, ready)
 
 	case protocol.CommandSessionPrompt:
-		if !client.initialized {
-			_ = w.sendError(client, env.ID, errors.New("initialize must be sent before session.prompt"))
+		if !p.initialized() {
+			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.prompt"))
 			return nil
 		}
 		var prompt protocol.SessionPromptCommand
 		if err := env.DecodePayload(&prompt); err != nil {
-			_ = w.sendError(client, env.ID, err)
+			_ = w.sendError(p, env.ID, err)
 			return nil
 		}
 		piCmd, err := promptToPICommand(prompt)
 		if err != nil {
-			_ = w.sendError(client, env.ID, err)
+			_ = w.sendError(p, env.ID, err)
 			return nil
 		}
 		piCmd["id"] = "prompt-" + env.ID
 		resp, err := w.sendPICommand(ctx, piCmd)
 		if err != nil {
-			_ = w.sendError(client, env.ID, err)
+			_ = w.sendError(p, env.ID, err)
 			return nil
 		}
 		if !resp.Success {
-			_ = w.sendError(client, env.ID, errors.New(resp.Error))
+			_ = w.sendError(p, env.ID, errors.New(resp.Error))
 			return nil
 		}
-		return w.sendAck(client, env.ID, protocol.CommandSessionPrompt, nil)
+		return w.sendAck(p, env.ID, protocol.CommandSessionPrompt, nil)
 
 	case protocol.CommandSessionCancel:
-		if !client.initialized {
-			_ = w.sendError(client, env.ID, errors.New("initialize must be sent before session.cancel"))
+		if !p.initialized() {
+			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.cancel"))
 			return nil
 		}
 		resp, err := w.sendPICommand(ctx, map[string]any{"id": "cancel-" + env.ID, "type": "abort"})
 		if err != nil {
-			_ = w.sendError(client, env.ID, err)
+			_ = w.sendError(p, env.ID, err)
 			return nil
 		}
 		if !resp.Success {
-			_ = w.sendError(client, env.ID, errors.New(resp.Error))
+			_ = w.sendError(p, env.ID, errors.New(resp.Error))
 			return nil
 		}
-		return w.sendAck(client, env.ID, protocol.CommandSessionCancel, nil)
+		return w.sendAck(p, env.ID, protocol.CommandSessionCancel, nil)
 	default:
-		_ = w.sendError(client, env.ID, fmt.Errorf("unknown command %q", meta.Command))
+		_ = w.sendError(p, env.ID, fmt.Errorf("unknown command %q", meta.Command))
 		return nil
 	}
 }
@@ -464,7 +572,7 @@ func extractAssistantText(message map[string]any) string {
 	}
 }
 
-func (w *Wrapper) sendAck(client *clientConn, id, command string, data map[string]any) error {
+func (w *Wrapper) sendAck(p peer, id, command string, data map[string]any) error {
 	env, err := protocol.NewEnvelope(protocol.MessageAck, w.cfg.SessionID, w.runtimeID, "weave-wrapper", id, protocol.AckPayload{
 		Command: command,
 		Success: true,
@@ -473,23 +581,23 @@ func (w *Wrapper) sendAck(client *clientConn, id, command string, data map[strin
 	if err != nil {
 		return err
 	}
-	return w.writeClient(client, env)
+	return p.writeEnvelope(env)
 }
 
-func (w *Wrapper) sendError(client *clientConn, id string, commandErr error) error {
+func (w *Wrapper) sendError(p peer, id string, commandErr error) error {
 	env, err := protocol.NewEnvelope(protocol.MessageError, w.cfg.SessionID, w.runtimeID, "weave-wrapper", id, protocol.ErrorPayload{Error: commandErr.Error()})
 	if err != nil {
 		return err
 	}
-	return w.writeClient(client, env)
+	return p.writeEnvelope(env)
 }
 
-func (w *Wrapper) sendEvent(client *clientConn, payload any) error {
+func (w *Wrapper) sendEvent(p peer, payload any) error {
 	env, err := protocol.NewEnvelope(protocol.MessageEvent, w.cfg.SessionID, w.runtimeID, "weave-wrapper", "", payload)
 	if err != nil {
 		return err
 	}
-	return w.writeClient(client, env)
+	return p.writeEnvelope(env)
 }
 
 func (w *Wrapper) broadcastUpdate(update protocol.SessionUpdate) {
@@ -498,23 +606,35 @@ func (w *Wrapper) broadcastUpdate(update protocol.SessionUpdate) {
 	if err != nil {
 		return
 	}
-	w.clientsMu.Lock()
-	clients := make([]*clientConn, 0, len(w.clients))
-	for _, client := range w.clients {
-		if client.initialized {
-			clients = append(clients, client)
-		}
-	}
-	w.clientsMu.Unlock()
-	for _, client := range clients {
-		_ = w.writeClient(client, env)
+	for _, p := range w.snapshotInitializedPeers() {
+		_ = p.writeEnvelope(env)
 	}
 }
 
-func (w *Wrapper) writeClient(client *clientConn, env protocol.Envelope) error {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	return protocol.WriteJSONLine(client.conn, env)
+func (w *Wrapper) registerPeer(p peer) int64 {
+	id := atomic.AddInt64(&w.nextID, 1)
+	w.peersMu.Lock()
+	w.peers[id] = p
+	w.peersMu.Unlock()
+	return id
+}
+
+func (w *Wrapper) unregisterPeer(id int64) {
+	w.peersMu.Lock()
+	delete(w.peers, id)
+	w.peersMu.Unlock()
+}
+
+func (w *Wrapper) snapshotInitializedPeers() []peer {
+	w.peersMu.Lock()
+	defer w.peersMu.Unlock()
+	peers := make([]peer, 0, len(w.peers))
+	for _, p := range w.peers {
+		if p.initialized() {
+			peers = append(peers, p)
+		}
+	}
+	return peers
 }
 
 func (w *Wrapper) logStderr(stderr io.Reader) {
@@ -530,6 +650,24 @@ func wrapperCapabilities() map[string]bool {
 		"delivery_follow_up": true,
 	}
 }
+
+func (p *localPeer) writeEnvelope(env protocol.Envelope) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return protocol.WriteJSONLine(p.conn, env)
+}
+
+func (p *localPeer) setInitialized(v bool) { p.init = v }
+func (p *localPeer) initialized() bool     { return p.init }
+
+func (p *relayPeer) writeEnvelope(env protocol.Envelope) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.conn.WriteJSON(env)
+}
+
+func (p *relayPeer) setInitialized(v bool) { p.init = v }
+func (p *relayPeer) initialized() bool     { return p.init }
 
 type logWriter struct{ logger *log.Logger }
 

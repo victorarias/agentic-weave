@@ -18,9 +18,13 @@ const (
 	MessageEvent   = "event"
 	MessageError   = "error"
 
+	CommandAuth          = "auth"
 	CommandInitialize    = "initialize"
 	CommandSessionPrompt = "session.prompt"
 	CommandSessionCancel = "session.cancel"
+
+	RoleWrapper = "wrapper"
+	RoleClient  = "client"
 
 	EventSessionAgentReady = "session.agent_ready"
 	EventSessionUpdate     = "session.update"
@@ -42,6 +46,12 @@ type Envelope struct {
 	From      string          `json:"from,omitempty"`
 	Timestamp string          `json:"timestamp,omitempty"`
 	Payload   json.RawMessage `json:"payload,omitempty"`
+}
+
+type AuthCommand struct {
+	Command string `json:"command"`
+	Token   string `json:"token"`
+	Role    string `json:"role"`
 }
 
 type InitializeCommand struct {

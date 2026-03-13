@@ -217,13 +217,16 @@ func runFakePI(scenario string) error {
 			}()
 			return nil
 		case "abort":
-			closeOnce(aborted)
-			return protocol.WriteJSONLine(os.Stdout, map[string]any{
+			if err := protocol.WriteJSONLine(os.Stdout, map[string]any{
 				"id":      cmd["id"],
 				"type":    "response",
 				"command": "abort",
 				"success": true,
-			})
+			}); err != nil {
+				return err
+			}
+			closeOnce(aborted)
+			return nil
 		default:
 			return protocol.WriteJSONLine(os.Stdout, map[string]any{
 				"id":      cmd["id"],

@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Status (2026-03-13):** Tier 0 coverage exists in Go tests (`remotecontrol/protocol`, `remotecontrol/local`) and has been smoke-tested against a real local pi process for init, prompt, and cancel.
+**Status (2026-03-13):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path.
 
 ## Three Test Tiers
 

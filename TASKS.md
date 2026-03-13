@@ -189,6 +189,15 @@ This file tracks current work items and progress.
     - [x] tiny local dev client / inspector command (`cmd/weave-inspect` local mode)
     - [x] smoke demo for prompt/stream/cancel/clean shutdown against a real pi process
 
+- [x] PR 2: Tier 1 single-session relay skeleton
+  - Description: Put the relay in the middle with auth, one-session routing, wrapper relay mode, and relay inspector mode.
+  - Depends on: PR 1
+  - Output:
+    - [x] relay server (`cmd/weave-relay`, `remotecontrol/relay`)
+    - [x] wrapper relay mode (`cmd/weave-wrapper --relay ...`)
+    - [x] inspector relay mode (`cmd/weave-inspect relay ...`)
+    - [x] Go relay routing tests and real relay smoke test against pi for init/prompt
+
 ---
 
 ## Active Initiative: PR Review Automation (branch family: chore/hodor-review-*)
@@ -222,6 +231,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-13 21:22: Added Tier 1 relay support with `cmd/weave-relay`, wrapper relay mode, relay inspector mode, relay routing tests, and a real end-to-end smoke test (`weave-relay` → `weave-wrapper --relay` → `weave-inspect relay` → pi RPC) returning `RELAY_OK`.
 - 2026-03-13 21:02: Ran the Tier 0 flow against a real local pi process: `weave-wrapper` bootstrapped pi RPC successfully, `weave-inspect` initialized and prompted, and a socket-level manual test confirmed cancel followed by completion.
 - 2026-03-13 20:52: Added the Tier 0 pi orchestration scaffold: `remotecontrol/protocol` envelope/update types, `remotecontrol/local` wrapper around `pi --mode rpc`, `cmd/weave-wrapper`, `cmd/weave-inspect`, fake-pi-backed tests, and doc updates that rename the stack to `weave-*` and make RPC the walking-skeleton starting point.
 - 2026-03-13 20:35: Removed the abandoned `cmd/wv` CLI prototype and deleted `docs/plans/wv-coding-agent-cli.md` so the repository clearly targets pi-based orchestration instead of a homegrown TUI agent.

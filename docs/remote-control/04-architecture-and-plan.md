@@ -1,6 +1,6 @@
 # V1 Architecture and Phased Plan
 
-**Status (2026-03-13):** Tier 0 is complete and validated locally against a real `pi --mode rpc` process. The implemented pieces are `cmd/weave-wrapper`, `cmd/weave-inspect` (local mode), `remotecontrol/protocol`, and `remotecontrol/local`. Tier 1 (relay) is the next build step.
+**Status (2026-03-13):** Tier 0 and Tier 1 are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, and `remotecontrol/relay`. Tier 2 (spawn/load/identity) is the next build step.
 
 ## Architecture Overview
 

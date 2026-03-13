@@ -1,6 +1,6 @@
 # Walking Skeleton Implementation Handoff
 
-**Status:** Active handoff plan — Tier 0 implemented locally; Tier 1+ still pending
+**Status:** Active handoff plan — Tier 0 and Tier 1 implemented; Tier 2+ still pending
 **Date:** 2026-03-10
 **Audience:** another implementation agent
 **Related:**

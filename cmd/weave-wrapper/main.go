@@ -31,6 +31,8 @@ func run() error {
 	var piArgs multiFlag
 	fs := flag.NewFlagSet("weave-wrapper", flag.ContinueOnError)
 	socket := fs.String("socket", "/tmp/weave-local.sock", "Unix socket path")
+	relayURL := fs.String("relay", "", "Relay websocket URL (e.g. ws://localhost:8080/ws)")
+	token := fs.String("token", "", "Shared bearer token for relay mode")
 	sessionID := fs.String("session", "local", "Logical session id")
 	piBin := fs.String("pi-bin", "pi", "Path to pi binary")
 	fs.Var(&piArgs, "pi-arg", "Additional argument passed to pi (repeatable)")
@@ -48,5 +50,8 @@ func run() error {
 		PiArgs:     piArgs,
 		Logger:     log.New(os.Stderr, "weave-wrapper: ", log.LstdFlags),
 	})
+	if *relayURL != "" {
+		return wrapper.RunRelay(ctx, *relayURL, *token)
+	}
 	return wrapper.Run(ctx)
 }
