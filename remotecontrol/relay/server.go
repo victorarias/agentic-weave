@@ -213,7 +213,7 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 		var meta struct {
 			Command string `json:"command"`
 		}
-		if err := env.DecodePayload(&meta); err != nil || meta.Command != protocol.CommandAuth {
+		if err := env.DecodePayload(&meta); err != nil || (meta.Command != protocol.CommandAuth && meta.Command != protocol.CommandRegistryListSessions) {
 			_ = s.sendError(state, env.ID, env.SessionID, "session_id is required")
 			return
 		}
@@ -227,6 +227,9 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 		return
 	}
 	switch meta.Command {
+	case protocol.CommandRegistryListSessions:
+		s.handleListSessions(state, env)
+		return
 	case protocol.CommandSessionStatus:
 		s.handleSessionStatus(state, env)
 		return
@@ -277,6 +280,33 @@ func (s *Server) handleWrapperEnvelope(state *connState, env protocol.Envelope) 
 	for _, client := range clients {
 		_ = client.writeEnvelope(env)
 	}
+}
+
+func (s *Server) handleListSessions(state *connState, env protocol.Envelope) {
+	records := s.registry.List()
+	sessions := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		sessions = append(sessions, map[string]any{
+			"session":                  record.Session,
+			"runtime":                  record.Runtime,
+			"persisted_session_handle": record.PersistedSessionHandle,
+			"wrapper_connected":        record.WrapperConnected,
+			"state":                    record.State,
+			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
+		})
+	}
+	ack, err := protocol.NewEnvelope(protocol.MessageAck, "", "", "weave-relay", env.ID, protocol.AckPayload{
+		Command: protocol.CommandRegistryListSessions,
+		Success: true,
+		Data: map[string]any{
+			"sessions": sessions,
+		},
+	})
+	if err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	_ = state.writeEnvelope(ack)
 }
 
 func (s *Server) handleSessionStatus(state *connState, env protocol.Envelope) {
@@ -467,6 +497,7 @@ func mustAckEnvelope(id, sessionID string, record session.Record, command string
 			"runtime":                  record.Runtime,
 			"persisted_session_handle": record.PersistedSessionHandle,
 			"wrapper_connected":        record.WrapperConnected,
+			"state":                    record.State,
 			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
 		},
 	})

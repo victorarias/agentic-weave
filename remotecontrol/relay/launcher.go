@@ -7,6 +7,8 @@ import (
 	"log"
 	"os/exec"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/victorarias/agentic-weave/remotecontrol/runtime"
 )
@@ -27,12 +29,19 @@ type Launcher interface {
 
 var errRuntimeAlreadyManaged = errors.New("runtime already managed for session")
 
+const gracefulStopTimeout = 3 * time.Second
+
+type managedProcess struct {
+	cmd  *exec.Cmd
+	done chan error
+}
+
 type ProcessLauncher struct {
 	WrapperBin string
 	Logger     *log.Logger
 
 	mu        sync.Mutex
-	processes map[string]*exec.Cmd
+	processes map[string]*managedProcess
 }
 
 func NewProcessLauncher(wrapperBin string, logger *log.Logger) *ProcessLauncher {
@@ -45,13 +54,13 @@ func NewProcessLauncher(wrapperBin string, logger *log.Logger) *ProcessLauncher 
 	return &ProcessLauncher{
 		WrapperBin: wrapperBin,
 		Logger:     logger,
-		processes:  make(map[string]*exec.Cmd),
+		processes:  make(map[string]*managedProcess),
 	}
 }
 
 func (l *ProcessLauncher) Spawn(ctx context.Context, req LaunchRequest) error {
 	l.mu.Lock()
-	if existing := l.processes[req.SessionID]; existing != nil && existing.Process != nil {
+	if existing := l.processes[req.SessionID]; existing != nil && existing.cmd != nil && existing.cmd.Process != nil {
 		l.mu.Unlock()
 		return errRuntimeAlreadyManaged
 	}
@@ -76,31 +85,41 @@ func (l *ProcessLauncher) Spawn(ctx context.Context, req LaunchRequest) error {
 		return err
 	}
 
+	proc := &managedProcess{cmd: cmd, done: make(chan error, 1)}
 	l.mu.Lock()
-	l.processes[req.SessionID] = cmd
+	l.processes[req.SessionID] = proc
 	l.mu.Unlock()
 
-	go func(sessionID string, cmd *exec.Cmd) {
-		_ = cmd.Wait()
+	go func(sessionID string, proc *managedProcess) {
+		err := proc.cmd.Wait()
+		proc.done <- err
 		l.mu.Lock()
-		if l.processes[sessionID] == cmd {
+		if l.processes[sessionID] == proc {
 			delete(l.processes, sessionID)
 		}
 		l.mu.Unlock()
-	}(req.SessionID, cmd)
+	}(req.SessionID, proc)
 
 	return nil
 }
 
 func (l *ProcessLauncher) Stop(sessionID string) error {
 	l.mu.Lock()
-	cmd := l.processes[sessionID]
-	if cmd != nil {
+	proc := l.processes[sessionID]
+	if proc != nil {
 		delete(l.processes, sessionID)
 	}
 	l.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
+	if proc == nil || proc.cmd == nil || proc.cmd.Process == nil {
 		return exec.ErrNotFound
 	}
-	return cmd.Process.Kill()
+	if err := proc.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		return err
+	}
+	select {
+	case <-proc.done:
+		return nil
+	case <-time.After(gracefulStopTimeout):
+		return proc.cmd.Process.Kill()
+	}
 }

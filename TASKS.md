@@ -207,6 +207,15 @@ This file tracks current work items and progress.
     - [x] explicit session registry / identity model in code (`remotecontrol/session`, `session.status`)
     - [x] spawn/load implementation on top of the cleaned seams (`session.spawn`, `runtime.stop`, `session.load`)
 
+- [x] PR 4: Tier 2 hardening pass
+  - Description: Tighten the operator/debug surface before considering Tier 3.
+  - Depends on: PR 3
+  - Output:
+    - [x] registry-backed session listing (`registry.list_sessions`)
+    - [x] inspector support for relay `sessions`
+    - [x] explicit running/stopped session state in registry output
+    - [x] graceful-stop attempt in relay launcher before hard kill fallback
+
 ---
 
 ## Active Initiative: PR Review Automation (branch family: chore/hodor-review-*)
@@ -240,6 +249,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-13 22:30: Added a Tier 2 hardening pass: relay `registry.list_sessions`, `weave-inspect relay sessions`, explicit running/stopped state in session records, a graceful-stop attempt before kill fallback, relay tests for session listing, and a manual smoke run showing session listing before and after runtime stop.
 - 2026-03-13 22:14: Finished the first Tier 2 spawn/load skeleton: added relay-managed `session.spawn`, `runtime.stop`, and `session.load`, extended `weave-inspect` with `spawn` / `kill-runtime` / `load`, added relay launcher + spawn/load tests, and verified a real pi-backed `spawn → prompt → runtime.stop → load → prompt` smoke flow returning `SPAWN_OK` then `LOAD_OK`.
 - 2026-03-13 21:54: Added an explicit session/runtime registry seam for Tier 2 cleanup: new `remotecontrol/session` registry, relay-backed `session.status`, inspector support for `status`, and tests that assert `session_id` vs `runtime_id` are exposed cleanly.
 - 2026-03-13 21:41: Started the Tier 2 cleanup pass: split wrapper internals into clearer runtime-control vs peer-transport files and added an initial `remotecontrol/runtime` descriptor seam so spawn/load work has a cleaner base.

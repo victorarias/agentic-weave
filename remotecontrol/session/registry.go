@@ -13,6 +13,7 @@ type Record struct {
 	Runtime                protocol.RuntimeInfo `json:"runtime"`
 	PersistedSessionHandle string               `json:"persisted_session_handle,omitempty"`
 	WrapperConnected       bool                 `json:"wrapper_connected"`
+	State                  string               `json:"state,omitempty"`
 	UpdatedAt              time.Time            `json:"updated_at"`
 }
 
@@ -33,6 +34,7 @@ func (r *Registry) Ensure(sessionID, persistedHandle string) Record {
 	if persistedHandle != "" {
 		record.PersistedSessionHandle = persistedHandle
 	}
+	record.State = deriveState(record.WrapperConnected)
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = record
 	return record
@@ -48,6 +50,7 @@ func (r *Registry) SetConnected(sessionID string, runtime protocol.RuntimeInfo, 
 		record.PersistedSessionHandle = persistedHandle
 	}
 	record.WrapperConnected = true
+	record.State = deriveState(record.WrapperConnected)
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = record
 	return record
@@ -64,6 +67,7 @@ func (r *Registry) SetDisconnected(sessionID, runtimeID string) (Record, bool) {
 		return record, false
 	}
 	record.WrapperConnected = false
+	record.State = deriveState(record.WrapperConnected)
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = record
 	return record, true
@@ -87,4 +91,11 @@ func (r *Registry) List() []Record {
 		return out[i].Session.ID < out[j].Session.ID
 	})
 	return out
+}
+
+func deriveState(connected bool) string {
+	if connected {
+		return "running"
+	}
+	return "stopped"
 }

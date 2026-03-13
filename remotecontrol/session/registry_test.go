@@ -16,7 +16,7 @@ func TestRegistryTracksConnectedAndDisconnectedRuntime(t *testing.T) {
 	if !ok {
 		t.Fatal("expected session record")
 	}
-	if record.Session.ID != "sess-1" || record.Runtime.ID != "rt-1" || !record.WrapperConnected {
+	if record.Session.ID != "sess-1" || record.Runtime.ID != "rt-1" || !record.WrapperConnected || record.State != "running" {
 		t.Fatalf("unexpected connected record: %#v", record)
 	}
 	if record.PersistedSessionHandle != "/tmp/sess-1.jsonl" {
@@ -27,7 +27,7 @@ func TestRegistryTracksConnectedAndDisconnectedRuntime(t *testing.T) {
 	if !ok {
 		t.Fatal("expected disconnect to update record")
 	}
-	if record.WrapperConnected {
+	if record.WrapperConnected || record.State != "stopped" {
 		t.Fatalf("expected disconnected record: %#v", record)
 	}
 }

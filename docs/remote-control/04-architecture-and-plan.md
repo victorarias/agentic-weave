@@ -1,6 +1,6 @@
 # V1 Architecture and Phased Plan
 
-**Status (2026-03-13):** Tier 0, Tier 1, and the first Tier 2 spawn/load identity skeleton are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes plus relay `spawn` / `load` / `kill-runtime` / `status`), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test now works end-to-end; Tier 3 remains gated on keeping the cleanup boundaries intact.
+**Status (2026-03-13):** Tier 0, Tier 1, and the first Tier 2 spawn/load identity skeleton are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes plus relay `sessions` / `spawn` / `load` / `kill-runtime` / `status`), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test now works end-to-end; Tier 3 remains gated on keeping the cleanup boundaries intact.
 
 ## Architecture Overview
 

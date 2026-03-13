@@ -1,6 +1,6 @@
 # Control Protocol
 
-**Status (2026-03-13):** Tier 0 local protocol, Tier 1 single-session relay routing, and the Tier 2 spawn/load identity skeleton are implemented for `auth`, `initialize`, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update`. Attach/takeover and richer host routing remain future tiers.
+**Status (2026-03-13):** Tier 0 local protocol, Tier 1 single-session relay routing, and the Tier 2 spawn/load identity skeleton are implemented for `auth`, `initialize`, `registry.list_sessions`, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update`. Attach/takeover and richer host routing remain future tiers.
 
 All messages are JSON over WebSocket. Every message has a common envelope.
 
@@ -81,6 +81,31 @@ ACP-aligned version + capability negotiation after `auth` succeeds.
 Clients must not assume that a capability they advertised was accepted.
 
 ### Session Lifecycle
+
+#### `registry.list_sessions`
+Return the relay's current view of known logical sessions.
+This is intentionally a thin Tier 2 debugging/control-plane command, mainly for
+inspection and proving that session identity is stable while runtime identity changes.
+```jsonc
+{
+  "type": "command",
+  "payload": {
+    "command": "registry.list_sessions"
+  }
+}
+```
+
+Expected `ack.data.sessions[]` item shape:
+```jsonc
+{
+  "session": { "id": "sess-uuid" },
+  "runtime": { "id": "rt-uuid", "kind": "pi", "transport": "rpc" },
+  "persisted_session_handle": "/path/to/session.jsonl",
+  "state": "running|stopped",
+  "wrapper_connected": true,
+  "updated_at": "2026-03-13T22:30:00Z"
+}
+```
 
 #### `session.status`
 Return the relay/runtime view of the logical session identity.

@@ -22,7 +22,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|status|spawn|load|kill-runtime|prompt|cancel> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|prompt|cancel> [message]")
 	}
 	switch os.Args[1] {
 	case "local":
@@ -30,7 +30,7 @@ func run() error {
 	case "relay":
 		return runRelay(os.Args[2:])
 	default:
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|status|spawn|load|kill-runtime|prompt|cancel> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|prompt|cancel> [message]")
 	}
 }
 
@@ -46,7 +46,7 @@ func runLocal(args []string) error {
 	if err != nil {
 		return err
 	}
-	if subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" {
+	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" {
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	}
 
@@ -97,11 +97,11 @@ func runRelay(args []string) error {
 
 func parseSubcommand(args []string) (string, string, error) {
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("missing subcommand: init, status, spawn, load, kill-runtime, prompt, or cancel")
+		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, prompt, or cancel")
 	}
 	subcmd := args[0]
 	switch subcmd {
-	case "init", "status", "spawn", "load", "kill-runtime", "cancel":
+	case "init", "sessions", "status", "spawn", "load", "kill-runtime", "cancel":
 		return subcmd, "", nil
 	case "prompt":
 		if len(args) < 2 {
@@ -170,7 +170,7 @@ func (c *localClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 			return err
 		}
 		return printStatus(ack, jsonMode)
-	case "spawn", "load", "kill-runtime":
+	case "sessions", "spawn", "load", "kill-runtime":
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
@@ -268,6 +268,19 @@ func (c *relayClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 	switch subcmd {
 	case "init":
 		return nil
+	case "sessions":
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, "", "", "weave-inspect", "sessions-1", protocol.ListSessionsCommand{Command: protocol.CommandRegistryListSessions})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		ack, err := waitForAckEnvelope(c.events, "sessions-1", jsonMode)
+		if err != nil {
+			return err
+		}
+		return printSessions(ack, jsonMode)
 	case "status":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
 		if err != nil {
@@ -424,11 +437,47 @@ func printStatus(env protocol.Envelope, jsonMode bool) error {
 	if persisted := stringValue(ack.Data["persisted_session_handle"]); persisted != "" {
 		fmt.Fprintf(os.Stdout, "persisted_session_handle=%s\n", persisted)
 	}
+	if state := stringValue(ack.Data["state"]); state != "" {
+		fmt.Fprintf(os.Stdout, "state=%s\n", state)
+	}
 	if wrapperConnected, ok := ack.Data["wrapper_connected"].(bool); ok {
 		fmt.Fprintf(os.Stdout, "wrapper_connected=%t\n", wrapperConnected)
 	}
 	if updatedAt := stringValue(ack.Data["updated_at"]); updatedAt != "" {
 		fmt.Fprintf(os.Stdout, "updated_at=%s\n", updatedAt)
+	}
+	return nil
+}
+
+func printSessions(env protocol.Envelope, jsonMode bool) error {
+	if jsonMode {
+		return nil
+	}
+	var ack protocol.AckPayload
+	if err := env.DecodePayload(&ack); err != nil {
+		return err
+	}
+	items, _ := ack.Data["sessions"].([]any)
+	if len(items) == 0 {
+		fmt.Fprintln(os.Stdout, "no sessions")
+		return nil
+	}
+	for _, item := range items {
+		row, _ := item.(map[string]any)
+		sessionMap, _ := row["session"].(map[string]any)
+		runtimeMap, _ := row["runtime"].(map[string]any)
+		fmt.Fprintf(os.Stdout, "session_id=%s runtime_id=%s state=%s wrapper_connected=%v\n",
+			stringValue(sessionMap["id"]),
+			stringValue(runtimeMap["id"]),
+			stringValue(row["state"]),
+			row["wrapper_connected"],
+		)
+		if persisted := stringValue(row["persisted_session_handle"]); persisted != "" {
+			fmt.Fprintf(os.Stdout, "  persisted_session_handle=%s\n", persisted)
+		}
+		if updatedAt := stringValue(row["updated_at"]); updatedAt != "" {
+			fmt.Fprintf(os.Stdout, "  updated_at=%s\n", updatedAt)
+		}
 	}
 	return nil
 }

@@ -118,8 +118,58 @@ func TestRelaySessionStatusUsesRegistry(t *testing.T) {
 	if runtimeMap["id"] == "" {
 		t.Fatalf("expected runtime id in payload: %#v", payload.Data)
 	}
+	if state, _ := payload.Data["state"].(string); state != "running" {
+		t.Fatalf("expected running state: %#v", payload.Data)
+	}
 	if connected, _ := payload.Data["wrapper_connected"].(bool); !connected {
 		t.Fatalf("expected wrapper_connected=true: %#v", payload.Data)
+	}
+}
+
+func TestRelayListSessions(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-list",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() {
+		_ = wrapper.RunRelay(ctx, relayURL, "secret")
+	}()
+	waitForWrapperRegistration(t, srv, "sess-list")
+
+	clientConn := dialWS(t, relayURL)
+	defer clientConn.Close()
+	authenticateWS(t, clientConn, protocol.RoleClient, "secret", "")
+
+	listEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "", "", "test-client", "sessions-1", protocol.ListSessionsCommand{
+		Command: protocol.CommandRegistryListSessions,
+	})
+	if err != nil {
+		t.Fatalf("new list envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(listEnv); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+	ack := awaitWSAckEnvelope(t, clientConn, "sessions-1")
+	payload := decodeAckPayload(t, ack)
+	items, _ := payload.Data["sessions"].([]any)
+	if len(items) == 0 {
+		t.Fatalf("expected at least one session in list: %#v", payload.Data)
+	}
+	first, _ := items[0].(map[string]any)
+	if nestedString(first, "session", "id") != "sess-list" {
+		t.Fatalf("unexpected session list payload: %#v", payload.Data)
 	}
 }
 

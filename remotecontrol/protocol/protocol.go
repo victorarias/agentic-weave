@@ -18,14 +18,15 @@ const (
 	MessageEvent   = "event"
 	MessageError   = "error"
 
-	CommandAuth          = "auth"
-	CommandInitialize    = "initialize"
-	CommandSessionStatus = "session.status"
-	CommandSessionSpawn  = "session.spawn"
-	CommandSessionLoad   = "session.load"
-	CommandRuntimeStop   = "runtime.stop"
-	CommandSessionPrompt = "session.prompt"
-	CommandSessionCancel = "session.cancel"
+	CommandAuth                 = "auth"
+	CommandInitialize           = "initialize"
+	CommandSessionStatus        = "session.status"
+	CommandSessionSpawn         = "session.spawn"
+	CommandSessionLoad          = "session.load"
+	CommandRuntimeStop          = "runtime.stop"
+	CommandRegistryListSessions = "registry.list_sessions"
+	CommandSessionPrompt        = "session.prompt"
+	CommandSessionCancel        = "session.cancel"
 
 	RoleWrapper = "wrapper"
 	RoleClient  = "client"
@@ -79,6 +80,10 @@ type SessionLoadCommand struct {
 }
 
 type RuntimeStopCommand struct {
+	Command string `json:"command"`
+}
+
+type ListSessionsCommand struct {
 	Command string `json:"command"`
 }
 
