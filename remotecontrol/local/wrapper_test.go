@@ -91,6 +91,54 @@ func TestWrapperPromptStreaming(t *testing.T) {
 	}
 }
 
+func TestWrapperStatus(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "wrapper.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := NewWrapper(Config{
+		SocketPath:      socket,
+		SessionID:       "demo-session",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  2 * time.Second,
+	})
+	go func() {
+		_ = wrapper.Run(ctx)
+	}()
+	waitForSocket(t, socket)
+
+	conn := dialSocket(t, socket)
+	defer conn.Close()
+	reader := startReader(t, conn)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "init-1", protocol.InitializeCommand{
+		Command:         protocol.CommandInitialize,
+		ProtocolVersion: protocol.Version,
+	}))
+	awaitAck(t, reader, "init-1")
+	awaitReady(t, reader)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "status-1", protocol.SessionStatusCommand{
+		Command: protocol.CommandSessionStatus,
+	}))
+	ack := awaitAckEnvelope(t, reader, "status-1")
+	var payload protocol.AckPayload
+	if err := ack.DecodePayload(&payload); err != nil {
+		t.Fatalf("decode status ack: %v", err)
+	}
+	sessionMap, _ := payload.Data["session"].(map[string]any)
+	runtimeMap, _ := payload.Data["runtime"].(map[string]any)
+	if sessionMap["id"] != "demo-session" {
+		t.Fatalf("unexpected session status: %#v", payload.Data)
+	}
+	if runtimeMap["id"] == "" {
+		t.Fatalf("expected runtime id in status: %#v", payload.Data)
+	}
+}
+
 func TestWrapperCancel(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "wrapper.sock")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -312,6 +360,11 @@ func sendEnvelope(t *testing.T, conn net.Conn, env protocol.Envelope) {
 
 func awaitAck(t *testing.T, ch <-chan protocol.Envelope, id string) {
 	t.Helper()
+	_ = awaitAckEnvelope(t, ch, id)
+}
+
+func awaitAckEnvelope(t *testing.T, ch <-chan protocol.Envelope, id string) protocol.Envelope {
+	t.Helper()
 	deadline := time.After(2 * time.Second)
 	for {
 		select {
@@ -319,7 +372,7 @@ func awaitAck(t *testing.T, ch <-chan protocol.Envelope, id string) {
 			if env.ID != id || env.Type != protocol.MessageAck {
 				continue
 			}
-			return
+			return env
 		case <-deadline:
 			t.Fatalf("timed out waiting for ack %s", id)
 		}

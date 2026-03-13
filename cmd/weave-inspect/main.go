@@ -22,7 +22,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|prompt|cancel> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|status|prompt|cancel> [message]")
 	}
 	switch os.Args[1] {
 	case "local":
@@ -30,7 +30,7 @@ func run() error {
 	case "relay":
 		return runRelay(os.Args[2:])
 	default:
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|prompt|cancel> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|status|prompt|cancel> [message]")
 	}
 }
 
@@ -92,11 +92,11 @@ func runRelay(args []string) error {
 
 func parseSubcommand(args []string) (string, string, error) {
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("missing subcommand: init, prompt, or cancel")
+		return "", "", fmt.Errorf("missing subcommand: init, status, prompt, or cancel")
 	}
 	subcmd := args[0]
 	switch subcmd {
-	case "init", "cancel":
+	case "init", "status", "cancel":
 		return subcmd, "", nil
 	case "prompt":
 		if len(args) < 2 {
@@ -152,6 +152,19 @@ func (c *localClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 	switch subcmd {
 	case "init":
 		return nil
+	case "status":
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+		if err != nil {
+			return err
+		}
+		if err := protocol.WriteJSONLine(c.conn, env); err != nil {
+			return err
+		}
+		ack, err := waitForAckEnvelope(c.events, "status-1", jsonMode)
+		if err != nil {
+			return err
+		}
+		return printStatus(ack, jsonMode)
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
 		if err != nil {
@@ -160,7 +173,8 @@ func (c *localClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 		if err := protocol.WriteJSONLine(c.conn, env); err != nil {
 			return err
 		}
-		return waitForAckOrError(c.events, "cancel-1", jsonMode)
+		_, err = waitForAckEnvelope(c.events, "cancel-1", jsonMode)
+		return err
 	case "prompt":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: message})
 		if err != nil {
@@ -169,7 +183,7 @@ func (c *localClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 		if err := protocol.WriteJSONLine(c.conn, env); err != nil {
 			return err
 		}
-		if err := waitForAckOrError(c.events, "prompt-1", jsonMode); err != nil {
+		if _, err := waitForAckEnvelope(c.events, "prompt-1", jsonMode); err != nil {
 			return err
 		}
 		return streamUntilComplete(c.events, c.errCh, jsonMode)
@@ -212,7 +226,8 @@ func (c *relayClient) authenticate(jsonMode bool) error {
 	if err := c.conn.WriteJSON(env); err != nil {
 		return err
 	}
-	return waitForAckOrError(c.events, "auth-1", jsonMode)
+	_, err = waitForAckEnvelope(c.events, "auth-1", jsonMode)
+	return err
 }
 
 func (c *relayClient) initialize(sessionID string, jsonMode bool) error {
@@ -246,6 +261,19 @@ func (c *relayClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 	switch subcmd {
 	case "init":
 		return nil
+	case "status":
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		ack, err := waitForAckEnvelope(c.events, "status-1", jsonMode)
+		if err != nil {
+			return err
+		}
+		return printStatus(ack, jsonMode)
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
 		if err != nil {
@@ -254,7 +282,8 @@ func (c *relayClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		return waitForAckOrError(c.events, "cancel-1", jsonMode)
+		_, err = waitForAckEnvelope(c.events, "cancel-1", jsonMode)
+		return err
 	case "prompt":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: message})
 		if err != nil {
@@ -263,7 +292,7 @@ func (c *relayClient) execute(subcmd, message, sessionID string, jsonMode bool) 
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		if err := waitForAckOrError(c.events, "prompt-1", jsonMode); err != nil {
+		if _, err := waitForAckEnvelope(c.events, "prompt-1", jsonMode); err != nil {
 			return err
 		}
 		return streamUntilComplete(c.events, c.errCh, jsonMode)
@@ -305,7 +334,7 @@ func waitForInit(events <-chan protocol.Envelope, jsonMode bool, requestID strin
 	return nil
 }
 
-func waitForAckOrError(events <-chan protocol.Envelope, id string, jsonMode bool) error {
+func waitForAckEnvelope(events <-chan protocol.Envelope, id string, jsonMode bool) (protocol.Envelope, error) {
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
@@ -318,18 +347,41 @@ func waitForAckOrError(events <-chan protocol.Envelope, id string, jsonMode bool
 			}
 			switch env.Type {
 			case protocol.MessageAck:
-				return nil
+				return env, nil
 			case protocol.MessageError:
 				var payload protocol.ErrorPayload
 				if err := env.DecodePayload(&payload); err != nil {
-					return err
+					return protocol.Envelope{}, err
 				}
-				return errors.New(payload.Error)
+				return protocol.Envelope{}, errors.New(payload.Error)
 			}
 		case <-deadline:
-			return fmt.Errorf("timed out waiting for %s", id)
+			return protocol.Envelope{}, fmt.Errorf("timed out waiting for %s", id)
 		}
 	}
+}
+
+func printStatus(env protocol.Envelope, jsonMode bool) error {
+	if jsonMode {
+		return nil
+	}
+	var ack protocol.AckPayload
+	if err := env.DecodePayload(&ack); err != nil {
+		return err
+	}
+	sessionMap, _ := ack.Data["session"].(map[string]any)
+	runtimeMap, _ := ack.Data["runtime"].(map[string]any)
+	fmt.Fprintf(os.Stdout, "session_id=%s\n", stringValue(sessionMap["id"]))
+	fmt.Fprintf(os.Stdout, "runtime_id=%s\n", stringValue(runtimeMap["id"]))
+	fmt.Fprintf(os.Stdout, "runtime_kind=%s\n", stringValue(runtimeMap["kind"]))
+	fmt.Fprintf(os.Stdout, "runtime_transport=%s\n", stringValue(runtimeMap["transport"]))
+	if wrapperConnected, ok := ack.Data["wrapper_connected"].(bool); ok {
+		fmt.Fprintf(os.Stdout, "wrapper_connected=%t\n", wrapperConnected)
+	}
+	if updatedAt := stringValue(ack.Data["updated_at"]); updatedAt != "" {
+		fmt.Fprintf(os.Stdout, "updated_at=%s\n", updatedAt)
+	}
+	return nil
 }
 
 func streamUntilComplete(events <-chan protocol.Envelope, errCh <-chan error, jsonMode bool) error {
@@ -371,4 +423,9 @@ func streamUntilComplete(events <-chan protocol.Envelope, errCh <-chan error, js
 			}
 		}
 	}
+}
+
+func stringValue(v any) string {
+	s, _ := v.(string)
+	return s
 }

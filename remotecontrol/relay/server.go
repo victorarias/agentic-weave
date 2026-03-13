@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/victorarias/agentic-weave/remotecontrol/protocol"
+	"github.com/victorarias/agentic-weave/remotecontrol/session"
 )
 
 type Config struct {
@@ -25,12 +26,14 @@ type Server struct {
 	mu          sync.Mutex
 	wrappers    map[string]*connState
 	subscribers map[string]map[*connState]struct{}
+	registry    *session.Registry
 }
 
 type connState struct {
 	conn      *websocket.Conn
 	role      string
 	sessionID string
+	runtimeID string
 	mu        sync.Mutex
 	authed    bool
 	sessions  map[string]struct{}
@@ -47,6 +50,7 @@ func NewServer(cfg Config) *Server {
 		},
 		wrappers:    make(map[string]*connState),
 		subscribers: make(map[string]map[*connState]struct{}),
+		registry:    session.NewRegistry(),
 	}
 }
 
@@ -139,10 +143,15 @@ func (s *Server) handleAuth(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "wrapper auth requires session_id")
 		return
 	}
+	if cmd.Role == protocol.RoleWrapper && env.RuntimeID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "wrapper auth requires runtime_id")
+		return
+	}
 
 	state.authed = true
 	state.role = cmd.Role
 	state.sessionID = env.SessionID
+	state.runtimeID = env.RuntimeID
 
 	s.mu.Lock()
 	if state.role == protocol.RoleWrapper {
@@ -152,6 +161,7 @@ func (s *Server) handleAuth(state *connState, env protocol.Envelope) {
 			return
 		}
 		s.wrappers[state.sessionID] = state
+		s.registry.SetConnected(state.sessionID, protocol.RuntimeInfo{ID: state.runtimeID, Kind: "pi", Transport: "rpc"})
 	}
 	s.mu.Unlock()
 
@@ -175,6 +185,18 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 	}
 	if env.SessionID == "" {
 		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required")
+		return
+	}
+
+	var meta struct {
+		Command string `json:"command"`
+	}
+	if err := env.DecodePayload(&meta); err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	if meta.Command == protocol.CommandSessionStatus {
+		s.handleSessionStatus(state, env)
 		return
 	}
 
@@ -210,6 +232,29 @@ func (s *Server) handleWrapperEnvelope(state *connState, env protocol.Envelope) 
 	}
 }
 
+func (s *Server) handleSessionStatus(state *connState, env protocol.Envelope) {
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok {
+		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
+		return
+	}
+	ack, err := protocol.NewEnvelope(protocol.MessageAck, env.SessionID, record.Runtime.ID, "weave-relay", env.ID, protocol.AckPayload{
+		Command: protocol.CommandSessionStatus,
+		Success: true,
+		Data: map[string]any{
+			"session":           record.Session,
+			"runtime":           record.Runtime,
+			"wrapper_connected": record.WrapperConnected,
+			"updated_at":        record.UpdatedAt.Format(time.RFC3339Nano),
+		},
+	})
+	if err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	_ = state.writeEnvelope(ack)
+}
+
 func (s *Server) subscribe(state *connState, sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -226,6 +271,7 @@ func (s *Server) unregister(state *connState) {
 	if state.role == protocol.RoleWrapper && state.sessionID != "" {
 		if s.wrappers[state.sessionID] == state {
 			delete(s.wrappers, state.sessionID)
+			s.registry.SetDisconnected(state.sessionID, state.runtimeID)
 		}
 	}
 	for sessionID := range state.sessions {

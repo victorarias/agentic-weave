@@ -20,6 +20,7 @@ const (
 
 	CommandAuth          = "auth"
 	CommandInitialize    = "initialize"
+	CommandSessionStatus = "session.status"
 	CommandSessionPrompt = "session.prompt"
 	CommandSessionCancel = "session.cancel"
 
@@ -58,6 +59,10 @@ type InitializeCommand struct {
 	Command         string          `json:"command"`
 	ProtocolVersion string          `json:"protocol_version"`
 	Capabilities    map[string]bool `json:"capabilities,omitempty"`
+}
+
+type SessionStatusCommand struct {
+	Command string `json:"command"`
 }
 
 type SessionPromptCommand struct {

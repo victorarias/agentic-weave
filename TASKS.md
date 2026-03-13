@@ -204,7 +204,7 @@ This file tracks current work items and progress.
   - Output:
     - [x] wrapper internals split more clearly between runtime control and peer transport
     - [x] initial runtime descriptor seam (`remotecontrol/runtime`)
-    - [ ] explicit session registry / identity model in code
+    - [x] explicit session registry / identity model in code (`remotecontrol/session`, `session.status`)
     - [ ] spawn/load implementation on top of the cleaned seams
 
 ---
@@ -240,6 +240,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-13 21:54: Added an explicit session/runtime registry seam for Tier 2 cleanup: new `remotecontrol/session` registry, relay-backed `session.status`, inspector support for `status`, and tests that assert `session_id` vs `runtime_id` are exposed cleanly.
 - 2026-03-13 21:41: Started the Tier 2 cleanup pass: split wrapper internals into clearer runtime-control vs peer-transport files and added an initial `remotecontrol/runtime` descriptor seam so spawn/load work has a cleaner base.
 - 2026-03-13 21:30: Strengthened the Tier 2 planning docs with an explicit hard gate: do not start Tier 3 until the Tier 2 cleanup/refactor work has landed and the wrapper/relay/runtime boundaries are no longer prototype-mushy.
 - 2026-03-13 21:28: Updated the remote-control plan docs to make Tier 2 cleanup explicit and mandatory: split wrapper responsibilities, protect the relay/runtime boundary, and formalize `session_id` vs `runtime_id` before adding spawn/load.

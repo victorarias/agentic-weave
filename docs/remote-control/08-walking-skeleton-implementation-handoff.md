@@ -131,7 +131,7 @@ These are suggestions, not a hard law.
   - pi process launch in RPC mode
 - `remotecontrol/protocol/`
   - shared envelope types
-  - `initialize`, `session.prompt`, `session.cancel`
+  - `initialize`, `session.status`, `session.prompt`, `session.cancel`
   - `session.update` schema
 - `remotecontrol/local/`
   - pi RPC client glue

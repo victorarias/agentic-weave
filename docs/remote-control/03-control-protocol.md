@@ -1,6 +1,6 @@
 # Control Protocol
 
-**Status (2026-03-13):** Tier 0 local protocol and Tier 1 single-session relay routing are implemented for `auth`, `initialize`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update`. Multi-session orchestration, spawn/load, and attach/takeover remain future tiers.
+**Status (2026-03-13):** Tier 0 local protocol and Tier 1 single-session relay routing are implemented for `auth`, `initialize`, `session.status`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update`. Tier 2 cleanup work has also started with an explicit session/runtime registry seam, but spawn/load and attach/takeover remain future tiers.
 
 All messages are JSON over WebSocket. Every message has a common envelope.
 
@@ -81,6 +81,30 @@ ACP-aligned version + capability negotiation after `auth` succeeds.
 Clients must not assume that a capability they advertised was accepted.
 
 ### Session Lifecycle
+
+#### `session.status`
+Return the relay/runtime view of the logical session identity.
+For the current walking skeleton this is mainly used to make `session_id` vs
+`runtime_id` explicit to clients while Tier 2 identity work is in progress.
+```jsonc
+{
+  "type": "command",
+  "session_id": "sess-uuid",
+  "payload": {
+    "command": "session.status"
+  }
+}
+```
+
+Expected `ack.data` shape:
+```jsonc
+{
+  "session": { "id": "sess-uuid" },
+  "runtime": { "id": "rt-uuid", "kind": "pi", "transport": "rpc" },
+  "wrapper_connected": true,
+  "updated_at": "2026-03-13T21:45:00Z"
+}
+```
 
 #### `session.spawn`
 Weave-specific remote creation command. Conceptually this wraps ACP-style

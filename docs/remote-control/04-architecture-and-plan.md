@@ -1,6 +1,6 @@
 # V1 Architecture and Phased Plan
 
-**Status (2026-03-13):** Tier 0 and Tier 1 are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, and `remotecontrol/relay`. Tier 2 (spawn/load/identity) is the next build step.
+**Status (2026-03-13):** Tier 0 and Tier 1 are complete and validated. Tier 2 cleanup is now underway. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, and the first session/runtime registry seam in `remotecontrol/session`. Spawn/load is still the next major build step.
 
 ## Architecture Overview
 

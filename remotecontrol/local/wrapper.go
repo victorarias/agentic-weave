@@ -285,6 +285,23 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 		}
 		return w.sendEvent(p, ready)
 
+	case protocol.CommandSessionStatus:
+		if !p.initialized() {
+			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.status"))
+			return nil
+		}
+		return w.sendAck(p, env.ID, protocol.CommandSessionStatus, map[string]any{
+			"session": protocol.SessionInfo{ID: w.cfg.SessionID},
+			"runtime": protocol.RuntimeInfo{ID: w.runtimeID, Kind: "pi", Transport: w.descriptor.Transport},
+			"runtime_descriptor": map[string]any{
+				"name":                w.descriptor.Name,
+				"command":             w.descriptor.Command,
+				"args":                w.descriptor.Args,
+				"transport":           w.descriptor.Transport,
+				"resume_strategy":     w.descriptor.ResumeStrategy,
+				"supports_permission": w.descriptor.SupportsPermission,
+			},
+		})
 	case protocol.CommandSessionPrompt:
 		if !p.initialized() {
 			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.prompt"))

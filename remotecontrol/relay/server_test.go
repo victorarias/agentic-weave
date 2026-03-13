@@ -68,6 +68,59 @@ func TestRelayRoutesWrapperEventsToClient(t *testing.T) {
 	awaitMessageComplete(t, clientConn, "hello world")
 }
 
+func TestRelaySessionStatusUsesRegistry(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-status",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() {
+		_ = wrapper.RunRelay(ctx, relayURL, "secret")
+	}()
+	waitForWrapperRegistration(t, srv, "sess-status")
+
+	clientConn := dialWS(t, relayURL)
+	defer clientConn.Close()
+	authenticateWS(t, clientConn, protocol.RoleClient, "secret", "")
+
+	statusEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-status", "", "test-client", "status-1", protocol.SessionStatusCommand{
+		Command: protocol.CommandSessionStatus,
+	})
+	if err != nil {
+		t.Fatalf("new status envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(statusEnv); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	ack := awaitWSAckEnvelope(t, clientConn, "status-1")
+	var payload protocol.AckPayload
+	if err := ack.DecodePayload(&payload); err != nil {
+		t.Fatalf("decode status ack: %v", err)
+	}
+	sessionMap, _ := payload.Data["session"].(map[string]any)
+	runtimeMap, _ := payload.Data["runtime"].(map[string]any)
+	if sessionMap["id"] != "sess-status" {
+		t.Fatalf("unexpected session in payload: %#v", payload.Data)
+	}
+	if runtimeMap["id"] == "" {
+		t.Fatalf("expected runtime id in payload: %#v", payload.Data)
+	}
+	if connected, _ := payload.Data["wrapper_connected"].(bool); !connected {
+		t.Fatalf("expected wrapper_connected=true: %#v", payload.Data)
+	}
+}
+
 func TestRelayRejectsInvalidToken(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -204,6 +257,11 @@ func authenticateWS(t *testing.T, conn *websocket.Conn, role, token, sessionID s
 
 func awaitWSAck(t *testing.T, conn *websocket.Conn, id string) {
 	t.Helper()
+	_ = awaitWSAckEnvelope(t, conn, id)
+}
+
+func awaitWSAckEnvelope(t *testing.T, conn *websocket.Conn, id string) protocol.Envelope {
+	t.Helper()
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	defer conn.SetReadDeadline(time.Time{})
 	for {
@@ -215,7 +273,7 @@ func awaitWSAck(t *testing.T, conn *websocket.Conn, id string) {
 			continue
 		}
 		if env.Type == protocol.MessageAck {
-			return
+			return env
 		}
 		if env.Type == protocol.MessageError {
 			var payload protocol.ErrorPayload
