@@ -294,6 +294,20 @@ A demo where:
 - persisted session handle support
 - minimal runtime preset / adapter registry
 
+### Mandatory cleanup before feature growth
+Do not treat Tier 2 as pure feature work.
+Before or alongside spawn/load, clean up the Tier 0/1 skeleton so it does not
+solidify into accidental architecture.
+
+Required cleanup outcomes:
+- wrapper internals are split more clearly between:
+  - pi runtime process/RPC control
+  - peer transport management (local socket vs relay)
+  - command dispatch / event normalization
+- relay code stays transport/control-plane focused, not runtime-specific
+- `session_id` and `runtime_id` are explicit and hard to confuse in code paths
+- the runtime adapter/preset seam exists early enough to stop more pi-specific branching
+
 ### Registry requirements
 Even if only pi exists, add a tiny runtime descriptor now.
 Suggested fields:
@@ -344,14 +358,18 @@ Expected:
 - `session.load` works end-to-end at least once
 - resume path is real, not a stub
 - runtime adapter/preset exists, even if minimal
+- Tier 0/1 prototype seams have been cleaned up enough that adding Tier 3 will not force a large rewrite
 
 ## Tier 2 stop-and-evaluate questions
 
 1. Are session and runtime semantics still clean?
 2. Did we expose too much pi persistence detail into protocol/client space?
 3. Is the preset/adapter abstraction pulling its weight yet?
+4. Did we actually pay down the Tier 0/1 cleanup debt, or merely add features on top of it?
 
 If not, tighten before continuing.
+
+**Hard gate:** do not start Tier 3 until the Tier 2 cleanup/refactor work has landed. If spawn/load works but the wrapper/relay/runtime boundaries are still mushy, Tier 2 is not done.
 
 ---
 

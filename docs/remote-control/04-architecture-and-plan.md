@@ -235,6 +235,18 @@ Deliverables:
 
 **Goal**: make session identity and recovery real before adding more features.
 
+**Mandatory cleanup at the start of Tier 2:** before adding spawn/load behavior,
+refactor the Tier 0/1 prototype so responsibilities are cleaner.
+At minimum:
+- separate wrapper runtime control from peer-transport management
+- keep relay routing/session registry logic out of pi-specific runtime code
+- make `session_id` vs `runtime_id` explicit in data structures and message flow
+- introduce a small runtime adapter/preset seam so pi-specific behavior does not keep spreading
+
+This cleanup is not optional bookkeeping. Tier 2 is the point where the current
+walking-skeleton code stops being "just a prototype" and becomes the real base
+for later features.
+
 Deliverables:
 1. Add explicit support for:
    - `session.spawn`
@@ -244,8 +256,11 @@ Deliverables:
 2. Add a minimal **runtime preset/adapter registry** so runtime-specific behavior
    is configured, not scattered in control-plane code
 3. Support one persisted-session resume path end-to-end
+4. Land the cleanup/refactor above as part of the tier, not as follow-up debt
 
 **Smoke test:** spawn fresh session, stop runtime, load same session into a new runtime.
+
+**Gate:** do not begin Tier 3 until this cleanup has landed and the Tier 2 identity/runtime seams are clean enough that further features do not increase architectural debt.
 
 ### Tier 3 — Permission + Delivery Semantics
 

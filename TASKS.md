@@ -198,6 +198,15 @@ This file tracks current work items and progress.
     - [x] inspector relay mode (`cmd/weave-inspect relay ...`)
     - [x] Go relay routing tests and real relay smoke test against pi for init/prompt
 
+- [ ] PR 3: Tier 2 cleanup scaffold before spawn/load
+  - Description: Pay down the Tier 0/1 prototype debt before adding identity and resume features.
+  - Depends on: PR 2
+  - Output:
+    - [x] wrapper internals split more clearly between runtime control and peer transport
+    - [x] initial runtime descriptor seam (`remotecontrol/runtime`)
+    - [ ] explicit session registry / identity model in code
+    - [ ] spawn/load implementation on top of the cleaned seams
+
 ---
 
 ## Active Initiative: PR Review Automation (branch family: chore/hodor-review-*)
@@ -231,6 +240,9 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-13 21:41: Started the Tier 2 cleanup pass: split wrapper internals into clearer runtime-control vs peer-transport files and added an initial `remotecontrol/runtime` descriptor seam so spawn/load work has a cleaner base.
+- 2026-03-13 21:30: Strengthened the Tier 2 planning docs with an explicit hard gate: do not start Tier 3 until the Tier 2 cleanup/refactor work has landed and the wrapper/relay/runtime boundaries are no longer prototype-mushy.
+- 2026-03-13 21:28: Updated the remote-control plan docs to make Tier 2 cleanup explicit and mandatory: split wrapper responsibilities, protect the relay/runtime boundary, and formalize `session_id` vs `runtime_id` before adding spawn/load.
 - 2026-03-13 21:22: Added Tier 1 relay support with `cmd/weave-relay`, wrapper relay mode, relay inspector mode, relay routing tests, and a real end-to-end smoke test (`weave-relay` → `weave-wrapper --relay` → `weave-inspect relay` → pi RPC) returning `RELAY_OK`.
 - 2026-03-13 21:02: Ran the Tier 0 flow against a real local pi process: `weave-wrapper` bootstrapped pi RPC successfully, `weave-inspect` initialized and prompted, and a socket-level manual test confirmed cancel followed by completion.
 - 2026-03-13 20:52: Added the Tier 0 pi orchestration scaffold: `remotecontrol/protocol` envelope/update types, `remotecontrol/local` wrapper around `pi --mode rpc`, `cmd/weave-wrapper`, `cmd/weave-inspect`, fake-pi-backed tests, and doc updates that rename the stack to `weave-*` and make RPC the walking-skeleton starting point.
