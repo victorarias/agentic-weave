@@ -201,6 +201,11 @@ skeleton to force runtime replacement before a later `session.load`.
 
 ### Agent Steering
 
+`session.prompt` supports explicit delivery semantics in the current Tier 3 work:
+- `foreground` / `default`: deliver immediately as a normal prompt
+- `interrupt`: map to pi RPC `steer`
+- `queue` / `deliver_when_idle`: map to pi RPC `follow_up`
+
 #### `agent.message`
 Send a message into the agent's conversation.
 

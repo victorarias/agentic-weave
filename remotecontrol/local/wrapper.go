@@ -359,9 +359,9 @@ func promptToPICommand(prompt protocol.SessionPromptCommand) (map[string]any, er
 	switch prompt.Delivery {
 	case "", "default", "foreground":
 		return map[string]any{"type": "prompt", "message": msg}, nil
-	case "interrupt":
+	case "interrupt", "steer":
 		return map[string]any{"type": "steer", "message": msg}, nil
-	case "follow_up", "queue":
+	case "follow_up", "queue", "deliver_when_idle":
 		return map[string]any{"type": "follow_up", "message": msg}, nil
 	default:
 		return nil, fmt.Errorf("unsupported delivery %q", prompt.Delivery)

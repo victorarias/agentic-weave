@@ -91,6 +91,32 @@ func TestWrapperPromptStreaming(t *testing.T) {
 	}
 }
 
+func TestPromptToPICommandDeliveryModes(t *testing.T) {
+	tests := []struct {
+		name     string
+		delivery string
+		wantType string
+	}{
+		{name: "default", delivery: "", wantType: "prompt"},
+		{name: "foreground", delivery: "foreground", wantType: "prompt"},
+		{name: "interrupt", delivery: "interrupt", wantType: "steer"},
+		{name: "steer", delivery: "steer", wantType: "steer"},
+		{name: "queue", delivery: "queue", wantType: "follow_up"},
+		{name: "deliver_when_idle", delivery: "deliver_when_idle", wantType: "follow_up"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := promptToPICommand(protocol.SessionPromptCommand{Message: "hello", Delivery: tc.delivery})
+			if err != nil {
+				t.Fatalf("promptToPICommand: %v", err)
+			}
+			if got := cmd["type"]; got != tc.wantType {
+				t.Fatalf("unexpected type %v, want %s", got, tc.wantType)
+			}
+		})
+	}
+}
+
 func TestWrapperStatus(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "wrapper.sock")
 	ctx, cancel := context.WithCancel(context.Background())
