@@ -1522,6 +1522,49 @@ func TestRelayTakeoverAutoUpgradesRPCSession(t *testing.T) {
 	awaitPTYOutputContainsWS(t, human, "hello")
 }
 
+func TestRelayRejectsTakeoverOfStoppedSession(t *testing.T) {
+	tempDir := t.TempDir()
+	launcher := newFakeLauncher(t)
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir, PublicURL: "ws://127.0.0.1:0/ws", Launcher: launcher})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+	srv.cfg.PublicURL = relayURL
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-stopped-takeover", "", "orch-1", "spawn-1", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn})
+	if err != nil {
+		t.Fatalf("new spawn envelope: %v", err)
+	}
+	if err := orch.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write spawn: %v", err)
+	}
+	awaitWSAck(t, orch, "spawn-1")
+
+	stopEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-stopped-takeover", "", "orch-1", "stop-1", protocol.RuntimeStopCommand{Command: protocol.CommandRuntimeStop})
+	if err != nil {
+		t.Fatalf("new stop envelope: %v", err)
+	}
+	if err := orch.WriteJSON(stopEnv); err != nil {
+		t.Fatalf("write stop: %v", err)
+	}
+	awaitWSAck(t, orch, "stop-1")
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-stopped-takeover", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new takeover attach envelope: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write takeover attach: %v", err)
+	}
+	awaitWSError(t, human, "attach-1", "cannot take over stopped session; load or spawn first")
+}
+
 func TestRelayDuplicateWrapperAuthDoesNotAuthenticateConnection(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())

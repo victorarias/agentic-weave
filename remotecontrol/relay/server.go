@@ -564,6 +564,10 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		return
 	}
 	if cmd.Mode == "takeover" {
+		if !record.WrapperConnected {
+			_ = s.sendError(state, env.ID, env.SessionID, "cannot take over stopped session; load or spawn first")
+			return
+		}
 		if _, err := s.ensureTakeoverRuntime(env.SessionID, record); err != nil {
 			_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 			return
