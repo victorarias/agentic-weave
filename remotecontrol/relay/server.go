@@ -569,6 +569,12 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 	}
 	returnTransport := ""
 	if cmd.Mode == "takeover" {
+		// Check attachment ownership BEFORE restarting the runtime
+		// (ensureTakeoverRuntime triggers wrapper unregister which clears the attachment)
+		if record.Attachment != nil && record.Attachment.ClientID != "" && record.Attachment.ClientID != state.identity {
+			_ = s.sendError(state, env.ID, env.SessionID, "another controller is already attached")
+			return
+		}
 		if !record.WrapperConnected {
 			_ = s.sendError(state, env.ID, env.SessionID, "cannot take over stopped session; load or spawn first")
 			return

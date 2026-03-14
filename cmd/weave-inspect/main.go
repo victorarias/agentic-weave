@@ -1356,7 +1356,7 @@ func printUpdate(update protocol.SessionUpdate) (bool, error) {
 
 func shouldInitializeRelay(subcmd string) bool {
 	switch subcmd {
-	case "init", "watch", "inject", "pty-input", "pty-resize", "prompt", "cancel", "allow", "deny":
+	case "init", "watch", "inject", "pty-input", "pty-resize", "prompt", "cancel", "allow", "deny", "attach":
 		return true
 	default:
 		return false
