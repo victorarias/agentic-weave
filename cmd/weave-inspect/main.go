@@ -454,8 +454,10 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 		if mode == "takeover" {
 			if err := c.initialize(sessionID, jsonMode); err != nil {
 				fmt.Fprintf(os.Stderr, "[takeover] post-attach initialize failed: %v\n", err)
-			} else if err := c.autoResizePTY(sessionID, jsonMode); err != nil {
+			} else if rows, cols, err := c.autoResizePTY(sessionID, jsonMode); err != nil {
 				fmt.Fprintf(os.Stderr, "[takeover] auto-resize failed: %v\n", err)
+			} else if err := c.forceRedrawPTY(sessionID, rows, cols, jsonMode); err != nil {
+				fmt.Fprintf(os.Stderr, "[takeover] redraw-resize failed: %v\n", err)
 			}
 			return c.interactiveTakeover(sessionID, jsonMode)
 		}
@@ -518,15 +520,7 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 		if err != nil {
 			return fmt.Errorf("invalid cols %q", parts[1])
 		}
-		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "pty-resize-1", protocol.PTYResizeCommand{Command: protocol.CommandPTYResize, Rows: rows, Cols: cols})
-		if err != nil {
-			return err
-		}
-		if err := c.conn.WriteJSON(env); err != nil {
-			return err
-		}
-		_, err = waitForAckEnvelope(c.stream, "pty-resize-1", jsonMode)
-		return err
+		return c.sendPTYResize(sessionID, rows, cols, "pty-resize-1", jsonMode)
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
 		if err != nil {
@@ -571,20 +565,49 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 	}
 }
 
-func (c *relayClient) autoResizePTY(sessionID string, jsonMode bool) error {
-	rows, cols, ok := terminalSize()
-	if !ok {
-		return nil
-	}
-	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "pty-resize-auto", protocol.PTYResizeCommand{Command: protocol.CommandPTYResize, Rows: rows, Cols: cols})
+func (c *relayClient) sendPTYResize(sessionID string, rows, cols int, requestID string, jsonMode bool) error {
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, requestID, protocol.PTYResizeCommand{
+		Command: protocol.CommandPTYResize,
+		Rows:    rows,
+		Cols:    cols,
+	})
 	if err != nil {
 		return err
 	}
 	if err := c.conn.WriteJSON(env); err != nil {
 		return err
 	}
-	_, err = waitForAckEnvelope(c.stream, "pty-resize-auto", jsonMode)
+	_, err = waitForAckEnvelope(c.stream, requestID, jsonMode)
 	return err
+}
+
+func (c *relayClient) autoResizePTY(sessionID string, jsonMode bool) (int, int, error) {
+	rows, cols, ok := terminalSize()
+	if !ok {
+		return 0, 0, nil
+	}
+	if err := c.sendPTYResize(sessionID, rows, cols, "pty-resize-auto", jsonMode); err != nil {
+		return 0, 0, err
+	}
+	return rows, cols, nil
+}
+
+func (c *relayClient) forceRedrawPTY(sessionID string, rows, cols int, jsonMode bool) error {
+	if rows <= 0 || cols <= 0 {
+		return nil
+	}
+	bumpRows, bumpCols := rows, cols
+	if rows < 9999 {
+		bumpRows = rows + 1
+	} else if cols < 9999 {
+		bumpCols = cols + 1
+	} else {
+		return nil
+	}
+	if err := c.sendPTYResize(sessionID, bumpRows, bumpCols, "pty-resize-redraw-bump", jsonMode); err != nil {
+		return err
+	}
+	return c.sendPTYResize(sessionID, rows, cols, "pty-resize-redraw-restore", jsonMode)
 }
 
 func (c *relayClient) sendPTYInput(sessionID string, data []byte, requestID string, jsonMode bool) error {

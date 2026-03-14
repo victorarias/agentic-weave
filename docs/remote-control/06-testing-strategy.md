@@ -259,6 +259,8 @@ Finally, I validated live stdin passthrough by piping `/session\r` plus the loca
 
 On Zellij/modern terminal setups, I also confirmed that `Ctrl-]` may arrive as the extended CSI-u sequence `ESC [ 93 ; 5 u` instead of raw `0x1d`; takeover now treats that CSI-u form as the same local disconnect escape.
 
+To improve reattach rendering, takeover now also performs a resize-bump-and-restore after applying the real terminal size. This is a pragmatic redraw trigger for TUIs that only repaint fully when they receive a resize event.
+
 ---
 
 ## Tier 3: Real LLM (Integration)
