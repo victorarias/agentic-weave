@@ -1,6 +1,6 @@
 # Remote Agent Control — Requirements
 
-**Status (2026-03-13):** Active. Tier 0 and Tier 1 are now implemented with an RPC-backed wrapper around `pi --mode rpc`, a relay server, and local/relay inspector paths. Daemon-managed spawn/load, interactive PTY attach/takeover, and ACP shim work remain future tiers.
+**Status (2026-03-14):** Active. Tier 0 through Tier 3 are implemented, and a first Tier 4 human-presence slice now exists: relay attach locks plus observe/inject support through the relay inspector. Daemon-managed remote hosts, interactive PTY takeover, and ACP shim work remain future tiers.
 
 Gathered 2026-02-20 via structured interview.
 

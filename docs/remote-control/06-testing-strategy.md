@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Status (2026-03-13):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 currently has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and real manual relay smoke coverage for an extension-driven pi confirm dialog resolved by `allow` / `deny`. That real permission flow is now reproducible from the repo via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`.
+**Status (2026-03-14):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and reproducible real relay smoke coverage via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`. Tier 4 now adds relay tests for observe/inject authority plus a real observe/inject smoke script at `scripts/remotecontrol-attach-smoke.sh`.
 
 ## Three Test Tiers
 
@@ -162,6 +162,21 @@ What the script verifies:
 4. The prompt completes with the expected final output token.
 
 This avoids relying on model-specific tool-choice behavior just to trigger a confirm dialog.
+
+### Real observe / inject smoke
+
+Tier 4 observe/inject behavior is reproducible with:
+
+```bash
+./scripts/remotecontrol-attach-smoke.sh
+```
+
+What it verifies:
+
+1. a human client can `session.attach` in `observe` mode and appear in `session.status`
+2. an observer sees an orchestrator-driven prompt complete in real time
+3. the observer detaches cleanly
+4. a human can perform a one-shot `inject` flow against the same real pi session
 
 ---
 

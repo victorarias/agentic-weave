@@ -229,6 +229,18 @@ This file tracks current work items and progress.
     - [x] committed fixture extension + reproducible smoke script for the real permission path
     - [x] richer permission mediation lifecycle for confirm-style requests (protocol-shaped payloads, pending permission status/list visibility, duplicate/stale response handling, runtime invalidation)
 
+- [x] PR 6: Tier 4 human observe / inject
+  - Description: Add a first human-presence slice before takeover: relay attach locks, observe mode, inject mode, and permission authority rules while attached.
+  - Depends on: PR 5
+  - Output:
+    - [x] relay attach lock manager for one attached human per session
+    - [x] `session.attach` / `session.detach` support for `observe` and `inject`
+    - [x] inspector support for `attach`, `detach`, and one-shot `inject`
+    - [x] attachment visibility in `session.status` and `registry.list_sessions`
+    - [x] permission authority rule: attached human in `inject` mode owns permission responses
+    - [x] relay tests for observe conflict, inject visibility, and permission authority
+    - [x] real smoke script for observe + inject behavior (`scripts/remotecontrol-attach-smoke.sh`)
+
 ---
 
 ## Active Initiative: PR Review Automation (branch family: chore/hodor-review-*)
@@ -262,6 +274,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 12:30: Added the Tier 4 human observe/inject slice: relay attach locks, `session.attach` / `session.detach` for `observe` and `inject`, inspector `attach` / `detach` / one-shot `inject`, attachment visibility in status/listing, permission authority handoff to an attached human in inject mode, relay tests for observe/inject semantics, and a real `scripts/remotecontrol-attach-smoke.sh` smoke run against pi.
 - 2026-03-13 23:42: Finished the richer confirm-style permission lifecycle: permission requests are now protocol-shaped, `session.status` / `registry.list_sessions` expose pending permissions and waiting state, relay rejects stale/duplicate permission responses before forwarding, runtime transitions clear stale pending requests, tests cover the new cases, and the real permission smoke script now asserts waiting state before resolving the request.
 - 2026-03-13 23:18: Checked in a deterministic real-permission test fixture: added `testdata/pi/permission_fixture.ts`, added `scripts/remotecontrol-permission-smoke.sh`, and documented the exact relay repro flow so real permission validation no longer depends on an ad hoc temporary extension.
 - 2026-03-13 23:04: Added relay-level permission lifecycle coverage and manual real-pi validation: relay tests now cover permission request/response flow, `weave-inspect` now buffers early events so permission requests are not lost before prompt ack, and I manually ran a real relay flow with a temporary pi extension confirm dialog that produced both `PERMISSION_ALLOWED` and `PERMISSION_DENIED` through `allow` / `deny`.

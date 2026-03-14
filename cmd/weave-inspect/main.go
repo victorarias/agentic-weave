@@ -403,7 +403,14 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := printStatus(ack, jsonMode); err != nil {
 			return err
 		}
-		return streamUntilInterrupt(c.stream, c.errCh, jsonMode)
+		streamErr := streamUntilInterrupt(c.stream, c.errCh, jsonMode)
+		detachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "detach-1", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
+		if err == nil {
+			if err := c.conn.WriteJSON(detachEnv); err == nil {
+				_, _ = waitForAckEnvelope(c.stream, "detach-1", jsonMode)
+			}
+		}
+		return streamErr
 	case "detach":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "detach-1", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
 		if err != nil {
