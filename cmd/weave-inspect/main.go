@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -31,7 +33,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|switch-transport|kill-runtime|watch|attach|takeover|detach|release|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <tui|init|sessions|status|spawn|load|switch-transport|kill-runtime|watch|attach|takeover|detach|release|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
 	}
 	switch os.Args[1] {
 	case "local":
@@ -39,7 +41,7 @@ func run() error {
 	case "relay":
 		return runRelay(os.Args[2:])
 	default:
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|switch-transport|kill-runtime|watch|attach|takeover|detach|release|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <tui|init|sessions|status|spawn|load|switch-transport|kill-runtime|watch|attach|takeover|detach|release|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
 	}
 }
 
@@ -56,7 +58,7 @@ func runLocal(args []string) error {
 	if err != nil {
 		return err
 	}
-	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "switch-transport" || subcmd == "kill-runtime" || subcmd == "watch" || subcmd == "attach" || subcmd == "takeover" || subcmd == "detach" || subcmd == "release" || subcmd == "inject" || subcmd == "pty-input" || subcmd == "pty-resize" {
+	if subcmd == "tui" || subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "switch-transport" || subcmd == "kill-runtime" || subcmd == "watch" || subcmd == "attach" || subcmd == "takeover" || subcmd == "detach" || subcmd == "release" || subcmd == "inject" || subcmd == "pty-input" || subcmd == "pty-resize" {
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	}
 
@@ -99,6 +101,9 @@ func runRelay(args []string) error {
 		Identity:      *identity,
 		DebugKeysFile: *debugKeysFile,
 	})
+	if subcmd == "tui" {
+		return runRelayTUI(resolved)
+	}
 
 	conn, _, err := websocket.DefaultDialer.Dial(resolved.RelayURL, nil)
 	if err != nil {
@@ -193,13 +198,78 @@ func resolveRelayContext(saved, override relayContext) relayContext {
 	}
 }
 
+type sessionSummary struct {
+	SessionID          string
+	RuntimeID          string
+	RuntimeKind        string
+	RuntimeTransport   string
+	PersistedHandle    string
+	State              string
+	Phase              string
+	WrapperConnected   bool
+	AttachedClientID   string
+	AttachedMode       string
+	AttachedReturnMode string
+	QueuedPrompts      int
+	PendingPermissions int
+	PTYRows            int
+	PTYCols            int
+	UpdatedAt          string
+}
+
+func parseSessionSummaryData(data map[string]any) sessionSummary {
+	sessionMap, _ := data["session"].(map[string]any)
+	runtimeMap, _ := data["runtime"].(map[string]any)
+	attachmentMap, _ := data["attachment"].(map[string]any)
+	pendingPermissions := 0
+	if pending, ok := data["pending_permissions"].([]any); ok {
+		pendingPermissions = len(pending)
+	}
+	return sessionSummary{
+		SessionID:          stringValue(sessionMap["id"]),
+		RuntimeID:          stringValue(runtimeMap["id"]),
+		RuntimeKind:        stringValue(runtimeMap["kind"]),
+		RuntimeTransport:   stringValue(runtimeMap["transport"]),
+		PersistedHandle:    stringValue(data["persisted_session_handle"]),
+		State:              stringValue(data["state"]),
+		Phase:              stringValue(data["phase"]),
+		WrapperConnected:   boolValue(data["wrapper_connected"]),
+		AttachedClientID:   stringValue(attachmentMap["client_id"]),
+		AttachedMode:       stringValue(attachmentMap["mode"]),
+		AttachedReturnMode: stringValue(attachmentMap["return_transport"]),
+		QueuedPrompts:      intValueLoose(data["queued_prompts"]),
+		PendingPermissions: pendingPermissions,
+		PTYRows:            intValueLoose(data["pty_rows"]),
+		PTYCols:            intValueLoose(data["pty_cols"]),
+		UpdatedAt:          stringValue(data["updated_at"]),
+	}
+}
+
+func boolValue(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+func intValueLoose(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
 func parseSubcommand(args []string) (string, string, error) {
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, switch-transport, kill-runtime, watch, attach, takeover, detach, release, inject, pty-input, pty-resize, prompt, cancel, allow, or deny")
+		return "", "", fmt.Errorf("missing subcommand: tui, init, sessions, status, spawn, load, switch-transport, kill-runtime, watch, attach, takeover, detach, release, inject, pty-input, pty-resize, prompt, cancel, allow, or deny")
 	}
 	subcmd := args[0]
 	switch subcmd {
-	case "init", "sessions", "status", "spawn", "load", "kill-runtime", "watch", "takeover", "detach", "release", "cancel":
+	case "tui", "init", "sessions", "status", "spawn", "load", "kill-runtime", "watch", "takeover", "detach", "release", "cancel":
 		return subcmd, "", nil
 	case "switch-transport":
 		if len(args) < 2 {
@@ -649,6 +719,417 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 		return streamUntilComplete(c.stream, c.errCh, jsonMode)
 	default:
 		return fmt.Errorf("unknown subcommand %q", subcmd)
+	}
+}
+
+func (c *relayClient) listSessionsData() ([]sessionSummary, error) {
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, "", "", c.identity, "sessions-tui", protocol.ListSessionsCommand{Command: protocol.CommandRegistryListSessions})
+	if err != nil {
+		return nil, err
+	}
+	if err := c.conn.WriteJSON(env); err != nil {
+		return nil, err
+	}
+	ack, err := waitForAckEnvelope(c.stream, "sessions-tui", false)
+	if err != nil {
+		return nil, err
+	}
+	var payload protocol.AckPayload
+	if err := ack.DecodePayload(&payload); err != nil {
+		return nil, err
+	}
+	items, _ := payload.Data["sessions"].([]any)
+	out := make([]sessionSummary, 0, len(items))
+	for _, item := range items {
+		row, _ := item.(map[string]any)
+		out = append(out, parseSessionSummaryData(row))
+	}
+	return out, nil
+}
+
+func (c *relayClient) statusData(sessionID string) (sessionSummary, error) {
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "status-tui", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	if err := c.conn.WriteJSON(env); err != nil {
+		return sessionSummary{}, err
+	}
+	ack, err := waitForAckEnvelope(c.stream, "status-tui", false)
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	var payload protocol.AckPayload
+	if err := ack.DecodePayload(&payload); err != nil {
+		return sessionSummary{}, err
+	}
+	return parseSessionSummaryData(payload.Data), nil
+}
+
+func (c *relayClient) spawnData(sessionID, transport string) (sessionSummary, error) {
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "spawn-tui", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn, Transport: transport})
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	if err := c.conn.WriteJSON(env); err != nil {
+		return sessionSummary{}, err
+	}
+	ack, err := waitForAckEnvelope(c.stream, "spawn-tui", false)
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	var payload protocol.AckPayload
+	if err := ack.DecodePayload(&payload); err != nil {
+		return sessionSummary{}, err
+	}
+	return parseSessionSummaryData(payload.Data), nil
+}
+
+func (c *relayClient) loadData(sessionID, transport string) (sessionSummary, error) {
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "load-tui", protocol.SessionLoadCommand{Command: protocol.CommandSessionLoad, Transport: transport})
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	if err := c.conn.WriteJSON(env); err != nil {
+		return sessionSummary{}, err
+	}
+	ack, err := waitForAckEnvelope(c.stream, "load-tui", false)
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	var payload protocol.AckPayload
+	if err := ack.DecodePayload(&payload); err != nil {
+		return sessionSummary{}, err
+	}
+	return parseSessionSummaryData(payload.Data), nil
+}
+
+func (c *relayClient) releaseData(sessionID string) (sessionSummary, error) {
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "release-tui", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	if err := c.conn.WriteJSON(env); err != nil {
+		return sessionSummary{}, err
+	}
+	ack, err := waitForAckEnvelope(c.stream, "release-tui", false)
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	var payload protocol.AckPayload
+	if err := ack.DecodePayload(&payload); err != nil {
+		return sessionSummary{}, err
+	}
+	return parseSessionSummaryData(payload.Data), nil
+}
+
+func (c *relayClient) stopData(sessionID string) (sessionSummary, error) {
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "stop-tui", protocol.RuntimeStopCommand{Command: protocol.CommandRuntimeStop})
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	if err := c.conn.WriteJSON(env); err != nil {
+		return sessionSummary{}, err
+	}
+	ack, err := waitForAckEnvelope(c.stream, "stop-tui", false)
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	var payload protocol.AckPayload
+	if err := ack.DecodePayload(&payload); err != nil {
+		return sessionSummary{}, err
+	}
+	return parseSessionSummaryData(payload.Data), nil
+}
+
+type relayTUI struct {
+	ctx       relayContext
+	client    *relayClient
+	restore   func()
+	sessions  []sessionSummary
+	selected  int
+	statusMsg string
+}
+
+func runRelayTUI(ctx relayContext) error {
+	conn, _, err := websocket.DefaultDialer.Dial(ctx.RelayURL, nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	client := newRelayClient(conn, ctx.Token, ctx.Identity, ctx.DebugKeysFile)
+	if err := client.authenticate(false); err != nil {
+		return err
+	}
+	tui := &relayTUI{ctx: ctx, client: client}
+	if err := tui.enterRawMode(); err != nil {
+		fmt.Fprintf(os.Stderr, "[tui] raw mode unavailable: %v\n", err)
+	}
+	defer tui.leaveRawMode()
+	if err := tui.refresh(); err != nil {
+		tui.statusMsg = err.Error()
+	}
+	inputCh := make(chan byte, 32)
+	errCh := make(chan error, 1)
+	go readTUIInput(os.Stdin, inputCh, errCh)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		tui.render()
+		select {
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, io.EOF) {
+				return err
+			}
+			return nil
+		case <-ticker.C:
+			if err := tui.refresh(); err != nil {
+				tui.statusMsg = err.Error()
+			}
+		case b, ok := <-inputCh:
+			if !ok {
+				return nil
+			}
+			done, err := tui.handleKey(b)
+			if err != nil {
+				tui.statusMsg = err.Error()
+			}
+			if done {
+				_ = saveRelayContext(tui.ctx)
+				fmt.Fprint(os.Stdout, "\x1b[2J\x1b[H")
+				return nil
+			}
+		}
+	}
+}
+
+func (t *relayTUI) enterRawMode() error {
+	restore, err := makeRawTerminal(os.Stdin)
+	if err != nil {
+		return err
+	}
+	t.restore = restore
+	return nil
+}
+
+func (t *relayTUI) leaveRawMode() {
+	if t.restore != nil {
+		t.restore()
+		t.restore = nil
+	}
+}
+
+func (t *relayTUI) refresh() error {
+	sessions, err := t.client.listSessionsData()
+	if err != nil {
+		return err
+	}
+	t.sessions = sessions
+	if len(t.sessions) == 0 {
+		t.selected = 0
+		return nil
+	}
+	if t.ctx.SessionID != "" {
+		for i, session := range t.sessions {
+			if session.SessionID == t.ctx.SessionID {
+				t.selected = i
+				return nil
+			}
+		}
+	}
+	if t.selected >= len(t.sessions) {
+		t.selected = len(t.sessions) - 1
+	}
+	if t.selected < 0 {
+		t.selected = 0
+	}
+	t.ctx.SessionID = t.sessions[t.selected].SessionID
+	return nil
+}
+
+func (t *relayTUI) current() (sessionSummary, bool) {
+	if len(t.sessions) == 0 || t.selected < 0 || t.selected >= len(t.sessions) {
+		return sessionSummary{}, false
+	}
+	return t.sessions[t.selected], true
+}
+
+func (t *relayTUI) render() {
+	fmt.Fprint(os.Stdout, "\x1b[2J\x1b[H")
+	fmt.Fprintf(os.Stdout, "weave-inspect relay tui\n")
+	fmt.Fprintf(os.Stdout, "relay=%s identity=%s session=%s\n", t.ctx.RelayURL, t.ctx.Identity, t.ctx.SessionID)
+	fmt.Fprintln(os.Stdout, "keys: j/k move  n spawn  l load  x stop  t takeover  r release  p prompt  R refresh  q quit")
+	if t.statusMsg != "" {
+		fmt.Fprintf(os.Stdout, "status: %s\n", t.statusMsg)
+	} else {
+		fmt.Fprintln(os.Stdout, "status: ok")
+	}
+	fmt.Fprintln(os.Stdout, strings.Repeat("-", 100))
+	if len(t.sessions) == 0 {
+		fmt.Fprintln(os.Stdout, "(no sessions; press n to spawn one)")
+		return
+	}
+	for i, session := range t.sessions {
+		cursor := " "
+		if i == t.selected {
+			cursor = ">"
+		}
+		fmt.Fprintf(os.Stdout, "%s %-28s %-7s %-4s attached=%-10s queued=%d perms=%d\n",
+			cursor,
+			session.SessionID,
+			session.State,
+			session.RuntimeTransport,
+			session.AttachedMode,
+			session.QueuedPrompts,
+			session.PendingPermissions,
+		)
+	}
+	fmt.Fprintln(os.Stdout, strings.Repeat("-", 100))
+	if session, ok := t.current(); ok {
+		fmt.Fprintf(os.Stdout, "selected: %s\n", session.SessionID)
+		fmt.Fprintf(os.Stdout, "  runtime=%s/%s wrapper_connected=%t\n", session.RuntimeKind, session.RuntimeTransport, session.WrapperConnected)
+		fmt.Fprintf(os.Stdout, "  attached_client=%s attached_mode=%s return_transport=%s\n", session.AttachedClientID, session.AttachedMode, session.AttachedReturnMode)
+		fmt.Fprintf(os.Stdout, "  phase=%s pty=%dx%d updated=%s\n", session.Phase, session.PTYRows, session.PTYCols, session.UpdatedAt)
+	}
+}
+
+func (t *relayTUI) handleKey(b byte) (bool, error) {
+	t.statusMsg = ""
+	switch b {
+	case 'q':
+		return true, nil
+	case 'j':
+		if t.selected < len(t.sessions)-1 {
+			t.selected++
+		}
+	case 'k':
+		if t.selected > 0 {
+			t.selected--
+		}
+	case 'R', 'r':
+		if b == 'R' {
+			return false, t.refresh()
+		}
+		current, ok := t.current()
+		if !ok {
+			return false, fmt.Errorf("no selected session")
+		}
+		summary, err := t.client.releaseData(current.SessionID)
+		if err != nil {
+			return false, err
+		}
+		t.ctx.SessionID = summary.SessionID
+		return false, t.refresh()
+	case 'n':
+		sessionID := fmt.Sprintf("tui-%s", time.Now().UTC().Format("20060102-150405"))
+		summary, err := t.client.spawnData(sessionID, "")
+		if err != nil {
+			return false, err
+		}
+		t.ctx.SessionID = summary.SessionID
+		return false, t.refresh()
+	case 'l':
+		current, ok := t.current()
+		if !ok {
+			return false, fmt.Errorf("no selected session")
+		}
+		summary, err := t.client.loadData(current.SessionID, "")
+		if err != nil {
+			return false, err
+		}
+		t.ctx.SessionID = summary.SessionID
+		return false, t.refresh()
+	case 'x':
+		current, ok := t.current()
+		if !ok {
+			return false, fmt.Errorf("no selected session")
+		}
+		summary, err := t.client.stopData(current.SessionID)
+		if err != nil {
+			return false, err
+		}
+		t.ctx.SessionID = summary.SessionID
+		return false, t.refresh()
+	case 't':
+		current, ok := t.current()
+		if !ok {
+			return false, fmt.Errorf("no selected session")
+		}
+		t.ctx.SessionID = current.SessionID
+		if err := saveRelayContext(t.ctx); err != nil {
+			return false, err
+		}
+		return false, t.runChild("relay", "takeover")
+	case 'p':
+		current, ok := t.current()
+		if !ok {
+			return false, fmt.Errorf("no selected session")
+		}
+		t.ctx.SessionID = current.SessionID
+		if err := saveRelayContext(t.ctx); err != nil {
+			return false, err
+		}
+		msg, err := t.promptLine("prompt> ")
+		if err != nil {
+			return false, err
+		}
+		if strings.TrimSpace(msg) == "" {
+			return false, nil
+		}
+		return false, t.runChild("relay", "prompt", msg)
+	case '\r', '\n':
+		if current, ok := t.current(); ok {
+			t.ctx.SessionID = current.SessionID
+			return false, saveRelayContext(t.ctx)
+		}
+	}
+	if current, ok := t.current(); ok {
+		t.ctx.SessionID = current.SessionID
+	}
+	return false, nil
+}
+
+func (t *relayTUI) promptLine(prompt string) (string, error) {
+	t.leaveRawMode()
+	defer func() { _ = t.enterRawMode() }()
+	fmt.Fprint(os.Stdout, "\x1b[2J\x1b[H")
+	fmt.Fprint(os.Stdout, prompt)
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
+func (t *relayTUI) runChild(args ...string) error {
+	t.leaveRawMode()
+	defer func() { _ = t.enterRawMode() }()
+	cmd := exec.Command(os.Args[0], args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return t.refresh()
+}
+
+func readTUIInput(r io.Reader, out chan<- byte, errCh chan<- error) {
+	defer close(out)
+	buf := make([]byte, 1)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			out <- buf[0]
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			errCh <- err
+			return
+		}
 	}
 }
 

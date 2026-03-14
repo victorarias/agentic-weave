@@ -265,6 +265,14 @@ For takeover lifecycle, relay tests now also cover automatic return to RPC when 
 
 For day-to-day operator ergonomics, `weave-inspect relay` now remembers the last successful relay context per repository in the local user cache. In practice that means the first command may still be fully specified, but later follow-ups can usually omit `--relay`, `--token`, `--session`, and `--identity`.
 
+There is also now a thin operator TUI:
+
+```bash
+weave-inspect relay tui
+```
+
+It uses the saved relay context, lists sessions, and supports simple keyboard-driven actions such as spawning a new session, selecting one, taking over, releasing, prompting, loading, and stopping runtimes.
+
 ---
 
 ## Tier 3: Real LLM (Integration)

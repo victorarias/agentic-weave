@@ -261,6 +261,7 @@ This file tracks current work items and progress.
     - [x] add best-UX takeover commands (`weave-inspect relay takeover` / `release`) and auto-upgrade takeover to PTY when a persisted session can be resumed
     - [x] make takeover a true interactive PTY bridge with raw stdin key passthrough (control keys like Ctrl-P, arrows, etc.)
     - [x] automatically return takeover-upgraded sessions to RPC when takeover ends (release or disconnect)
+    - [x] add a thin operator TUI for listing/selecting/spawning/takeover without retyping full relay flags
 
 ---
 
@@ -295,6 +296,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 23:13: Added the first thin operator TUI to `weave-inspect relay`: it reuses the saved relay context, lists sessions in a full-screen picker, supports keyboard actions for spawn/load/stop/release/takeover/prompt, and I manually verified that `printf 'nq' | weave-inspect relay tui` can spawn a session and make it the default for a later plain `status` call.
 - 2026-03-14 22:44: Started the operator-polish pass on `weave-inspect`: relay commands now remember the last successful relay/session/identity/token context per repo in the local user cache, so after one fully-specified command you can usually run short follow-ups like `go run ./cmd/weave-inspect relay takeover` or `status` without repeating the whole flag set.
 - 2026-03-14 22:25: Completed the safer hand-back behavior: relay now remembers when takeover auto-upgraded a session from RPC to PTY, exposes the stored return transport in attachment state, and automatically restores RPC on release/disconnect instead of leaving the agent stranded in PTY mode.
 - 2026-03-14 21:53: Added an attach-time redraw heuristic for reattach rendering: after takeover initializes and sets the real PTY size, `weave-inspect` now sends a tiny resize bump and restores the original size so TUIs that repaint on resize get another full draw when you reattach.
