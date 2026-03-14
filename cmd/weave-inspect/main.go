@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -764,6 +765,8 @@ type takeoverInputEvent struct {
 	disconnect bool
 }
 
+var ctrlRightBracketCSIU = []byte{0x1b, '[', '9', '3', ';', '5', 'u'}
+
 func logTakeoverByte(w io.Writer, b byte, note string) {
 	if w == nil {
 		return
@@ -775,16 +778,54 @@ func logTakeoverByte(w io.Writer, b byte, note string) {
 	_, _ = fmt.Fprintf(w, "%s hex=%02x dec=%d printable=%q note=%s\n", time.Now().UTC().Format(time.RFC3339Nano), b, b, printable, note)
 }
 
+func logTakeoverBytes(w io.Writer, data []byte, note string) {
+	for _, b := range data {
+		logTakeoverByte(w, b, note)
+	}
+}
+
+func isPrefixBytes(have, want []byte) bool {
+	if len(have) > len(want) {
+		return false
+	}
+	for i := range have {
+		if have[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func readTakeoverInput(r io.Reader, out chan<- takeoverInputEvent, errCh chan<- error, debug io.Writer) {
 	defer close(out)
 	buf := make([]byte, 1)
 	atLineStart := true
 	pendingTilde := false
+	pendingEscape := make([]byte, 0, len(ctrlRightBracketCSIU))
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
 			b := buf[0]
 			logTakeoverByte(debug, b, "read")
+
+			if len(pendingEscape) > 0 || b == 0x1b {
+				pendingEscape = append(pendingEscape, b)
+				if bytes.Equal(pendingEscape, ctrlRightBracketCSIU) {
+					logTakeoverBytes(debug, pendingEscape, "ctrl-right-bracket-csiu-disconnect")
+					out <- takeoverInputEvent{disconnect: true}
+					pendingEscape = pendingEscape[:0]
+					continue
+				}
+				if isPrefixBytes(pendingEscape, ctrlRightBracketCSIU) {
+					continue
+				}
+				logTakeoverBytes(debug, pendingEscape, "flush-escape")
+				out <- takeoverInputEvent{data: append([]byte(nil), pendingEscape...)}
+				atLineStart = pendingEscape[len(pendingEscape)-1] == '\r' || pendingEscape[len(pendingEscape)-1] == '\n'
+				pendingEscape = pendingEscape[:0]
+				continue
+			}
+
 			if pendingTilde {
 				pendingTilde = false
 				if b == '.' {
@@ -814,6 +855,10 @@ func readTakeoverInput(r io.Reader, out chan<- takeoverInputEvent, errCh chan<- 
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if len(pendingEscape) > 0 {
+					logTakeoverBytes(debug, pendingEscape, "flush-escape-eof")
+					out <- takeoverInputEvent{data: append([]byte(nil), pendingEscape...)}
+				}
 				return
 			}
 			errCh <- err

@@ -257,6 +257,8 @@ I also validated the reattach blank-screen fix by running takeover with a local 
 
 Finally, I validated live stdin passthrough by piping `/session\r` plus the local disconnect escape (`Ctrl-]`, `\x1d`) into `weave-inspect relay takeover`, then confirming the PTY stream showed `/session` and the session status recorded the auto-established PTY size. The client also supports a second local detach escape, `~.` at line start, for terminals where `Ctrl-]` is awkward.
 
+On Zellij/modern terminal setups, I also confirmed that `Ctrl-]` may arrive as the extended CSI-u sequence `ESC [ 93 ; 5 u` instead of raw `0x1d`; takeover now treats that CSI-u form as the same local disconnect escape.
+
 ---
 
 ## Tier 3: Real LLM (Integration)

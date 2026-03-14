@@ -294,6 +294,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 21:47: Used the new key logger to prove Zellij/terminal was sending `Ctrl-]` as the extended keyboard sequence `CSI 93;5u` instead of raw `0x1d`, then taught takeover to recognize that CSI-u form as a local disconnect escape in addition to the raw byte.
 - 2026-03-14 20:49: Hardened local detach handling again: interactive takeover now reads stdin byte-by-byte for escape detection before batching forwarded PTY input, which should make both `Ctrl-]` and `~.` detection reliable even when keys arrive in awkward chunks.
 - 2026-03-14 20:45: Added a more reliable local detach escape for interactive takeover: `weave-inspect relay takeover` still honors `Ctrl-]`, but now also disconnects on `~.` at line start, which is easier to trigger consistently across terminals.
 - 2026-03-14 20:40: Removed unnecessary pre-attach initialization for `attach` / `takeover` / `detach` / `release` in `weave-inspect relay`, so takeover of a stopped session now fails immediately instead of waiting through the initialize retry window.
