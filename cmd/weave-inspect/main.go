@@ -730,12 +730,9 @@ func (c *relayClient) interactiveTakeover(sessionID string, jsonMode bool) error
 			_ = protocol.WriteJSONLine(os.Stdout, env)
 			continue
 		}
-		_, handled, eventErr := printEventEnvelope(env)
+		_, _, eventErr := printEventEnvelope(env)
 		if eventErr != nil {
 			return eventErr
-		}
-		if !handled {
-			continue
 		}
 	}
 }
@@ -1171,12 +1168,9 @@ func streamUntilInterrupt(stream *envelopeStream, errCh <-chan error, jsonMode b
 			_ = protocol.WriteJSONLine(os.Stdout, env)
 			continue
 		}
-		_, handled, updateErr := printEventEnvelope(env)
+		_, _, updateErr := printEventEnvelope(env)
 		if updateErr != nil {
 			return updateErr
-		}
-		if !handled {
-			continue
 		}
 	}
 }
