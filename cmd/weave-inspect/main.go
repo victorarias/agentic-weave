@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
@@ -19,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gorilla/websocket"
 	"github.com/victorarias/agentic-weave/remotecontrol/protocol"
 	"golang.org/x/sys/unix"
@@ -843,97 +843,79 @@ func (c *relayClient) stopData(sessionID string) (sessionSummary, error) {
 }
 
 type relayTUI struct {
-	ctx       relayContext
-	client    *relayClient
-	restore   func()
-	sessions  []sessionSummary
-	selected  int
-	statusMsg string
+	ctx         relayContext
+	client      *relayClient
+	sessions    []sessionSummary
+	selected    int
+	statusMsg   string
+	prompting   bool
+	promptInput string
+	loading     bool
+}
+
+type tuiRefreshMsg struct {
+	sessions []sessionSummary
+	err      error
+}
+
+type tuiActionMsg struct {
+	summary sessionSummary
+	err     error
+}
+
+type tuiChildDoneMsg struct {
+	err error
 }
 
 func runRelayTUI(ctx relayContext) error {
+	client, err := dialRelayClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.conn.Close()
+
+	model := &relayTUI{ctx: ctx, client: client}
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	_, err = p.Run()
+	return err
+}
+
+func dialRelayClient(ctx relayContext) (*relayClient, error) {
 	conn, _, err := websocket.DefaultDialer.Dial(ctx.RelayURL, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer conn.Close()
 	client := newRelayClient(conn, ctx.Token, ctx.Identity, ctx.DebugKeysFile)
 	if err := client.authenticate(false); err != nil {
-		return err
+		_ = conn.Close()
+		return nil, err
 	}
-	tui := &relayTUI{ctx: ctx, client: client}
-	if err := tui.enterRawMode(); err != nil {
-		fmt.Fprintf(os.Stderr, "[tui] raw mode unavailable: %v\n", err)
-	}
-	defer tui.leaveRawMode()
-	if err := tui.refresh(); err != nil {
-		tui.statusMsg = err.Error()
-	}
-	inputCh := make(chan byte, 32)
-	errCh := make(chan error, 1)
-	go readTUIInput(os.Stdin, inputCh, errCh)
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		tui.render()
-		select {
-		case err := <-errCh:
-			if err != nil && !errors.Is(err, io.EOF) {
-				return err
-			}
-			return nil
-		case <-ticker.C:
-			if err := tui.refresh(); err != nil {
-				tui.statusMsg = err.Error()
-			}
-		case b, ok := <-inputCh:
-			if !ok {
-				return nil
-			}
-			done, err := tui.handleKey(b)
-			if err != nil {
-				tui.statusMsg = err.Error()
-			}
-			if done {
-				_ = saveRelayContext(tui.ctx)
-				fmt.Fprint(os.Stdout, "\x1b[2J\x1b[H")
-				return nil
-			}
-		}
+	return client, nil
+}
+
+func (t *relayTUI) Init() tea.Cmd {
+	return t.refreshCmd()
+}
+
+func (t *relayTUI) refreshCmd() tea.Cmd {
+	t.loading = true
+	return func() tea.Msg {
+		sessions, err := t.client.listSessionsData()
+		return tuiRefreshMsg{sessions: sessions, err: err}
 	}
 }
 
-func (t *relayTUI) enterRawMode() error {
-	restore, err := makeRawTerminal(os.Stdin)
-	if err != nil {
-		return err
-	}
-	t.restore = restore
-	return nil
-}
-
-func (t *relayTUI) leaveRawMode() {
-	if t.restore != nil {
-		t.restore()
-		t.restore = nil
-	}
-}
-
-func (t *relayTUI) refresh() error {
-	sessions, err := t.client.listSessionsData()
-	if err != nil {
-		return err
-	}
+func (t *relayTUI) updateSessions(sessions []sessionSummary) {
 	t.sessions = sessions
 	if len(t.sessions) == 0 {
 		t.selected = 0
-		return nil
+		return
 	}
 	if t.ctx.SessionID != "" {
 		for i, session := range t.sessions {
 			if session.SessionID == t.ctx.SessionID {
 				t.selected = i
-				return nil
+				return
 			}
 		}
 	}
@@ -944,7 +926,6 @@ func (t *relayTUI) refresh() error {
 		t.selected = 0
 	}
 	t.ctx.SessionID = t.sessions[t.selected].SessionID
-	return nil
 }
 
 func (t *relayTUI) current() (sessionSummary, bool) {
@@ -954,183 +935,255 @@ func (t *relayTUI) current() (sessionSummary, bool) {
 	return t.sessions[t.selected], true
 }
 
-func (t *relayTUI) render() {
-	fmt.Fprint(os.Stdout, "\x1b[2J\x1b[H")
-	fmt.Fprintf(os.Stdout, "weave-inspect relay tui\n")
-	fmt.Fprintf(os.Stdout, "relay=%s identity=%s session=%s\n", t.ctx.RelayURL, t.ctx.Identity, t.ctx.SessionID)
-	fmt.Fprintln(os.Stdout, "keys: j/k move  n spawn  l load  x stop  t takeover  r release  p prompt  R refresh  q quit")
-	if t.statusMsg != "" {
-		fmt.Fprintf(os.Stdout, "status: %s\n", t.statusMsg)
-	} else {
-		fmt.Fprintln(os.Stdout, "status: ok")
-	}
-	fmt.Fprintln(os.Stdout, strings.Repeat("-", 100))
+func (t *relayTUI) setSelected(idx int) {
 	if len(t.sessions) == 0 {
-		fmt.Fprintln(os.Stdout, "(no sessions; press n to spawn one)")
+		t.selected = 0
 		return
 	}
-	for i, session := range t.sessions {
-		cursor := " "
-		if i == t.selected {
-			cursor = ">"
-		}
-		fmt.Fprintf(os.Stdout, "%s %-28s %-7s %-4s attached=%-10s queued=%d perms=%d\n",
-			cursor,
-			session.SessionID,
-			session.State,
-			session.RuntimeTransport,
-			session.AttachedMode,
-			session.QueuedPrompts,
-			session.PendingPermissions,
-		)
+	if idx < 0 {
+		idx = 0
 	}
-	fmt.Fprintln(os.Stdout, strings.Repeat("-", 100))
-	if session, ok := t.current(); ok {
-		fmt.Fprintf(os.Stdout, "selected: %s\n", session.SessionID)
-		fmt.Fprintf(os.Stdout, "  runtime=%s/%s wrapper_connected=%t\n", session.RuntimeKind, session.RuntimeTransport, session.WrapperConnected)
-		fmt.Fprintf(os.Stdout, "  attached_client=%s attached_mode=%s return_transport=%s\n", session.AttachedClientID, session.AttachedMode, session.AttachedReturnMode)
-		fmt.Fprintf(os.Stdout, "  phase=%s pty=%dx%d updated=%s\n", session.Phase, session.PTYRows, session.PTYCols, session.UpdatedAt)
+	if idx >= len(t.sessions) {
+		idx = len(t.sessions) - 1
+	}
+	t.selected = idx
+	t.ctx.SessionID = t.sessions[t.selected].SessionID
+	_ = saveRelayContext(t.ctx)
+}
+
+func (t *relayTUI) actionCmd(fn func() (sessionSummary, error)) tea.Cmd {
+	t.loading = true
+	return func() tea.Msg {
+		summary, err := fn()
+		return tuiActionMsg{summary: summary, err: err}
 	}
 }
 
-func (t *relayTUI) handleKey(b byte) (bool, error) {
-	t.statusMsg = ""
-	switch b {
-	case 'q':
-		return true, nil
-	case 'j':
-		if t.selected < len(t.sessions)-1 {
-			t.selected++
-		}
-	case 'k':
-		if t.selected > 0 {
-			t.selected--
-		}
-	case 'R', 'r':
-		if b == 'R' {
-			return false, t.refresh()
-		}
-		current, ok := t.current()
-		if !ok {
-			return false, fmt.Errorf("no selected session")
-		}
-		summary, err := t.client.releaseData(current.SessionID)
-		if err != nil {
-			return false, err
-		}
-		t.ctx.SessionID = summary.SessionID
-		return false, t.refresh()
-	case 'n':
-		sessionID := fmt.Sprintf("tui-%s", time.Now().UTC().Format("20060102-150405"))
-		summary, err := t.client.spawnData(sessionID, "")
-		if err != nil {
-			return false, err
-		}
-		t.ctx.SessionID = summary.SessionID
-		return false, t.refresh()
-	case 'l':
-		current, ok := t.current()
-		if !ok {
-			return false, fmt.Errorf("no selected session")
-		}
-		summary, err := t.client.loadData(current.SessionID, "")
-		if err != nil {
-			return false, err
-		}
-		t.ctx.SessionID = summary.SessionID
-		return false, t.refresh()
-	case 'x':
-		current, ok := t.current()
-		if !ok {
-			return false, fmt.Errorf("no selected session")
-		}
-		summary, err := t.client.stopData(current.SessionID)
-		if err != nil {
-			return false, err
-		}
-		t.ctx.SessionID = summary.SessionID
-		return false, t.refresh()
-	case 't':
-		current, ok := t.current()
-		if !ok {
-			return false, fmt.Errorf("no selected session")
-		}
-		t.ctx.SessionID = current.SessionID
-		if err := saveRelayContext(t.ctx); err != nil {
-			return false, err
-		}
-		return false, t.runChild("relay", "takeover")
-	case 'p':
-		current, ok := t.current()
-		if !ok {
-			return false, fmt.Errorf("no selected session")
-		}
-		t.ctx.SessionID = current.SessionID
-		if err := saveRelayContext(t.ctx); err != nil {
-			return false, err
-		}
-		msg, err := t.promptLine("prompt> ")
-		if err != nil {
-			return false, err
-		}
-		if strings.TrimSpace(msg) == "" {
-			return false, nil
-		}
-		return false, t.runChild("relay", "prompt", msg)
-	case '\r', '\n':
-		if current, ok := t.current(); ok {
-			t.ctx.SessionID = current.SessionID
-			return false, saveRelayContext(t.ctx)
-		}
+func (t *relayTUI) childCmd(args ...string) tea.Cmd {
+	if err := saveRelayContext(t.ctx); err != nil {
+		return func() tea.Msg { return tuiChildDoneMsg{err: err} }
 	}
-	if current, ok := t.current(); ok {
-		t.ctx.SessionID = current.SessionID
-	}
-	return false, nil
-}
-
-func (t *relayTUI) promptLine(prompt string) (string, error) {
-	t.leaveRawMode()
-	defer func() { _ = t.enterRawMode() }()
-	fmt.Fprint(os.Stdout, "\x1b[2J\x1b[H")
-	fmt.Fprint(os.Stdout, prompt)
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	return strings.TrimSpace(line), nil
-}
-
-func (t *relayTUI) runChild(args ...string) error {
-	t.leaveRawMode()
-	defer func() { _ = t.enterRawMode() }()
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	return t.refresh()
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return tuiChildDoneMsg{err: err}
+	})
 }
 
-func readTUIInput(r io.Reader, out chan<- byte, errCh chan<- error) {
-	defer close(out)
-	buf := make([]byte, 1)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			out <- buf[0]
+func (t *relayTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tuiRefreshMsg:
+		t.loading = false
+		if msg.err != nil {
+			t.statusMsg = msg.err.Error()
+			return t, nil
 		}
+		t.updateSessions(msg.sessions)
+		if t.statusMsg == "" {
+			t.statusMsg = "sessions refreshed"
+		}
+		return t, saveContextCmd(t.ctx)
+	case tuiActionMsg:
+		t.loading = false
+		if msg.err != nil {
+			t.statusMsg = msg.err.Error()
+			return t, nil
+		}
+		if msg.summary.SessionID != "" {
+			t.ctx.SessionID = msg.summary.SessionID
+		}
+		t.statusMsg = "action complete"
+		return t, tea.Batch(saveContextCmd(t.ctx), t.refreshCmd())
+	case tuiChildDoneMsg:
+		if msg.err != nil {
+			t.statusMsg = msg.err.Error()
+		} else {
+			t.statusMsg = "returned from child command"
+		}
+		client, err := dialRelayClient(t.ctx)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return
+			t.statusMsg = err.Error()
+			return t, nil
+		}
+		if t.client != nil && t.client.conn != nil {
+			_ = t.client.conn.Close()
+		}
+		t.client = client
+		return t, t.refreshCmd()
+	case tea.KeyMsg:
+		if t.loading {
+			switch msg.String() {
+			case "ctrl+c", "q":
+				_ = saveRelayContext(t.ctx)
+				return t, tea.Quit
+			default:
+				return t, nil
 			}
-			errCh <- err
-			return
+		}
+		if t.prompting {
+			switch msg.String() {
+			case "esc":
+				t.prompting = false
+				t.promptInput = ""
+				t.statusMsg = "prompt cancelled"
+				return t, nil
+			case "enter":
+				prompt := strings.TrimSpace(t.promptInput)
+				t.prompting = false
+				t.promptInput = ""
+				if prompt == "" {
+					t.statusMsg = "prompt cancelled"
+					return t, nil
+				}
+				return t, t.childCmd("relay", "prompt", prompt)
+			case "backspace":
+				if len(t.promptInput) > 0 {
+					t.promptInput = t.promptInput[:len(t.promptInput)-1]
+				}
+				return t, nil
+			default:
+				if msg.Type == tea.KeyRunes {
+					t.promptInput += string(msg.Runes)
+				}
+				return t, nil
+			}
+		}
+
+		switch msg.String() {
+		case "ctrl+c", "q":
+			_ = saveRelayContext(t.ctx)
+			return t, tea.Quit
+		case "up", "k":
+			t.statusMsg = ""
+			t.setSelected(t.selected - 1)
+			return t, nil
+		case "down", "j":
+			t.statusMsg = ""
+			t.setSelected(t.selected + 1)
+			return t, nil
+		case "r":
+			t.statusMsg = ""
+			return t, t.refreshCmd()
+		case "n":
+			t.statusMsg = ""
+			sessionID := fmt.Sprintf("tui-%s", time.Now().UTC().Format("20060102-150405"))
+			return t, t.actionCmd(func() (sessionSummary, error) {
+				return t.client.spawnData(sessionID, "")
+			})
+		case "l":
+			current, ok := t.current()
+			if !ok {
+				t.statusMsg = "no selected session"
+				return t, nil
+			}
+			return t, t.actionCmd(func() (sessionSummary, error) {
+				return t.client.loadData(current.SessionID, "")
+			})
+		case "x":
+			current, ok := t.current()
+			if !ok {
+				t.statusMsg = "no selected session"
+				return t, nil
+			}
+			return t, t.actionCmd(func() (sessionSummary, error) {
+				return t.client.stopData(current.SessionID)
+			})
+		case "e":
+			current, ok := t.current()
+			if !ok {
+				t.statusMsg = "no selected session"
+				return t, nil
+			}
+			return t, t.actionCmd(func() (sessionSummary, error) {
+				return t.client.releaseData(current.SessionID)
+			})
+		case "t":
+			current, ok := t.current()
+			if !ok {
+				t.statusMsg = "no selected session"
+				return t, nil
+			}
+			t.ctx.SessionID = current.SessionID
+			return t, t.childCmd("relay", "takeover")
+		case "p":
+			current, ok := t.current()
+			if !ok {
+				t.statusMsg = "no selected session"
+				return t, nil
+			}
+			t.ctx.SessionID = current.SessionID
+			t.prompting = true
+			t.promptInput = ""
+			t.statusMsg = "enter prompt, then press Enter"
+			return t, saveContextCmd(t.ctx)
+		case "enter":
+			if current, ok := t.current(); ok {
+				t.ctx.SessionID = current.SessionID
+				t.statusMsg = "selected session saved"
+				return t, saveContextCmd(t.ctx)
+			}
+			return t, nil
 		}
 	}
+	return t, nil
+}
+
+func saveContextCmd(ctx relayContext) tea.Cmd {
+	return func() tea.Msg {
+		_ = saveRelayContext(ctx)
+		return nil
+	}
+}
+
+func (t *relayTUI) View() string {
+	var b strings.Builder
+	b.WriteString("weave-inspect relay tui\n")
+	fmt.Fprintf(&b, "relay=%s\nidentity=%s\nsession=%s\n", t.ctx.RelayURL, t.ctx.Identity, t.ctx.SessionID)
+	b.WriteString("keys: ↑/↓ or j/k move  n spawn  l load  x stop  e release  t takeover  p prompt  r refresh  q quit\n")
+	if t.loading {
+		b.WriteString("status: loading...\n")
+	} else if t.statusMsg != "" {
+		fmt.Fprintf(&b, "status: %s\n", t.statusMsg)
+	} else {
+		b.WriteString("status: ready\n")
+	}
+	b.WriteString(strings.Repeat("-", 100))
+	b.WriteString("\n")
+	if len(t.sessions) == 0 {
+		b.WriteString("(no sessions; press n to spawn one)\n")
+	} else {
+		for i, session := range t.sessions {
+			cursor := " "
+			if i == t.selected {
+				cursor = ">"
+			}
+			fmt.Fprintf(&b, "%s %-28s %-7s %-4s attached=%-10s queued=%d perms=%d\n",
+				cursor,
+				session.SessionID,
+				session.State,
+				session.RuntimeTransport,
+				session.AttachedMode,
+				session.QueuedPrompts,
+				session.PendingPermissions,
+			)
+		}
+	}
+	b.WriteString(strings.Repeat("-", 100))
+	b.WriteString("\n")
+	if session, ok := t.current(); ok {
+		fmt.Fprintf(&b, "selected: %s\n", session.SessionID)
+		fmt.Fprintf(&b, "  runtime=%s/%s wrapper_connected=%t\n", session.RuntimeKind, session.RuntimeTransport, session.WrapperConnected)
+		fmt.Fprintf(&b, "  attached_client=%s attached_mode=%s return_transport=%s\n", session.AttachedClientID, session.AttachedMode, session.AttachedReturnMode)
+		fmt.Fprintf(&b, "  phase=%s pty=%dx%d updated=%s\n", session.Phase, session.PTYRows, session.PTYCols, session.UpdatedAt)
+	}
+	if t.prompting {
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "prompt> %s\n", t.promptInput)
+		b.WriteString("(Enter to send, Esc to cancel)\n")
+	}
+	return b.String()
 }
 
 func (c *relayClient) sendPTYResize(sessionID string, rows, cols int, requestID string, jsonMode bool) error {

@@ -296,6 +296,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 23:44: Replaced the broken raw-stdin operator TUI with a Bubble Tea-based `weave-inspect relay tui`, so interactive actions no longer fight over stdin with child commands like `takeover` and `prompt`; I self-tested it over a real PTY by spawning a relay, driving `n`, `p`, and `q`, and verifying the TUI spawned a session, sent a prompt, and exited cleanly.
 - 2026-03-14 23:13: Added the first thin operator TUI to `weave-inspect relay`: it reuses the saved relay context, lists sessions in a full-screen picker, supports keyboard actions for spawn/load/stop/release/takeover/prompt, and I manually verified that `printf 'nq' | weave-inspect relay tui` can spawn a session and make it the default for a later plain `status` call.
 - 2026-03-14 22:44: Started the operator-polish pass on `weave-inspect`: relay commands now remember the last successful relay/session/identity/token context per repo in the local user cache, so after one fully-specified command you can usually run short follow-ups like `go run ./cmd/weave-inspect relay takeover` or `status` without repeating the whole flag set.
 - 2026-03-14 22:25: Completed the safer hand-back behavior: relay now remembers when takeover auto-upgraded a session from RPC to PTY, exposes the stored return transport in attachment state, and automatically restores RPC on release/disconnect instead of leaving the agent stranded in PTY mode.

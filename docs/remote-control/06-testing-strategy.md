@@ -271,7 +271,7 @@ There is also now a thin operator TUI:
 weave-inspect relay tui
 ```
 
-It uses the saved relay context, lists sessions, and supports simple keyboard-driven actions such as spawning a new session, selecting one, taking over, releasing, prompting, loading, and stopping runtimes.
+It uses the saved relay context, lists sessions, and supports simple keyboard-driven actions such as spawning a new session, selecting one, taking over, releasing, prompting, loading, and stopping runtimes. It is implemented with Bubble Tea so the UI can hand terminal control to child commands and then resume cleanly, which avoids the stdin contention bugs that a hand-rolled raw-input loop hit.
 
 ---
 
