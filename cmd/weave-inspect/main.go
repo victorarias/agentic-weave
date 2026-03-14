@@ -923,7 +923,10 @@ func readTakeoverInput(r io.Reader, out chan<- takeoverInputEvent, errCh chan<- 
 					pendingEscape = pendingEscape[:0]
 					continue
 				}
-				if isPrefixBytes(pendingEscape, ctrlRightBracketCSIU) {
+				// Only continue waiting if we have a proper prefix (not just ESC alone)
+				// and we're expecting more bytes for the CSI-U sequence.
+				// A single ESC (0x1b) should be forwarded immediately if nothing follows.
+				if len(pendingEscape) > 1 && isPrefixBytes(pendingEscape, ctrlRightBracketCSIU) {
 					continue
 				}
 				logTakeoverBytes(debug, pendingEscape, "flush-escape")
