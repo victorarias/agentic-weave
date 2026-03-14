@@ -1120,6 +1120,17 @@ func (s *Server) replaceRuntimeTransport(sessionID, transport string) (session.R
 	if err != nil {
 		return session.Record{}, err
 	}
+
+	// Preserve pending prompts across transport replacement to prevent data loss
+	var savedPrompts []protocol.Envelope
+	if record.WrapperConnected {
+		s.mu.Lock()
+		if prompts, exists := s.pendingPrompts[sessionID]; exists {
+			savedPrompts = append([]protocol.Envelope(nil), prompts...)
+		}
+		s.mu.Unlock()
+	}
+
 	if record.WrapperConnected {
 		if err := s.launcher.Stop(sessionID); err != nil {
 			return session.Record{}, fmt.Errorf("failed to stop runtime: %v", err)
@@ -1143,6 +1154,14 @@ func (s *Server) replaceRuntimeTransport(sessionID, transport string) (session.R
 	}); err != nil {
 		return session.Record{}, errors.New(normalizeSpawnError(err))
 	}
+
+	// Restore saved prompts to the new wrapper after it connects
+	if len(savedPrompts) > 0 {
+		s.mu.Lock()
+		s.pendingPrompts[sessionID] = append(s.pendingPrompts[sessionID], savedPrompts...)
+		s.mu.Unlock()
+	}
+
 	return s.waitForConnected(sessionID)
 }
 
