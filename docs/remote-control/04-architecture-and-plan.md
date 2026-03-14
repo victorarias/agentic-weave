@@ -1,5 +1,7 @@
 # V1 Architecture and Phased Plan
 
+**Status (2026-03-13):** Tier 0, Tier 1, and the first Tier 2 spawn/load identity skeleton are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes plus relay `sessions` / `spawn` / `load` / `kill-runtime` / `status`, explicit prompt delivery flags, and `allow` / `deny` for permission responses), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test now works end-to-end, and Tier 3 delivery semantics plus a richer confirm-style permission lifecycle are in place: protocol-shaped permission payloads, pending permission visibility in status/listing, stale/duplicate response rejection, and runtime invalidation of stale requests. Real permission validation now uses a committed fixture extension (`testdata/pi/permission_fixture.ts`) plus a reproducible smoke script (`scripts/remotecontrol-permission-smoke.sh`) instead of an ad hoc temporary file.
+
 ## Architecture Overview
 
 ```
@@ -13,7 +15,7 @@
                          │ WebSocket (JSON)
                          ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                        WV-RELAY (Go)                        │
+│                     WEAVE-RELAY (Go)                        │
 │                                                                      │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────────┐ │
 │  │  Session     │  │  Registry    │  │  Auth    │  │  Event       │ │
@@ -31,7 +33,7 @@
            │ WebSocket                          │ WebSocket
            ▼                                    ▼
 ┌──────────────────────┐             ┌─────────────────────────┐
-│  WV-DAEMON (Go)    │             │  HUMAN CLIENT           │
+│ WEAVE-DAEMON (Go)  │             │  HUMAN CLIENT           │
 │  (one per machine)   │             │  (web UI or CLI)        │
 │                      │             │                         │
 │  Receives: spawn,    │             │  Sends: attach, detach, │
@@ -44,7 +46,7 @@
            │ (spawns)
            ▼
 ┌──────────────────────────────────────────────┐
-│  WV-WRAPPER (Go, one per agent)                 │
+│  WEAVE-WRAPPER (Go, one per agent)              │
 │                                              │
 │  ┌────────────┐  ┌───────────────────┐       │
 │  │ PTY Master │  │ Relay WS Client   │       │
@@ -59,7 +61,7 @@
 │  │         PI-MONO (interactive mode)    │   │
 │  │                                       │   │
 │  │  ┌─────────────────────────────────┐  │   │
-│  │  │  wv-bridge extension (TS)    │  │   │
+│  │  │  pi-bridge extension (TS)    │  │   │
 │  │  │                                 │  │   │
 │  │  │  - Receives commands from       │  │   │
 │  │  │    wrapper via bridge           │  │   │
@@ -73,149 +75,260 @@
 └──────────────────────────────────────────────┘
 ```
 
-## Wrapper ↔ Extension Bridge
+## ACP Compatibility Stance
 
-The wrapper (Go) and extension (TS, inside pi-mono) need a local communication channel. Options:
+ACP is the right inspiration layer for **how a client talks to a running coding
+agent**, but it is not enough for our full remote-control problem.
 
-| Option | Pros | Cons |
-|--------|------|------|
-| Unix domain socket | Bidirectional, fast, well-supported | Need to coordinate socket path |
-| Localhost TCP | Simple, debuggable with curl/netcat | Port management |
-| Stdin pipe passthrough | Pi-mono already reads stdin | Conflicts with interactive mode |
-| Named pipe (FIFO) | Simple, no networking | Unidirectional (need two) |
+Therefore V1 should:
+- keep the custom relay / daemon / wrapper / PTY architecture
+- adopt ACP-like session semantics where they fit:
+  - `initialize`
+  - `session.new`
+  - `session.load`
+  - `session.prompt`
+  - `session.update`
+  - `session.cancel`
+  - permission request / response
+- keep spawn, host routing, attach/takeover, and parent/child session control as
+  weave-specific capability-gated extensions
 
-**Recommendation for v1**: Unix domain socket. The wrapper creates it at a known path (e.g. `/tmp/wv-<session-id>.sock`), passes the path to pi-mono via env var, the extension connects on startup.
+This gives us:
+- cleaner orchestrator semantics
+- a more standard editor/client integration surface later
+- less protocol churn if we eventually add an ACP shim
+
+## Session vs Runtime Semantics
+
+The implementation should preserve this distinction:
+- **runtime** = one live wrapper + pi-mono process tree
+- **session** = the durable conversation identity that may survive runtime restart
+- **attach state** = who currently controls or observes that runtime/session
+
+Operational rules:
+- `session.spawn` creates a new runtime and normally a fresh session
+- `session.load` creates a new runtime attached to an existing persisted session
+- failure recovery may replace the runtime while preserving session identity
+- attach / takeover never creates a new session; it only changes who is allowed
+  to interact with the current runtime
+
+If implementation pressure forces these concepts to blur, that should be treated
+as a design problem rather than solved ad hoc in the relay.
+
+## Runtime Preset / Adapter Registry
+
+Even if V1 only targets pi-mono, the architecture should introduce a small
+runtime descriptor model early rather than hardcoding runtime-specific behavior
+throughout the stack.
+
+Suggested fields:
+- runtime name / id
+- launch command + args
+- bridge strategy
+- resume strategy
+- supported capabilities
+- prompt delivery semantics supported (`queue`, `deliver_when_idle`, `interrupt`)
+- permission mediation support
+- readiness strategy (structured ready event preferred; heuristic fallback only as last resort)
+- hook/plugin install details
+
+Why:
+- keeps pi-specific behavior localized
+- makes future runtimes possible without protocol redesign
+- prevents relay/orchestrator code from turning into provider-specific switch statements
+
+## Walking Skeleton Strategy
+
+This project is risky if we optimize for completeness before we optimize for an
+end-to-end vertical slice.
+
+So the implementation strategy should be:
+- connect multiple pieces as early as possible
+- prefer narrow, ugly-but-real flows over broad partial scaffolding
+- validate real seams early (bridge, session identity, update stream, cancel path)
+- deepen the integration in layers
+
+A good early slice is one where:
+- a runtime starts
+- a client sends one prompt
+- the runtime emits structured updates
+- cancel works
+- the session can stop cleanly
+
+Even if nothing else exists yet, that slice exercises the core architecture.
+
+## Tier 0 Runtime Integration Strategy
+
+For the first walking skeleton, prefer **pi RPC mode over stdin/stdout** instead of
+starting with the interactive PTY + extension bridge path.
+
+Why:
+- RPC mode already gives us a structured process-integration API.
+- It proves the control protocol, event normalization, and cancel path faster.
+- It avoids building a bridge and PTY supervision before we know the basic
+  session model feels right.
+
+That means Tier 0 should look like:
+- local client ↔ Unix socket ↔ Go wrapper ↔ `pi --mode rpc`
+
+The **interactive PTY + `pi-bridge` extension** path still matters for later
+attach/takeover tiers, but it should come after the RPC-backed control loop is
+real and stable.
+
+For later tiers that do need an in-process bridge, the preferred local transport
+remains a Unix domain socket.
 
 ## Phased Implementation Plan
 
-### Phase 1: Local Wrapper + Extension (weeks 1-2)
+These phases should be treated as **integration tiers**, not calendar promises.
+Each tier should end with a real demoable slice, even if it is ugly and only
+partially useful.
 
-**Goal**: One wrapper controlling one pi-mono instance locally. No relay, no network.
+### Tier 0 — Local Vertical Slice
+
+**Goal**: prove the core client ↔ runtime loop locally before introducing relay or hosts.
 
 Deliverables:
 1. **Go wrapper** that:
-   - Spawns pi-mono in interactive mode with a virtual PTY
-   - Creates a Unix domain socket for the bridge
-   - Reads/writes the PTY (for future human attach)
-   - Sends commands to the extension via the bridge
-   - Receives events from the extension via the bridge
+   - spawns `pi --mode rpc`
+   - exposes a Unix domain socket for local control
+   - accepts `initialize`, `session.prompt`, and `session.cancel`
+   - normalizes pi RPC events into `session.agent_ready` and `session.update`
+2. **Tiny local dev client / inspector** that:
+   - connects to the wrapper socket
+   - initializes capabilities
+   - sends one prompt
+   - prints streaming updates
+3. **Smoke test**:
+   - start wrapper
+   - send one prompt
+   - observe message delta + completion
+   - cancel a second prompt
+   - stop cleanly
 
-2. **TypeScript extension** (`wv-bridge.ts`) that:
-   - Connects to the Unix domain socket on startup
-   - Receives `agent.message` commands → injects into pi-mono conversation
-   - Receives `agent.cancel` → cancels current operation
-   - Emits `agent.assistant_message`, `agent.tool_call`, `agent.error` events
-   - Emits `session.agent_ready` on startup
+**Rule:** do not add relay, PTY takeover, or extension/bridge work until this RPC-backed end-to-end slice is real.
 
-3. **Smoke test**: wrapper sends a message, extension injects it, pi-mono responds, extension streams the response back, wrapper prints it.
+### Tier 1 — Single-Session Relay Skeleton
 
-**No relay, no auth, no registry. Just the core loop.**
-
-### Phase 2: Relay + Registry (weeks 3-4)
-
-**Goal**: Multiple wrappers connecting through a central relay. Orchestrator can discover and steer agents.
+**Goal**: put the relay in the middle without adding host-routing complexity yet.
 
 Deliverables:
 1. **Go relay server** with:
    - WebSocket endpoint
-   - Token-based auth handshake
-   - Session registry (in-memory)
-   - Host registry (in-memory)
-   - Message routing (orchestrator → session, session → orchestrator)
-   - Event buffering (ring buffer per session)
-   - State machine enforcement (valid transitions only)
-
+   - auth handshake
+   - explicit `initialize` negotiation after auth
+   - one-session event fanout
+   - `session.update` forwarding with preserved ordering
 2. **Wrapper updated** to:
-   - Connect to relay on startup
-   - Register its session
-   - Receive commands via relay (not just local bridge)
-   - Forward events to relay
+   - connect to relay
+   - register the session
+   - forward updates through relay instead of only local stdout
+3. **Simple orchestrator/dev client** that:
+   - connects to relay
+   - sends `initialize`
+   - sends `session.prompt`
+   - receives normalized `session.update`
 
-3. **Orchestrator interface spec** (for the existing Go service):
-   - WebSocket client connecting to relay
-   - Send: `session.spawn`, `agent.message`, `session.kill`, `registry.*`
-   - Receive: all session events
-   - Handle: acks and errors
+**Smoke test:** orchestrator → relay → wrapper → pi → relay → orchestrator.
 
-4. **Smoke test**: orchestrator spawns an agent via relay, sends a message, gets the response back.
+### Tier 2 — Spawn / Load / Identity Skeleton
 
-### Phase 3: Host Daemon + Dynamic Spawn (weeks 5-6)
+**Goal**: make session identity and recovery real before adding more features.
 
-**Goal**: Orchestrator can spawn agents on remote machines.
+**Status note (2026-03-13):** the current skeleton now includes a relay-managed local spawn/load path, explicit `session.status`, and a real `spawn → prompt → runtime.stop → load → prompt` smoke test against pi session persistence.
 
-Deliverables:
-1. **Go host daemon** that:
-   - Connects to relay, registers as a host
-   - Receives `session.spawn` commands
-   - Launches wrapper+pi-mono pairs
-   - Monitors child processes (detects crashes)
-   - Reports `registry.host_joined` / `registry.host_left`
+**Mandatory cleanup at the start of Tier 2:** before adding spawn/load behavior,
+refactor the Tier 0/1 prototype so responsibilities are cleaner.
+At minimum:
+- separate wrapper runtime control from peer-transport management
+- keep relay routing/session registry logic out of pi-specific runtime code
+- make `session_id` vs `runtime_id` explicit in data structures and message flow
+- introduce a small runtime adapter/preset seam so pi-specific behavior does not keep spreading
 
-2. **Relay updated** to:
-   - Route spawn commands to host daemons
-   - Track host → session mapping
-   - Handle host disconnection (mark sessions as FAILED)
-
-3. **Failure handling**:
-   - Configurable failure policies per session
-   - Relay detects wrapper disconnect → evaluates policy
-   - Auto-restart: relay tells host daemon to respawn
-
-4. **Smoke test**: orchestrator spawns agent on a remote host, steers it, kills it.
-
-### Phase 4: Human Attach (weeks 7-8)
-
-**Goal**: A human can attach to a running session, observe, inject, and take over.
+This cleanup is not optional bookkeeping. Tier 2 is the point where the current
+walking-skeleton code stops being "just a prototype" and becomes the real base
+for later features.
 
 Deliverables:
-1. **Attach lock manager** in relay:
-   - Single-attach enforcement
-   - Mode tracking (observe/inject/takeover)
-   - Escalation/de-escalation
+1. Add explicit support for:
+   - `session.spawn`
+   - `session.load`
+   - stable `session_id`
+   - distinct `runtime_id`
+2. Add a minimal **runtime preset/adapter registry** so runtime-specific behavior
+   is configured, not scattered in control-plane code
+3. Support one persisted-session resume path end-to-end
+4. Land the cleanup/refactor above as part of the tier, not as follow-up debt
 
-2. **Wrapper updated** to:
-   - Forward PTY output to attached human (via relay)
-   - Accept PTY input from human (in takeover mode)
-   - Pause orchestrator input during takeover
+**Smoke test:** spawn fresh session, stop runtime, load same session into a new runtime.
 
-3. **CLI attach client** (Go):
-   - Connects to relay, sends `session.attach`
-   - Renders PTY output in terminal (raw mode passthrough)
-   - Forwards keystrokes as `pty.input` in takeover mode
-   - Supports mode switching (observe → inject → takeover)
+**Gate:** do not begin Tier 3 until this cleanup has landed and the Tier 2 identity/runtime seams are clean enough that further features do not increase architectural debt.
 
-4. **Smoke test**: agent running autonomously, human attaches, observes, escalates to takeover, types commands, de-escalates, detaches.
+### Tier 3 — Permission + Delivery Semantics
 
-### Phase 5: Web UI + Observability (weeks 9-10)
-
-**Goal**: Browser-based session inspection and attach.
+**Goal**: validate the hardest behavioral seams before human attach.
 
 Deliverables:
-1. **Web UI** (framework TBD):
-   - Session list (from registry)
-   - Live event stream with filtering
-   - Attach with observe/inject modes
-   - xterm.js terminal for takeover mode
-   - Metrics dashboard (tokens, tool calls, errors)
+1. Permission roundtrip:
+   - runtime emits permission request
+   - orchestrator responds allow/deny
+   - runtime continues or blocks deterministically
+2. Explicit prompt delivery semantics:
+   - `queue`
+   - `deliver_when_idle`
+   - `interrupt`
+3. Clear mapping from delivery policy to pi RPC / runtime behavior
 
-2. **Event filtering** in relay:
-   - Clients can subscribe with filters (event type, severity)
-   - Reduces bandwidth for observe-only clients
+**Smoke test:** send normal prompt while busy, then interrupting prompt, then a permission-gated tool call.
 
-### Phase 6: Hierarchical Subagents (week 11+)
+### Tier 4 — Human Observe / Inject
 
-**Goal**: Agents can spawn and steer child agents.
+**Goal**: add human presence without full takeover yet.
 
 Deliverables:
-1. **Extension updated** to:
-   - Expose a `spawn_subagent` tool to pi-mono
-   - Route spawn requests through the wrapper → relay
-   - Track parent-child relationships
+1. Attach lock manager in relay
+2. Observe mode
+3. Inject mode
+4. authority rules for permissions when human is attached
 
-2. **Relay updated** to:
-   - Track session hierarchy (parent_session_id)
-   - Propagate kill to children (optional, configurable)
-   - Allow parent sessions to query child status
+**Smoke test:** orchestrator controls session, human observes, human injects, orchestrator sees resulting updates.
+
+### Tier 5 — Takeover + PTY Path
+
+**Goal**: add raw terminal control only after structured control is already stable.
+
+Deliverables:
+1. PTY output forwarding to attached human
+2. `pty.input`
+3. `pty.resize`
+4. takeover / de-escalation flow
+5. queued orchestrator behavior during takeover
+
+**Smoke test:** human escalates to takeover, drives the TUI, de-escalates, orchestrator resumes.
+
+### Tier 6 — Remote Hosts + Failure Recovery
+
+**Goal**: distribute runtimes across machines only after local semantics are working.
+
+Deliverables:
+1. Go host daemon that registers with relay
+2. relay host routing
+3. remote spawn/load
+4. failure policy execution and runtime replacement under stable `session_id`
+
+**Smoke test:** orchestrator spawns on remote host, wrapper dies, runtime is replaced, session survives.
+
+### Tier 7 — ACP Shim + Hierarchical Sessions
+
+**Goal**: expose a standard-ish external surface and then deepen orchestration.
+
+Deliverables:
+1. minimal ACP-compatible shim
+2. optional `_weave/*` extensions for advanced features
+3. parent/child session hierarchy support
+4. child status / cascading kill policy
+
+**Smoke test:** ACP client drives a weave-backed session; native client inspects the same session; optional child spawn works.
 
 ## What the Orchestrator Needs to Implement
 
@@ -223,15 +336,17 @@ The existing Go service needs a new module that:
 
 1. **Connects** to the relay via WebSocket.
 2. **Authenticates** with a token (`auth` command).
-3. **Discovers** available hosts (`registry.list_hosts`).
-4. **Spawns** agents on hosts (`session.spawn`) with:
+3. **Initializes** protocol version + client capabilities (`initialize`).
+4. **Discovers** available hosts (`registry.list_hosts`).
+5. **Spawns** fresh agents on hosts (`session.spawn`) or **loads** existing ones (`session.load`) with:
    - System prompt / task description
    - Failure policy
    - Extension configuration
-5. **Steers** agents conversationally (`agent.message`) — reads responses, decides next message.
-6. **Monitors** sessions via event stream (subscribes to events on spawn).
-7. **Handles** failures (receives `session.state_changed` to FAILED, decides whether to retry).
-8. **Manages** attach requests from humans (optional: orchestrator can observe who's attached).
-9. **Kills** sessions when tasks complete (`session.kill`).
+6. **Steers** agents conversationally (`agent.message` / `session.prompt`) — reads responses, decides next message.
+7. **Monitors** sessions via event stream, preferring normalized `session.update` for generic clients and fine-grained events for rich tooling.
+8. **Handles** failures (receives `session.state_changed` to FAILED, decides whether to retry).
+9. **Responds** to permission requests when human/policy approval is required.
+10. **Manages** attach requests from humans (optional: orchestrator can observe who's attached).
+11. **Kills** sessions when tasks complete (`session.kill`).
 
 The orchestrator does NOT manage PTYs, host daemons, or pi-mono internals. It only speaks the control protocol.

@@ -5,7 +5,7 @@
 ### R1 — Pi-mono Coupling (HIGH)
 **Risk**: We depend on pi-mono's extension API, interactive mode behavior, and message injection semantics. Upstream breaking changes could require significant rework.
 
-**Mitigation**: The wv-bridge extension is the only coupling point. If pi-mono breaks, we rewrite one TS file — the wrapper, relay, and orchestrator are decoupled. V1 accepts this coupling explicitly.
+**Mitigation**: The pi-bridge extension is the only coupling point. If pi-mono breaks, we rewrite one TS file — the wrapper, relay, and orchestrator are decoupled. V1 accepts this coupling explicitly.
 
 **Signal to watch**: pi-mono's extension API stability. If it churns fast, consider abstracting earlier.
 
@@ -50,10 +50,10 @@
 
 ## Tradeoffs
 
-### T1 — Interactive Mode (chosen) vs RPC Mode
-**Chose**: Always interactive mode with PTY wrapper.
-**Gave up**: Simpler RPC pipe. RPC mode has a clean JSON protocol but no human-attach PTY.
-**Why**: Human takeover of the real pi-mono TUI is a core requirement. Interactive mode is the only way to get that.
+### T1 — Tiered Runtime Path: RPC First, Interactive Later
+**Chose**: Start with RPC mode for the walking skeleton, then add interactive PTY support in later tiers.
+**Gave up**: Building the PTY + extension bridge before proving the structured control loop.
+**Why**: RPC mode gives us a clean JSON protocol now, while interactive mode is still available later when human-attach PTY becomes necessary.
 
 ### T2 — Custom Relay (chosen) vs Off-the-shelf Message Broker
 **Chose**: Purpose-built Go relay.
@@ -195,8 +195,8 @@ From the extension side, `ctx.switchSession(sessionPath)` works programmatically
 
 **Design implication**: Crash recovery in interactive mode is simple: host daemon restarts wrapper, wrapper spawns `pi --session /path/to/existing-session.jsonl`, pi-mono loads the full history and continues. No extension-level replay needed.
 
-### Q12 — Interactive vs RPC — RESOLVED (staying with interactive)
-**Decision**: Keep interactive mode. User wants native pi-mono TUI when SSH'd into the machine, with remote control from orchestrator/web when away.
+### Q12 — Interactive vs RPC — RESOLVED (tiered)
+**Decision**: Use RPC mode for Tier 0 / early protocol validation, then add interactive mode when we implement human attach and PTY takeover.
 
 **PTY multiplexing feasibility**: Confirmed feasible. ~8-12 working days to production quality.
 - Use `creack/pty` (Go, de facto standard)
@@ -210,3 +210,27 @@ From the extension side, `ctx.switchSession(sessionPath)` works programmatically
 2. Don't let slow WebSocket clients block the PTY reader (buffered channels + drop policy)
 3. Ring buffer for catch-up on human attach (Coop uses 1 MiB circular buffer with offset-based replay)
 4. One reader goroutine for PTY lifetime — subscribers come and go, reader never restarts
+
+### Q13 — ACP Compatibility Stance — RESOLVED
+**Question**: Should we replace our relay protocol with Agent Client Protocol (ACP), or only learn from it?
+
+**Answer**: Learn from it, but do not replace the control plane with it.
+
+ACP is a strong fit for the **client ↔ running agent** boundary:
+- `initialize`
+- `session.new`
+- `session.load`
+- `session.prompt`
+- `session.update`
+- `session.cancel`
+- permission mediation
+
+ACP is **not** sufficient for the full remote-control problem we are solving:
+- host discovery and spawn routing
+- daemon-managed process launch
+- human attach / inject / takeover
+- raw PTY forwarding + resize
+- parent/child session hierarchy
+- attach locks and failure policies
+
+**Design implication**: Keep the relay / daemon / wrapper architecture, but make the session-facing API intentionally ACP-aligned so we can add an ACP adapter later without redesigning the runtime.
