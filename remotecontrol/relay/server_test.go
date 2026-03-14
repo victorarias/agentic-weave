@@ -1500,6 +1500,9 @@ func TestRelayTakeoverAutoUpgradesRPCSession(t *testing.T) {
 	if attachment["client_id"] != "human-1" || attachment["mode"] != "takeover" {
 		t.Fatalf("unexpected attachment payload after takeover: %#v", attachPayload.Data)
 	}
+	if attachment["return_transport"] != "rpc" {
+		t.Fatalf("expected takeover attachment to remember rpc return transport: %#v", attachPayload.Data)
+	}
 
 	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-auto-takeover", "", "human-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
 	if err != nil {
@@ -1520,6 +1523,69 @@ func TestRelayTakeoverAutoUpgradesRPCSession(t *testing.T) {
 	}
 	awaitWSAck(t, human, "pty-input-1")
 	awaitPTYOutputContainsWS(t, human, "hello")
+
+	detachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-auto-takeover", "", "human-1", "detach-1", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
+	if err != nil {
+		t.Fatalf("new detach envelope: %v", err)
+	}
+	if err := human.WriteJSON(detachEnv); err != nil {
+		t.Fatalf("write detach: %v", err)
+	}
+	detachPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, human, "detach-1"))
+	if nestedString(detachPayload.Data, "runtime", "transport") != "rpc" {
+		t.Fatalf("expected rpc runtime transport after detach auto-restore: %#v", detachPayload.Data)
+	}
+}
+
+func TestRelayTakeoverDisconnectAutoRestoresRPC(t *testing.T) {
+	tempDir := t.TempDir()
+	launcher := newFakeLauncher(t)
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir, PublicURL: "ws://127.0.0.1:0/ws", Launcher: launcher})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+	srv.cfg.PublicURL = relayURL
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-disconnect-restore", "", "orch-1", "spawn-1", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn})
+	if err != nil {
+		t.Fatalf("new spawn envelope: %v", err)
+	}
+	if err := orch.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write spawn: %v", err)
+	}
+	awaitWSAck(t, orch, "spawn-1")
+
+	human := dialWS(t, relayURL)
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-disconnect-restore", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new takeover attach envelope: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write takeover attach: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+	_ = human.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		statusEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-disconnect-restore", "", "orch-1", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+		if err != nil {
+			t.Fatalf("new status envelope: %v", err)
+		}
+		if err := orch.WriteJSON(statusEnv); err != nil {
+			t.Fatalf("write status: %v", err)
+		}
+		statusPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, orch, "status-1"))
+		if nestedString(statusPayload.Data, "runtime", "transport") == "rpc" {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected disconnect to auto-restore rpc transport")
 }
 
 func TestRelayRejectsTakeoverOfStoppedSession(t *testing.T) {

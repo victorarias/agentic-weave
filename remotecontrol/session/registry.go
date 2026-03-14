@@ -168,7 +168,7 @@ func (r *Registry) SetAttachment(sessionID string, attachment protocol.Attachmen
 	if !ok {
 		return Record{}, false
 	}
-	record.Attachment = &protocol.AttachmentInfo{ClientID: attachment.ClientID, Mode: attachment.Mode}
+	record.Attachment = &protocol.AttachmentInfo{ClientID: attachment.ClientID, Mode: attachment.Mode, ReturnTransport: attachment.ReturnTransport}
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = cloneRecord(record)
 	return cloneRecord(record), true
@@ -272,7 +272,7 @@ func deriveState(connected bool, phase string, pendingCount int) string {
 func cloneRecord(record Record) Record {
 	cloned := record
 	if record.Attachment != nil {
-		cloned.Attachment = &protocol.AttachmentInfo{ClientID: record.Attachment.ClientID, Mode: record.Attachment.Mode}
+		cloned.Attachment = &protocol.AttachmentInfo{ClientID: record.Attachment.ClientID, Mode: record.Attachment.Mode, ReturnTransport: record.Attachment.ReturnTransport}
 	}
 	if len(record.PendingPermissions) > 0 {
 		cloned.PendingPermissions = make([]protocol.PermissionRequest, len(record.PendingPermissions))

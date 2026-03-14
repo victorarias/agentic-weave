@@ -174,8 +174,9 @@ type RuntimeInfo struct {
 }
 
 type AttachmentInfo struct {
-	ClientID string `json:"client_id"`
-	Mode     string `json:"mode"`
+	ClientID        string `json:"client_id"`
+	Mode            string `json:"mode"`
+	ReturnTransport string `json:"return_transport,omitempty"`
 }
 
 type SessionUpdateEvent struct {

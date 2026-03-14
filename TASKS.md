@@ -260,6 +260,7 @@ This file tracks current work items and progress.
     - [x] add explicit runtime transport replacement (`runtime.replace` / `weave-inspect relay switch-transport <rpc|pty>`)
     - [x] add best-UX takeover commands (`weave-inspect relay takeover` / `release`) and auto-upgrade takeover to PTY when a persisted session can be resumed
     - [x] make takeover a true interactive PTY bridge with raw stdin key passthrough (control keys like Ctrl-P, arrows, etc.)
+    - [x] automatically return takeover-upgraded sessions to RPC when takeover ends (release or disconnect)
 
 ---
 
@@ -294,6 +295,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 22:25: Completed the safer hand-back behavior: relay now remembers when takeover auto-upgraded a session from RPC to PTY, exposes the stored return transport in attachment state, and automatically restores RPC on release/disconnect instead of leaving the agent stranded in PTY mode.
 - 2026-03-14 21:53: Added an attach-time redraw heuristic for reattach rendering: after takeover initializes and sets the real PTY size, `weave-inspect` now sends a tiny resize bump and restores the original size so TUIs that repaint on resize get another full draw when you reattach.
 - 2026-03-14 21:47: Used the new key logger to prove Zellij/terminal was sending `Ctrl-]` as the extended keyboard sequence `CSI 93;5u` instead of raw `0x1d`, then taught takeover to recognize that CSI-u form as a local disconnect escape in addition to the raw byte.
 - 2026-03-14 20:49: Hardened local detach handling again: interactive takeover now reads stdin byte-by-byte for escape detection before batching forwarded PTY input, which should make both `Ctrl-]` and `~.` detection reliable even when keys arrive in awkward chunks.

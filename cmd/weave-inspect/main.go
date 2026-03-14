@@ -995,6 +995,9 @@ func printStatus(env protocol.Envelope, jsonMode bool) error {
 	if attachment, ok := ack.Data["attachment"].(map[string]any); ok && len(attachment) > 0 {
 		fmt.Fprintf(os.Stdout, "attached_client_id=%s\n", stringValue(attachment["client_id"]))
 		fmt.Fprintf(os.Stdout, "attached_mode=%s\n", stringValue(attachment["mode"]))
+		if returnTransport := stringValue(attachment["return_transport"]); returnTransport != "" {
+			fmt.Fprintf(os.Stdout, "attached_return_transport=%s\n", returnTransport)
+		}
 	}
 	if queuedPrompts, ok := ack.Data["queued_prompts"].(float64); ok {
 		fmt.Fprintf(os.Stdout, "queued_prompts=%d\n", int(queuedPrompts))

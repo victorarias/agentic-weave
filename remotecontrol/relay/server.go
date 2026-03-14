@@ -563,12 +563,19 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
 		return
 	}
+	existingReturnTransport := ""
+	if record.Attachment != nil {
+		existingReturnTransport = record.Attachment.ReturnTransport
+	}
+	returnTransport := ""
 	if cmd.Mode == "takeover" {
 		if !record.WrapperConnected {
 			_ = s.sendError(state, env.ID, env.SessionID, "cannot take over stopped session; load or spawn first")
 			return
 		}
-		if _, err := s.ensureTakeoverRuntime(env.SessionID, record); err != nil {
+		var err error
+		record, returnTransport, err = s.ensureTakeoverRuntime(env.SessionID, record)
+		if err != nil {
 			_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 			return
 		}
@@ -576,6 +583,7 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 
 	var previousSessionID string
 	previousSessionMode := ""
+	previousReturnTransport := ""
 	previousMode := ""
 	action := "attached"
 	s.mu.Lock()
@@ -584,6 +592,9 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		previousSessionID = attachedSessionID
 		if attachedOwner != nil {
 			previousSessionMode = attachedOwner.attachedMode
+		}
+		if previousRecord, ok := s.registry.Get(attachedSessionID); ok && previousRecord.Attachment != nil {
+			previousReturnTransport = previousRecord.Attachment.ReturnTransport
 		}
 		delete(s.attachments, attachedSessionID)
 		if attachedOwner != nil {
@@ -616,12 +627,14 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		s.registry.ClearAttachment(previousSessionID)
 	}
 	s.subscribe(state, env.SessionID)
-	record, _ = s.registry.SetAttachment(env.SessionID, protocol.AttachmentInfo{ClientID: state.identity, Mode: cmd.Mode})
+	record, _ = s.registry.SetAttachment(env.SessionID, protocol.AttachmentInfo{ClientID: state.identity, Mode: cmd.Mode, ReturnTransport: returnTransport})
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionAttach))
 	if previousSessionID != "" {
 		s.broadcastSessionStatus(previousSessionID, map[string]any{"attachment_action": "detached", "attachment_client_id": state.identity})
 		if previousSessionMode == "takeover" {
-			s.flushQueuedPrompts(previousSessionID)
+			if _, err := s.restorePostTakeoverTransport(previousSessionID, previousReturnTransport); err == nil {
+				s.flushQueuedPrompts(previousSessionID)
+			}
 		}
 	}
 	details := map[string]any{"attachment_action": action}
@@ -630,7 +643,9 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 	}
 	s.broadcastSessionStatus(env.SessionID, details)
 	if previousMode == "takeover" && cmd.Mode != "takeover" {
-		s.flushQueuedPrompts(env.SessionID)
+		if _, err := s.restorePostTakeoverTransport(env.SessionID, existingReturnTransport); err == nil {
+			s.flushQueuedPrompts(env.SessionID)
+		}
 	}
 }
 
@@ -639,7 +654,7 @@ func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.detach")
 		return
 	}
-	cleared, previousMode, record, err := s.detachIfOwner(state, env.SessionID)
+	cleared, previousAttachment, record, err := s.detachIfOwner(state, env.SessionID)
 	if err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 		return
@@ -648,11 +663,14 @@ func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "client is not attached to session")
 		return
 	}
+	if previousAttachment != nil && previousAttachment.Mode == "takeover" {
+		if restored, restoreErr := s.restorePostTakeoverTransport(env.SessionID, previousAttachment.ReturnTransport); restoreErr == nil {
+			record = restored
+			defer s.flushQueuedPrompts(env.SessionID)
+		}
+	}
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionDetach))
 	s.broadcastSessionStatus(env.SessionID, map[string]any{"attachment_action": "detached", "attachment_client_id": state.identity})
-	if previousMode == "takeover" {
-		s.flushQueuedPrompts(env.SessionID)
-	}
 }
 
 func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelope) {
@@ -867,16 +885,16 @@ func (s *Server) canUsePTY(state *connState, record session.Record) bool {
 	return record.Attachment.ClientID == state.identity
 }
 
-func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, string, session.Record, error) {
+func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, *protocol.AttachmentInfo, session.Record, error) {
 	s.mu.Lock()
 	owner := s.attachments[sessionID]
 	if !sameAttachmentOwner(owner, state) {
 		s.mu.Unlock()
-		return false, "", session.Record{}, nil
+		return false, nil, session.Record{}, nil
 	}
-	previousMode := ""
-	if owner != nil {
-		previousMode = owner.attachedMode
+	var previousAttachment *protocol.AttachmentInfo
+	if record, ok := s.registry.Get(sessionID); ok && record.Attachment != nil {
+		previousAttachment = &protocol.AttachmentInfo{ClientID: record.Attachment.ClientID, Mode: record.Attachment.Mode, ReturnTransport: record.Attachment.ReturnTransport}
 	}
 	delete(s.attachments, sessionID)
 	if owner != nil {
@@ -888,9 +906,9 @@ func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, string
 	s.mu.Unlock()
 	record, ok := s.registry.ClearAttachment(sessionID)
 	if !ok {
-		return false, previousMode, session.Record{}, fmt.Errorf("unknown session")
+		return false, previousAttachment, session.Record{}, fmt.Errorf("unknown session")
 	}
-	return true, previousMode, record, nil
+	return true, previousAttachment, record, nil
 }
 
 func (s *Server) broadcastSessionStatus(sessionID string, extraDetails map[string]any) {
@@ -986,6 +1004,7 @@ func (s *Server) subscribe(state *connState, sessionID string) {
 
 func (s *Server) unregister(state *connState) {
 	var broadcastSessionID string
+	var detachedAttachment *protocol.AttachmentInfo
 	s.mu.Lock()
 	if state.role == protocol.RoleWrapper && state.sessionID != "" {
 		if s.wrappers[state.sessionID] == state {
@@ -1002,6 +1021,9 @@ func (s *Server) unregister(state *connState) {
 	}
 	if state.attachedTo != "" {
 		if s.attachments[state.attachedTo] == state {
+			if record, ok := s.registry.Get(state.attachedTo); ok && record.Attachment != nil {
+				detachedAttachment = &protocol.AttachmentInfo{ClientID: record.Attachment.ClientID, Mode: record.Attachment.Mode, ReturnTransport: record.Attachment.ReturnTransport}
+			}
 			delete(s.attachments, state.attachedTo)
 			s.registry.ClearAttachment(state.attachedTo)
 			broadcastSessionID = state.attachedTo
@@ -1015,6 +1037,11 @@ func (s *Server) unregister(state *connState) {
 		}
 	}
 	s.mu.Unlock()
+	if detachedAttachment != nil && detachedAttachment.Mode == "takeover" {
+		if _, err := s.restorePostTakeoverTransport(state.attachedTo, detachedAttachment.ReturnTransport); err == nil {
+			s.flushQueuedPrompts(state.attachedTo)
+		}
+	}
 	if broadcastSessionID != "" {
 		s.broadcastSessionStatus(broadcastSessionID, map[string]any{"attachment_action": "detached"})
 	}
@@ -1044,14 +1071,33 @@ func (s *Server) waitForDisconnected(sessionID string) (session.Record, error) {
 	return session.Record{}, fmt.Errorf("timed out waiting for runtime to stop for session %s", sessionID)
 }
 
-func (s *Server) ensureTakeoverRuntime(sessionID string, record session.Record) (session.Record, error) {
+func (s *Server) ensureTakeoverRuntime(sessionID string, record session.Record) (session.Record, string, error) {
 	if record.WrapperConnected && record.Runtime.Transport == runtime.PiPTY().Transport {
-		return record, nil
+		return record, "", nil
 	}
 	if strings.TrimSpace(record.PersistedSessionHandle) == "" {
+		return record, "", nil
+	}
+	restoredFrom := record.Runtime.Transport
+	updated, err := s.replaceRuntimeTransport(sessionID, runtime.PiPTY().Transport)
+	if err != nil {
+		return session.Record{}, "", err
+	}
+	if restoredFrom == runtime.PiPTY().Transport {
+		restoredFrom = ""
+	}
+	return updated, restoredFrom, nil
+}
+
+func (s *Server) restorePostTakeoverTransport(sessionID, transport string) (session.Record, error) {
+	if strings.TrimSpace(transport) == "" {
+		record, ok := s.registry.Get(sessionID)
+		if !ok {
+			return session.Record{}, fmt.Errorf("unknown session")
+		}
 		return record, nil
 	}
-	return s.replaceRuntimeTransport(sessionID, runtime.PiPTY().Transport)
+	return s.replaceRuntimeTransport(sessionID, transport)
 }
 
 func (s *Server) replaceRuntimeTransport(sessionID, transport string) (session.Record, error) {

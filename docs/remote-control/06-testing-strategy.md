@@ -261,6 +261,8 @@ On Zellij/modern terminal setups, I also confirmed that `Ctrl-]` may arrive as t
 
 To improve reattach rendering, takeover now also performs a resize-bump-and-restore after applying the real terminal size. This is a pragmatic redraw trigger for TUIs that only repaint fully when they receive a resize event.
 
+For takeover lifecycle, relay tests now also cover automatic return to RPC when a session was auto-upgraded from RPC into PTY for takeover and the human later releases or disconnects.
+
 ---
 
 ## Tier 3: Real LLM (Integration)
