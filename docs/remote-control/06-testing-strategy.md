@@ -253,6 +253,8 @@ weave-inspect relay --session <id> switch-transport rpc
 
 That confirms the explicit runtime-switch primitive works and that human takeover can now be driven by intent (`takeover`) rather than by manually choosing transport first.
 
+I also validated the reattach blank-screen fix by running takeover with a local terminal size available (or `LINES` / `COLUMNS` fallback) and confirming the session immediately recorded non-zero `pty_rows` / `pty_cols` without needing a second manual `pty-resize` command.
+
 ---
 
 ## Tier 3: Real LLM (Integration)

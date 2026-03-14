@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/victorarias/agentic-weave/remotecontrol/protocol"
+	"golang.org/x/sys/unix"
 )
 
 func main() {
@@ -446,6 +447,13 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 		if err := printStatus(ack, jsonMode); err != nil {
 			return err
 		}
+		if mode == "takeover" {
+			if err := c.initialize(sessionID, jsonMode); err != nil {
+				fmt.Fprintf(os.Stderr, "[takeover] post-attach initialize failed: %v\n", err)
+			} else if err := c.autoResizePTY(sessionID, jsonMode); err != nil {
+				fmt.Fprintf(os.Stderr, "[takeover] auto-resize failed: %v\n", err)
+			}
+		}
 		return streamUntilInterrupt(c.stream, c.errCh, jsonMode)
 	case "detach", "release":
 		requestID := "detach-1"
@@ -565,6 +573,40 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 	default:
 		return fmt.Errorf("unknown subcommand %q", subcmd)
 	}
+}
+
+func (c *relayClient) autoResizePTY(sessionID string, jsonMode bool) error {
+	rows, cols, ok := terminalSize()
+	if !ok {
+		return nil
+	}
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "pty-resize-auto", protocol.PTYResizeCommand{Command: protocol.CommandPTYResize, Rows: rows, Cols: cols})
+	if err != nil {
+		return err
+	}
+	if err := c.conn.WriteJSON(env); err != nil {
+		return err
+	}
+	_, err = waitForAckEnvelope(c.stream, "pty-resize-auto", jsonMode)
+	return err
+}
+
+func terminalSize() (rows, cols int, ok bool) {
+	for _, fd := range []uintptr{os.Stdout.Fd(), os.Stdin.Fd(), os.Stderr.Fd()} {
+		ws, err := unix.IoctlGetWinsize(int(fd), unix.TIOCGWINSZ)
+		if err != nil || ws == nil {
+			continue
+		}
+		if ws.Row > 0 && ws.Col > 0 {
+			return int(ws.Row), int(ws.Col), true
+		}
+	}
+	rows, rowsErr := strconv.Atoi(strings.TrimSpace(os.Getenv("LINES")))
+	cols, colsErr := strconv.Atoi(strings.TrimSpace(os.Getenv("COLUMNS")))
+	if rowsErr == nil && colsErr == nil && rows > 0 && cols > 0 {
+		return rows, cols, true
+	}
+	return 0, 0, false
 }
 
 func waitForInit(stream *envelopeStream, jsonMode bool, requestID string) error {
@@ -946,7 +988,7 @@ func printUpdate(update protocol.SessionUpdate) (bool, error) {
 
 func shouldInitializeRelay(subcmd string) bool {
 	switch subcmd {
-	case "init", "watch", "inject", "pty-input", "pty-resize", "prompt", "cancel", "allow", "deny":
+	case "init", "watch", "attach", "takeover", "detach", "release", "inject", "pty-input", "pty-resize", "prompt", "cancel", "allow", "deny":
 		return true
 	default:
 		return false
