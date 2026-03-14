@@ -55,6 +55,8 @@ type connState struct {
 	sessions     map[string]struct{}
 }
 
+const relayWriteTimeout = time.Second
+
 func NewServer(cfg Config) *Server {
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
@@ -111,6 +113,7 @@ func (s *Server) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = httpServer.Shutdown(shutdownCtx)
+		_ = s.launcher.Shutdown(shutdownCtx)
 		return ctx.Err()
 	case err := <-errCh:
 		return err
@@ -179,26 +182,28 @@ func (s *Server) handleAuth(state *connState, env protocol.Envelope) {
 		return
 	}
 
-	state.authed = true
-	state.role = cmd.Role
-	state.identity = env.From
-	if state.identity == "" {
-		state.identity = cmd.Role
+	identity := env.From
+	if identity == "" {
+		identity = cmd.Role
 	}
-	state.sessionID = env.SessionID
-	state.runtimeID = env.RuntimeID
 
 	s.mu.Lock()
-	if state.role == protocol.RoleWrapper {
-		if existing := s.wrappers[state.sessionID]; existing != nil {
+	if cmd.Role == protocol.RoleWrapper {
+		if existing := s.wrappers[env.SessionID]; existing != nil {
 			s.mu.Unlock()
 			_ = s.sendError(state, env.ID, env.SessionID, "wrapper already registered for session")
 			return
 		}
-		s.wrappers[state.sessionID] = state
-		s.registry.SetConnected(state.sessionID, protocol.RuntimeInfo{ID: state.runtimeID, Kind: "pi", Transport: runtime.PiRPC().Transport}, "")
+		s.wrappers[env.SessionID] = state
+		s.registry.SetConnected(env.SessionID, protocol.RuntimeInfo{ID: env.RuntimeID, Kind: "pi", Transport: runtime.PiRPC().Transport}, "")
 	}
 	s.mu.Unlock()
+
+	state.authed = true
+	state.role = cmd.Role
+	state.identity = identity
+	state.sessionID = env.SessionID
+	state.runtimeID = env.RuntimeID
 
 	ack, err := protocol.NewEnvelope(protocol.MessageAck, env.SessionID, "", "weave-relay", env.ID, protocol.AckPayload{
 		Command: protocol.CommandAuth,
@@ -292,9 +297,17 @@ func (s *Server) handleWrapperEnvelope(state *connState, env protocol.Envelope) 
 		sessionID = state.sessionID
 		env.SessionID = sessionID
 	}
-	s.applyWrapperEnvelope(state, env)
+	if sessionID != state.sessionID {
+		_ = s.sendError(state, env.ID, sessionID, "wrapper may only send messages for its authenticated session")
+		return
+	}
 
 	s.mu.Lock()
+	if s.wrappers[sessionID] != state {
+		s.mu.Unlock()
+		_ = s.sendError(state, env.ID, sessionID, "wrapper is not registered for session")
+		return
+	}
 	subs := s.subscribers[sessionID]
 	clients := make([]*connState, 0, len(subs))
 	for client := range subs {
@@ -302,6 +315,7 @@ func (s *Server) handleWrapperEnvelope(state *connState, env protocol.Envelope) 
 	}
 	s.mu.Unlock()
 
+	s.applyWrapperEnvelope(state, env)
 	for _, client := range clients {
 		_ = client.writeEnvelope(env)
 	}
@@ -360,9 +374,10 @@ func (s *Server) handleSessionSpawn(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "session already has a connected runtime")
 		return
 	}
-	persistedHandle := cmd.SessionPath
-	if persistedHandle == "" {
-		persistedHandle = filepath.Join(s.cfg.SessionDir, env.SessionID+".jsonl")
+	persistedHandle, err := resolveSessionHandle(s.cfg.SessionDir, env.SessionID, cmd.SessionPath)
+	if err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
 	}
 	if err := os.MkdirAll(filepath.Dir(persistedHandle), 0o755); err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
@@ -403,12 +418,17 @@ func (s *Server) handleSessionLoad(state *connState, env protocol.Envelope) {
 		return
 	}
 	record, _ := s.registry.Get(env.SessionID)
-	persistedHandle := cmd.SessionPath
-	if persistedHandle == "" {
-		persistedHandle = record.PersistedSessionHandle
+	requestedHandle := cmd.SessionPath
+	if requestedHandle == "" {
+		requestedHandle = record.PersistedSessionHandle
 	}
-	if persistedHandle == "" {
+	if requestedHandle == "" {
 		_ = s.sendError(state, env.ID, env.SessionID, "session.load requires a known persisted session handle")
+		return
+	}
+	persistedHandle, err := resolveSessionHandle(s.cfg.SessionDir, env.SessionID, requestedHandle)
+	if err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 		return
 	}
 	if _, err := os.Stat(persistedHandle); err != nil {
@@ -427,7 +447,7 @@ func (s *Server) handleSessionLoad(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, normalizeSpawnError(err))
 		return
 	}
-	record, err := s.waitForConnected(env.SessionID)
+	record, err = s.waitForConnected(env.SessionID)
 	if err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 		return
@@ -753,6 +773,50 @@ func (s *Server) relayURL() string {
 	return "ws://" + addr + "/ws"
 }
 
+func resolveSessionHandle(sessionDir, sessionID, requested string) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if err := validateSessionID(sessionID); err != nil {
+		return "", err
+	}
+	baseDir, err := filepath.Abs(sessionDir)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(requested) == "" {
+		return filepath.Join(baseDir, sessionID+".jsonl"), nil
+	}
+	target := requested
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(baseDir, target)
+	}
+	target, err = filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return "", err
+	}
+	if !pathWithinBase(baseDir, target) {
+		return "", fmt.Errorf("session_path must stay within %s", baseDir)
+	}
+	return target, nil
+}
+
+func validateSessionID(sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+	if sessionID == "." || sessionID == ".." || strings.ContainsAny(sessionID, `/\\`) || filepath.Base(sessionID) != sessionID {
+		return fmt.Errorf("invalid session_id %q", sessionID)
+	}
+	return nil
+}
+
+func pathWithinBase(baseDir, target string) bool {
+	rel, err := filepath.Rel(baseDir, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
+}
+
 func mustAckEnvelope(id, sessionID string, record session.Record, command string) protocol.Envelope {
 	env, err := protocol.NewEnvelope(protocol.MessageAck, sessionID, record.Runtime.ID, "weave-relay", id, protocol.AckPayload{
 		Command: command,
@@ -793,6 +857,8 @@ func (s *Server) sendError(state *connState, id, sessionID, message string) erro
 func (s *connState) writeEnvelope(env protocol.Envelope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_ = s.conn.SetWriteDeadline(time.Now().Add(relayWriteTimeout))
+	defer s.conn.SetWriteDeadline(time.Time{})
 	return s.conn.WriteJSON(env)
 }
 

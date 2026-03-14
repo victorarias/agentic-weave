@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -47,6 +48,8 @@ const (
 	UpdateStatus             = "status"
 	UpdateError              = "error"
 	UpdateComplete           = "complete"
+
+	MaxJSONLLineBytes = 1 << 20
 )
 
 type Envelope struct {
@@ -216,25 +219,24 @@ func WriteJSONLine(w io.Writer, v any) error {
 }
 
 func ReadJSONL(r io.Reader, fn func([]byte) error) error {
-	reader := bufio.NewReader(r)
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			line = bytes.TrimSuffix(line, []byte{'\n'})
-			line = bytes.TrimSuffix(line, []byte{'\r'})
-			if len(bytes.TrimSpace(line)) > 0 {
-				if callErr := fn(line); callErr != nil {
-					return callErr
-				}
-			}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLLineBytes)
+	for scanner.Scan() {
+		line := bytes.TrimSuffix(scanner.Bytes(), []byte{'\r'})
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
 		}
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
+		if callErr := fn(line); callErr != nil {
+			return callErr
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return fmt.Errorf("protocol: jsonl line exceeds %d bytes", MaxJSONLLineBytes)
+		}
+		return err
+	}
+	return nil
 }
 
 func DecodeEnvelope(line []byte) (Envelope, error) {

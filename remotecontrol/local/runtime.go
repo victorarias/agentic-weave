@@ -154,7 +154,10 @@ func (w *Wrapper) readPiOutput(stdout io.Reader) {
 			ch := w.pending[resp.ID]
 			w.pendingMu.Unlock()
 			if ch != nil {
-				ch <- resp
+				select {
+				case ch <- resp:
+				default:
+				}
 			}
 			return nil
 		}

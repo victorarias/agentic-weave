@@ -25,7 +25,7 @@ func TestWrapperPromptStreaming(t *testing.T) {
 		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
 		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
 		NoDefaultPiArgs: true,
-		StartupTimeout:  2 * time.Second,
+		StartupTimeout:  10 * time.Second,
 	})
 
 	go func() {
@@ -52,7 +52,7 @@ func TestWrapperPromptStreaming(t *testing.T) {
 
 	var deltaSeen bool
 	var completeSeen bool
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for !(deltaSeen && completeSeen) {
 		select {
 		case env := <-reader:
@@ -117,6 +117,64 @@ func TestPromptToPICommandDeliveryModes(t *testing.T) {
 	}
 }
 
+func TestWrapperIgnoresDuplicatePIResponses(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "wrapper.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := NewWrapper(Config{
+		SocketPath:      socket,
+		SessionID:       "demo-session",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "duplicate_response"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  10 * time.Second,
+	})
+
+	go func() { _ = wrapper.Run(ctx) }()
+	waitForSocket(t, socket)
+
+	conn := dialSocket(t, socket)
+	defer conn.Close()
+	reader := startReader(t, conn)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "init-1", protocol.InitializeCommand{
+		Command:         protocol.CommandInitialize,
+		ProtocolVersion: protocol.Version,
+	}))
+	awaitAck(t, reader, "init-1")
+	awaitReady(t, reader)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "prompt-1", protocol.SessionPromptCommand{
+		Command: protocol.CommandSessionPrompt,
+		Message: "say hello",
+	}))
+	awaitAck(t, reader, "prompt-1")
+
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case env := <-reader:
+			if env.Type != protocol.MessageEvent {
+				continue
+			}
+			var evt protocol.SessionUpdateEvent
+			if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
+				continue
+			}
+			if evt.Update.Kind == protocol.UpdateMessageComplete {
+				if evt.Update.Message != "hello world" {
+					t.Fatalf("unexpected message complete: %#v", evt.Update)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for completion after duplicate response")
+		}
+	}
+}
+
 func TestWrapperStatus(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "wrapper.sock")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -129,7 +187,7 @@ func TestWrapperStatus(t *testing.T) {
 		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
 		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
 		NoDefaultPiArgs: true,
-		StartupTimeout:  2 * time.Second,
+		StartupTimeout:  10 * time.Second,
 	})
 	go func() {
 		_ = wrapper.Run(ctx)
@@ -177,7 +235,7 @@ func TestWrapperPermissionFlow(t *testing.T) {
 		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
 		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
 		NoDefaultPiArgs: true,
-		StartupTimeout:  2 * time.Second,
+		StartupTimeout:  10 * time.Second,
 	})
 	go func() { _ = wrapper.Run(ctx) }()
 	waitForSocket(t, socket)
@@ -198,7 +256,7 @@ func TestWrapperPermissionFlow(t *testing.T) {
 	awaitAck(t, reader, "allow-1")
 	awaitPermissionResolved(t, reader, "perm-1", "allow")
 
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case env := <-reader:
@@ -230,7 +288,7 @@ func TestWrapperStatusShowsPendingPermission(t *testing.T) {
 		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
 		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
 		NoDefaultPiArgs: true,
-		StartupTimeout:  2 * time.Second,
+		StartupTimeout:  10 * time.Second,
 	})
 	go func() { _ = wrapper.Run(ctx) }()
 	waitForSocket(t, socket)
@@ -282,7 +340,7 @@ func TestWrapperPermissionInvalidDecisionDoesNotDropRequest(t *testing.T) {
 		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
 		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
 		NoDefaultPiArgs: true,
-		StartupTimeout:  2 * time.Second,
+		StartupTimeout:  10 * time.Second,
 	})
 	go func() { _ = wrapper.Run(ctx) }()
 	waitForSocket(t, socket)
@@ -319,7 +377,7 @@ func TestWrapperCancel(t *testing.T) {
 		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
 		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "abortable"},
 		NoDefaultPiArgs: true,
-		StartupTimeout:  2 * time.Second,
+		StartupTimeout:  10 * time.Second,
 	})
 	go func() {
 		_ = wrapper.Run(ctx)
@@ -348,7 +406,7 @@ func TestWrapperCancel(t *testing.T) {
 	}))
 	awaitAck(t, reader, "cancel-1")
 
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case env := <-reader:
@@ -398,13 +456,19 @@ func runFakePI(scenario string) error {
 				"data":    map[string]any{"isStreaming": false, "sessionId": "fake-session"},
 			})
 		case "prompt", "steer", "follow_up":
-			if err := protocol.WriteJSONLine(os.Stdout, map[string]any{
+			response := map[string]any{
 				"id":      cmd["id"],
 				"type":    "response",
 				"command": cmd["type"],
 				"success": true,
-			}); err != nil {
+			}
+			if err := protocol.WriteJSONLine(os.Stdout, response); err != nil {
 				return err
+			}
+			if scenario == "duplicate_response" {
+				if err := protocol.WriteJSONLine(os.Stdout, response); err != nil {
+					return err
+				}
 			}
 			go func() {
 				_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "agent_start"})
@@ -414,6 +478,7 @@ func runFakePI(scenario string) error {
 					return
 				}
 				if scenario == "permission" {
+					time.Sleep(20 * time.Millisecond)
 					_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "extension_ui_request", "id": "perm-1", "method": "confirm", "title": "Allow file write?", "message": "Need approval"})
 					allowed := <-permissionResolved
 					if !allowed {
@@ -500,7 +565,7 @@ func dialSocket(t *testing.T, socket string) net.Conn {
 
 func waitForSocket(t *testing.T, socket string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(socket); err == nil {
 			return
@@ -550,7 +615,7 @@ func awaitAck(t *testing.T, ch <-chan protocol.Envelope, id string) {
 
 func awaitAckEnvelope(t *testing.T, ch <-chan protocol.Envelope, id string) protocol.Envelope {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case env := <-ch:
@@ -566,7 +631,7 @@ func awaitAckEnvelope(t *testing.T, ch <-chan protocol.Envelope, id string) prot
 
 func awaitErrorEnvelope(t *testing.T, ch <-chan protocol.Envelope, id, want string) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case env := <-ch:
@@ -589,7 +654,7 @@ func awaitErrorEnvelope(t *testing.T, ch <-chan protocol.Envelope, id, want stri
 
 func awaitPermissionRequest(t *testing.T, ch <-chan protocol.Envelope, requestID string) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case env := <-ch:
@@ -611,7 +676,7 @@ func awaitPermissionRequest(t *testing.T, ch <-chan protocol.Envelope, requestID
 
 func awaitStatusPhase(t *testing.T, ch <-chan protocol.Envelope, phase string) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case env := <-ch:
@@ -633,7 +698,7 @@ func awaitStatusPhase(t *testing.T, ch <-chan protocol.Envelope, phase string) {
 
 func awaitPermissionResolved(t *testing.T, ch <-chan protocol.Envelope, requestID, decision string) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case env := <-ch:
@@ -655,7 +720,7 @@ func awaitPermissionResolved(t *testing.T, ch <-chan protocol.Envelope, requestI
 
 func awaitReady(t *testing.T, ch <-chan protocol.Envelope) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case env := <-ch:

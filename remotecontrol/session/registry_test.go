@@ -118,3 +118,37 @@ func TestRegistryConnectClearsStalePendingPermissions(t *testing.T) {
 		t.Fatalf("expected new runtime to clear stale permission state: %#v", record)
 	}
 }
+
+func TestRegistryReturnsDetachedCopies(t *testing.T) {
+	registry := NewRegistry()
+	registry.Ensure("sess-1", "/tmp/sess-1.jsonl")
+	registry.SetConnected("sess-1", protocol.RuntimeInfo{ID: "rt-1", Kind: "pi", Transport: "rpc"}, "")
+	registry.SetAttachment("sess-1", protocol.AttachmentInfo{ClientID: "human-1", Mode: "inject"})
+	registry.AddPermission("sess-1", "rt-1", protocol.PermissionRequest{ID: "perm-1", Kind: "confirm", Options: []string{"allow"}, Raw: map[string]any{"a": "b"}})
+
+	record, ok := registry.Get("sess-1")
+	if !ok {
+		t.Fatal("expected session record")
+	}
+	record.Attachment.ClientID = "mutated"
+	record.PendingPermissions[0].ID = "mutated"
+	record.PendingPermissions[0].Options[0] = "mutated"
+	record.PendingPermissions[0].Raw["a"] = "mutated"
+
+	list := registry.List()
+	if len(list) != 1 {
+		t.Fatalf("expected one listed session, got %d", len(list))
+	}
+	list[0].PendingPermissions[0].ID = "list-mutated"
+
+	fresh, ok := registry.Get("sess-1")
+	if !ok {
+		t.Fatal("expected session record after mutations")
+	}
+	if fresh.Attachment == nil || fresh.Attachment.ClientID != "human-1" {
+		t.Fatalf("expected attachment to remain unchanged: %#v", fresh)
+	}
+	if fresh.PendingPermissions[0].ID != "perm-1" || fresh.PendingPermissions[0].Options[0] != "allow" || fresh.PendingPermissions[0].Raw["a"] != "b" {
+		t.Fatalf("expected permission data to remain unchanged: %#v", fresh.PendingPermissions[0])
+	}
+}

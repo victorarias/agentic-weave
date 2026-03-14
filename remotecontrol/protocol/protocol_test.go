@@ -83,3 +83,10 @@ func TestReadAndWriteJSONL(t *testing.T) {
 		t.Fatalf("unexpected envelope ordering: %#v", got)
 	}
 }
+
+func TestReadJSONLRejectsOversizedLine(t *testing.T) {
+	line := append(bytes.Repeat([]byte("a"), MaxJSONLLineBytes+1), '\n')
+	if err := ReadJSONL(bytes.NewReader(line), func([]byte) error { return nil }); err == nil {
+		t.Fatal("expected oversized jsonl line to fail")
+	}
+}

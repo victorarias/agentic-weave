@@ -39,8 +39,8 @@ func (r *Registry) Ensure(sessionID, persistedHandle string) Record {
 	}
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
-	r.records[sessionID] = record
-	return record
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record)
 }
 
 func (r *Registry) SetConnected(sessionID string, runtime protocol.RuntimeInfo, persistedHandle string) Record {
@@ -57,8 +57,8 @@ func (r *Registry) SetConnected(sessionID string, runtime protocol.RuntimeInfo, 
 	record.PendingPermissions = nil
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
-	r.records[sessionID] = record
-	return record
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record)
 }
 
 func (r *Registry) SetDisconnected(sessionID, runtimeID string) (Record, bool) {
@@ -69,7 +69,7 @@ func (r *Registry) SetDisconnected(sessionID, runtimeID string) (Record, bool) {
 		return Record{}, false
 	}
 	if runtimeID != "" && record.Runtime.ID != "" && record.Runtime.ID != runtimeID {
-		return record, false
+		return cloneRecord(record), false
 	}
 	record.WrapperConnected = false
 	record.Phase = ""
@@ -77,8 +77,8 @@ func (r *Registry) SetDisconnected(sessionID, runtimeID string) (Record, bool) {
 	record.PendingPermissions = nil
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
-	r.records[sessionID] = record
-	return record, true
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
 }
 
 func (r *Registry) SetPhase(sessionID, runtimeID, phase string) (Record, bool) {
@@ -89,13 +89,13 @@ func (r *Registry) SetPhase(sessionID, runtimeID, phase string) (Record, bool) {
 		return Record{}, false
 	}
 	if runtimeID != "" && record.Runtime.ID != "" && record.Runtime.ID != runtimeID {
-		return record, false
+		return cloneRecord(record), false
 	}
 	record.Phase = phase
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
-	r.records[sessionID] = record
-	return record, true
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
 }
 
 func (r *Registry) AddPermission(sessionID, runtimeID string, permission protocol.PermissionRequest) (Record, bool) {
@@ -106,23 +106,23 @@ func (r *Registry) AddPermission(sessionID, runtimeID string, permission protoco
 		return Record{}, false
 	}
 	if runtimeID != "" && record.Runtime.ID != "" && record.Runtime.ID != runtimeID {
-		return record, false
+		return cloneRecord(record), false
 	}
 	updated := false
 	for i := range record.PendingPermissions {
 		if record.PendingPermissions[i].ID == permission.ID {
-			record.PendingPermissions[i] = permission
+			record.PendingPermissions[i] = clonePermission(permission)
 			updated = true
 			break
 		}
 	}
 	if !updated {
-		record.PendingPermissions = append(record.PendingPermissions, permission)
+		record.PendingPermissions = append(record.PendingPermissions, clonePermission(permission))
 	}
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
-	r.records[sessionID] = record
-	return record, true
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
 }
 
 func (r *Registry) ResolvePermission(sessionID, runtimeID, requestID string) (Record, bool) {
@@ -133,25 +133,25 @@ func (r *Registry) ResolvePermission(sessionID, runtimeID, requestID string) (Re
 		return Record{}, false
 	}
 	if runtimeID != "" && record.Runtime.ID != "" && record.Runtime.ID != runtimeID {
-		return record, false
+		return cloneRecord(record), false
 	}
-	filtered := record.PendingPermissions[:0]
+	filtered := make([]protocol.PermissionRequest, 0, len(record.PendingPermissions))
 	removed := false
 	for _, permission := range record.PendingPermissions {
 		if permission.ID == requestID {
 			removed = true
 			continue
 		}
-		filtered = append(filtered, permission)
+		filtered = append(filtered, clonePermission(permission))
 	}
 	if !removed {
-		return record, false
+		return cloneRecord(record), false
 	}
-	record.PendingPermissions = append([]protocol.PermissionRequest(nil), filtered...)
+	record.PendingPermissions = filtered
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
-	r.records[sessionID] = record
-	return record, true
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
 }
 
 func (r *Registry) SetAttachment(sessionID string, attachment protocol.AttachmentInfo) (Record, bool) {
@@ -163,8 +163,8 @@ func (r *Registry) SetAttachment(sessionID string, attachment protocol.Attachmen
 	}
 	record.Attachment = &protocol.AttachmentInfo{ClientID: attachment.ClientID, Mode: attachment.Mode}
 	record.UpdatedAt = time.Now().UTC()
-	r.records[sessionID] = record
-	return record, true
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
 }
 
 func (r *Registry) ClearAttachment(sessionID string) (Record, bool) {
@@ -176,8 +176,8 @@ func (r *Registry) ClearAttachment(sessionID string) (Record, bool) {
 	}
 	record.Attachment = nil
 	record.UpdatedAt = time.Now().UTC()
-	r.records[sessionID] = record
-	return record, true
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
 }
 
 func (r *Registry) HasPendingPermission(sessionID, requestID string) bool {
@@ -199,7 +199,7 @@ func (r *Registry) Get(sessionID string) (Record, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	record, ok := r.records[sessionID]
-	return record, ok
+	return cloneRecord(record), ok
 }
 
 func (r *Registry) List() []Record {
@@ -207,7 +207,7 @@ func (r *Registry) List() []Record {
 	defer r.mu.Unlock()
 	out := make([]Record, 0, len(r.records))
 	for _, record := range r.records {
-		out = append(out, record)
+		out = append(out, cloneRecord(record))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Session.ID < out[j].Session.ID
@@ -226,4 +226,32 @@ func deriveState(connected bool, phase string, pendingCount int) string {
 		return phase
 	}
 	return "running"
+}
+
+func cloneRecord(record Record) Record {
+	cloned := record
+	if record.Attachment != nil {
+		cloned.Attachment = &protocol.AttachmentInfo{ClientID: record.Attachment.ClientID, Mode: record.Attachment.Mode}
+	}
+	if len(record.PendingPermissions) > 0 {
+		cloned.PendingPermissions = make([]protocol.PermissionRequest, len(record.PendingPermissions))
+		for i, permission := range record.PendingPermissions {
+			cloned.PendingPermissions[i] = clonePermission(permission)
+		}
+	}
+	return cloned
+}
+
+func clonePermission(permission protocol.PermissionRequest) protocol.PermissionRequest {
+	cloned := permission
+	if len(permission.Options) > 0 {
+		cloned.Options = append([]string(nil), permission.Options...)
+	}
+	if permission.Raw != nil {
+		cloned.Raw = make(map[string]any, len(permission.Raw))
+		for k, v := range permission.Raw {
+			cloned.Raw[k] = v
+		}
+	}
+	return cloned
 }

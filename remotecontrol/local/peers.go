@@ -3,10 +3,14 @@ package local
 import (
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/victorarias/agentic-weave/remotecontrol/protocol"
 )
+
+const peerWriteTimeout = time.Second
 
 type peer interface {
 	writeEnvelope(protocol.Envelope) error
@@ -17,13 +21,13 @@ type peer interface {
 type localPeer struct {
 	conn net.Conn
 	mu   sync.Mutex
-	init bool
+	init atomic.Bool
 }
 
 type relayPeer struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
-	init bool
+	init atomic.Bool
 }
 
 func (w *Wrapper) registerPeer(p peer) int64 {
@@ -55,17 +59,21 @@ func (w *Wrapper) snapshotInitializedPeers() []peer {
 func (p *localPeer) writeEnvelope(env protocol.Envelope) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	_ = p.conn.SetWriteDeadline(time.Now().Add(peerWriteTimeout))
+	defer p.conn.SetWriteDeadline(time.Time{})
 	return protocol.WriteJSONLine(p.conn, env)
 }
 
-func (p *localPeer) setInitialized(v bool) { p.init = v }
-func (p *localPeer) initialized() bool     { return p.init }
+func (p *localPeer) setInitialized(v bool) { p.init.Store(v) }
+func (p *localPeer) initialized() bool     { return p.init.Load() }
 
 func (p *relayPeer) writeEnvelope(env protocol.Envelope) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	_ = p.conn.SetWriteDeadline(time.Now().Add(peerWriteTimeout))
+	defer p.conn.SetWriteDeadline(time.Time{})
 	return p.conn.WriteJSON(env)
 }
 
-func (p *relayPeer) setInitialized(v bool) { p.init = v }
-func (p *relayPeer) initialized() bool     { return p.init }
+func (p *relayPeer) setInitialized(v bool) { p.init.Store(v) }
+func (p *relayPeer) initialized() bool     { return p.init.Load() }

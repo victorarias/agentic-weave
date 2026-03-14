@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -25,6 +26,7 @@ type LaunchRequest struct {
 type Launcher interface {
 	Spawn(ctx context.Context, req LaunchRequest) error
 	Stop(sessionID string) error
+	Shutdown(ctx context.Context) error
 }
 
 var errRuntimeAlreadyManaged = errors.New("runtime already managed for session")
@@ -113,13 +115,55 @@ func (l *ProcessLauncher) Stop(sessionID string) error {
 	if proc == nil || proc.cmd == nil || proc.cmd.Process == nil {
 		return exec.ErrNotFound
 	}
-	if err := proc.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		return err
+	_, err := stopManagedProcess(context.Background(), proc, gracefulStopTimeout)
+	return err
+}
+
+func (l *ProcessLauncher) Shutdown(ctx context.Context) error {
+	l.mu.Lock()
+	processes := make([]*managedProcess, 0, len(l.processes))
+	for sessionID, proc := range l.processes {
+		if proc != nil {
+			processes = append(processes, proc)
+		}
+		delete(l.processes, sessionID)
 	}
+	l.mu.Unlock()
+
+	var firstErr error
+	for _, proc := range processes {
+		if _, err := stopManagedProcess(ctx, proc, gracefulStopTimeout); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func stopManagedProcess(ctx context.Context, proc *managedProcess, timeout time.Duration) (bool, error) {
+	if proc == nil || proc.cmd == nil || proc.cmd.Process == nil {
+		return false, exec.ErrNotFound
+	}
+	if err := proc.cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return false, err
+	}
+
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
 	select {
 	case <-proc.done:
-		return nil
-	case <-time.After(gracefulStopTimeout):
-		return proc.cmd.Process.Kill()
+		return false, nil
+	case <-ctx.Done():
+		if err := proc.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return true, err
+		}
+		<-proc.done
+		return true, ctx.Err()
+	case <-deadline.C:
+		if err := proc.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return true, err
+		}
+		<-proc.done
+		return true, nil
 	}
 }

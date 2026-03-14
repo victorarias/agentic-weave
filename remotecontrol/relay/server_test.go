@@ -902,6 +902,89 @@ func TestRelaySpawnLoadAndRuntimeStop(t *testing.T) {
 	awaitMessageComplete(t, clientConn, "hello world")
 }
 
+func TestRelayRejectsSpawnAndLoadPathTraversal(t *testing.T) {
+	tempDir := t.TempDir()
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	conn := dialWS(t, relayURL)
+	defer conn.Close()
+	authenticateWS(t, conn, protocol.RoleClient, "secret", "")
+
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "../escape", "", "test-client", "spawn-1", protocol.SessionSpawnCommand{
+		Command: protocol.CommandSessionSpawn,
+	})
+	if err != nil {
+		t.Fatalf("new spawn envelope: %v", err)
+	}
+	if err := conn.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write spawn: %v", err)
+	}
+	awaitWSError(t, conn, "spawn-1", `invalid session_id "../escape"`)
+
+	loadEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-load", "", "test-client", "load-1", protocol.SessionLoadCommand{
+		Command:     protocol.CommandSessionLoad,
+		SessionPath: "../escape.jsonl",
+	})
+	if err != nil {
+		t.Fatalf("new load envelope: %v", err)
+	}
+	if err := conn.WriteJSON(loadEnv); err != nil {
+		t.Fatalf("write load: %v", err)
+	}
+	awaitWSError(t, conn, "load-1", "session_path must stay within "+tempDir)
+}
+
+func TestRelayDuplicateWrapperAuthDoesNotAuthenticateConnection(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-auth",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-auth")
+
+	dup := dialWS(t, relayURL)
+	defer dup.Close()
+	auth, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-auth", "rt-dup", "dup-wrapper", "auth-1", protocol.AuthCommand{
+		Command: protocol.CommandAuth,
+		Token:   "secret",
+		Role:    protocol.RoleWrapper,
+	})
+	if err != nil {
+		t.Fatalf("new auth envelope: %v", err)
+	}
+	if err := dup.WriteJSON(auth); err != nil {
+		t.Fatalf("write duplicate auth: %v", err)
+	}
+	awaitWSError(t, dup, "auth-1", "wrapper already registered for session")
+
+	event, err := protocol.NewEnvelope(protocol.MessageEvent, "sess-auth", "rt-dup", "dup-wrapper", "evt-1", protocol.SessionUpdateEvent{
+		Event:  protocol.EventSessionUpdate,
+		Update: protocol.SessionUpdate{Kind: protocol.UpdateStatus, Phase: "running"},
+	})
+	if err != nil {
+		t.Fatalf("new spoofed event: %v", err)
+	}
+	if err := dup.WriteJSON(event); err != nil {
+		t.Fatalf("write spoofed event: %v", err)
+	}
+	awaitWSError(t, dup, "evt-1", "auth required before other message types")
+}
+
 func TestRelayRejectsInvalidToken(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -996,6 +1079,20 @@ func (l *fakeLauncher) Stop(sessionID string) error {
 		return os.ErrNotExist
 	}
 	state.cancel()
+	return nil
+}
+
+func (l *fakeLauncher) Shutdown(_ context.Context) error {
+	l.mu.Lock()
+	states := make([]*fakeLaunchState, 0, len(l.states))
+	for sessionID, state := range l.states {
+		delete(l.states, sessionID)
+		states = append(states, state)
+	}
+	l.mu.Unlock()
+	for _, state := range states {
+		state.cancel()
+	}
 	return nil
 }
 
