@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -453,6 +455,7 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 			} else if err := c.autoResizePTY(sessionID, jsonMode); err != nil {
 				fmt.Fprintf(os.Stderr, "[takeover] auto-resize failed: %v\n", err)
 			}
+			return c.interactiveTakeover(sessionID, jsonMode)
 		}
 		return streamUntilInterrupt(c.stream, c.errCh, jsonMode)
 	case "detach", "release":
@@ -502,16 +505,7 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 		}
 		return streamErr
 	case "pty-input":
-		encoded := base64.StdEncoding.EncodeToString([]byte(message))
-		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "pty-input-1", protocol.PTYInputCommand{Command: protocol.CommandPTYInput, Data: encoded})
-		if err != nil {
-			return err
-		}
-		if err := c.conn.WriteJSON(env); err != nil {
-			return err
-		}
-		_, err = waitForAckEnvelope(c.stream, "pty-input-1", jsonMode)
-		return err
+		return c.sendPTYInput(sessionID, []byte(message), "pty-input-1", jsonMode)
 	case "pty-resize":
 		parts := strings.Fields(message)
 		rows, err := strconv.Atoi(parts[0])
@@ -591,6 +585,104 @@ func (c *relayClient) autoResizePTY(sessionID string, jsonMode bool) error {
 	return err
 }
 
+func (c *relayClient) sendPTYInput(sessionID string, data []byte, requestID string, jsonMode bool) error {
+	if len(data) == 0 {
+		return nil
+	}
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, requestID, protocol.PTYInputCommand{
+		Command: protocol.CommandPTYInput,
+		Data:    base64.StdEncoding.EncodeToString(data),
+	})
+	if err != nil {
+		return err
+	}
+	if err := c.conn.WriteJSON(env); err != nil {
+		return err
+	}
+	_, err = waitForAckEnvelope(c.stream, requestID, jsonMode)
+	return err
+}
+
+func (c *relayClient) interactiveTakeover(sessionID string, jsonMode bool) error {
+	fmt.Fprintln(os.Stderr, "[takeover] interactive mode active (Ctrl-] to disconnect)")
+	restore, err := makeRawTerminal(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[takeover] raw mode unavailable: %v\n", err)
+	}
+	if restore != nil {
+		defer restore()
+	}
+
+	inputCh := make(chan []byte, 32)
+	errorCh := make(chan error, 1)
+	go readStdinChunks(os.Stdin, inputCh, errorCh)
+
+	requestSeq := 0
+	for {
+		if len(c.stream.backlog) == 0 {
+			select {
+			case err := <-errorCh:
+				if err != nil {
+					return err
+				}
+				return nil
+			case err := <-c.errCh:
+				if err != nil {
+					return err
+				}
+				return nil
+			case chunk, ok := <-inputCh:
+				if !ok {
+					return nil
+				}
+				if idx := bytes.IndexByte(chunk, 0x1d); idx >= 0 {
+					if idx > 0 {
+						requestSeq++
+						if err := c.sendPTYInput(sessionID, chunk[:idx], fmt.Sprintf("pty-input-live-%d", requestSeq), jsonMode); err != nil {
+							return err
+						}
+					}
+					fmt.Fprintln(os.Stderr, "\n[takeover] disconnect requested")
+					return nil
+				}
+				requestSeq++
+				if err := c.sendPTYInput(sessionID, chunk, fmt.Sprintf("pty-input-live-%d", requestSeq), jsonMode); err != nil {
+					return err
+				}
+				continue
+			default:
+			}
+		}
+
+		env, err := c.stream.next(100 * time.Millisecond)
+		if err != nil {
+			if strings.Contains(err.Error(), "timed out waiting for envelope") {
+				continue
+			}
+			select {
+			case err := <-c.errCh:
+				if err != nil {
+					return err
+				}
+				return nil
+			default:
+				return err
+			}
+		}
+		if jsonMode {
+			_ = protocol.WriteJSONLine(os.Stdout, env)
+			continue
+		}
+		_, handled, eventErr := printEventEnvelope(env)
+		if eventErr != nil {
+			return eventErr
+		}
+		if !handled {
+			continue
+		}
+	}
+}
+
 func terminalSize() (rows, cols int, ok bool) {
 	for _, fd := range []uintptr{os.Stdout.Fd(), os.Stdin.Fd(), os.Stderr.Fd()} {
 		ws, err := unix.IoctlGetWinsize(int(fd), unix.TIOCGWINSZ)
@@ -607,6 +699,50 @@ func terminalSize() (rows, cols int, ok bool) {
 		return rows, cols, true
 	}
 	return 0, 0, false
+}
+
+func makeRawTerminal(file *os.File) (func(), error) {
+	if file == nil {
+		return nil, nil
+	}
+	fd := int(file.Fd())
+	orig, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil {
+		return nil, err
+	}
+	raw := *orig
+	raw.Iflag &^= unix.BRKINT | unix.ICRNL | unix.INPCK | unix.ISTRIP | unix.IXON
+	raw.Oflag &^= unix.OPOST
+	raw.Cflag &^= unix.CSIZE | unix.PARENB
+	raw.Cflag |= unix.CS8
+	raw.Lflag &^= unix.ECHO | unix.ICANON | unix.IEXTEN | unix.ISIG
+	raw.Cc[unix.VMIN] = 1
+	raw.Cc[unix.VTIME] = 0
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
+		return nil, err
+	}
+	return func() {
+		_ = unix.IoctlSetTermios(fd, unix.TCSETS, orig)
+	}, nil
+}
+
+func readStdinChunks(r io.Reader, out chan<- []byte, errCh chan<- error) {
+	defer close(out)
+	buf := make([]byte, 1024)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			chunk := append([]byte(nil), buf[:n]...)
+			out <- chunk
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			errCh <- err
+			return
+		}
+	}
 }
 
 func waitForInit(stream *envelopeStream, jsonMode bool, requestID string) error {

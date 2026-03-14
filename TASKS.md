@@ -259,6 +259,7 @@ This file tracks current work items and progress.
     - [x] make relay-managed spawn/load choose real interactive pi PTY runtime when requested via transport selection
     - [x] add explicit runtime transport replacement (`runtime.replace` / `weave-inspect relay switch-transport <rpc|pty>`)
     - [x] add best-UX takeover commands (`weave-inspect relay takeover` / `release`) and auto-upgrade takeover to PTY when a persisted session can be resumed
+    - [x] make takeover a true interactive PTY bridge with raw stdin key passthrough (control keys like Ctrl-P, arrows, etc.)
 
 ---
 
@@ -293,6 +294,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 20:26: Finished the next Tier 5 UX step: `weave-inspect relay takeover` now acts as a real interactive PTY bridge, switches the local terminal into raw mode when possible, forwards live stdin bytes to `pty.input`, supports a local disconnect escape (`Ctrl-]`), and I manually validated a piped `/session` command crossing the takeover bridge while PTY size was auto-established.
 - 2026-03-14 19:32: Fixed the blank-screen-on-takeover regression in `weave-inspect`: takeover now re-initializes after any RPC→PTY runtime swap, auto-sends `pty.resize` using the local terminal size (with `LINES`/`COLUMNS` fallback), and I manually validated that a plain `takeover` now records non-zero PTY size without needing a second manual resize.
 - 2026-03-14 17:45: Added a first-class runtime-switch primitive and best-UX takeover path: new `runtime.replace` / `weave-inspect relay switch-transport <rpc|pty>`, new `weave-inspect relay takeover` / `release` aliases, relay now auto-upgrades `session.attach takeover` to PTY when a persisted session handle exists, tests cover transport replacement and auto-upgrade takeover, and I manually validated `spawn (rpc) -> takeover (auto-switch to pty) -> pty-input /session -> release -> switch-transport rpc`.
 - 2026-03-14 17:27: Finished the next Tier 5 integration step: `session.spawn` / `session.load` now accept transport selection (`rpc` or `pty`), relay-managed launcher can start real interactive pi PTY runtimes automatically, and I manually validated `spawn --transport pty -> attach takeover -> pty-input /session -> runtime.stop -> load --transport pty -> reattach -> pty-resize` end-to-end.
