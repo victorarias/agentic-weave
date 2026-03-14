@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -604,7 +603,7 @@ func (c *relayClient) sendPTYInput(sessionID string, data []byte, requestID stri
 }
 
 func (c *relayClient) interactiveTakeover(sessionID string, jsonMode bool) error {
-	fmt.Fprintln(os.Stderr, "[takeover] interactive mode active (Ctrl-] to disconnect)")
+	fmt.Fprintln(os.Stderr, "[takeover] interactive mode active (Ctrl-] or ~. at line start to disconnect)")
 	restore, err := makeRawTerminal(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[takeover] raw mode unavailable: %v\n", err)
@@ -618,6 +617,8 @@ func (c *relayClient) interactiveTakeover(sessionID string, jsonMode bool) error
 	go readStdinChunks(os.Stdin, inputCh, errorCh)
 
 	requestSeq := 0
+	atLineStart := true
+	pendingTilde := false
 	for {
 		if len(c.stream.backlog) == 0 {
 			select {
@@ -635,19 +636,16 @@ func (c *relayClient) interactiveTakeover(sessionID string, jsonMode bool) error
 				if !ok {
 					return nil
 				}
-				if idx := bytes.IndexByte(chunk, 0x1d); idx >= 0 {
-					if idx > 0 {
-						requestSeq++
-						if err := c.sendPTYInput(sessionID, chunk[:idx], fmt.Sprintf("pty-input-live-%d", requestSeq), jsonMode); err != nil {
-							return err
-						}
+				forward, disconnect := processTakeoverInput(chunk, &atLineStart, &pendingTilde)
+				if len(forward) > 0 {
+					requestSeq++
+					if err := c.sendPTYInput(sessionID, forward, fmt.Sprintf("pty-input-live-%d", requestSeq), jsonMode); err != nil {
+						return err
 					}
+				}
+				if disconnect {
 					fmt.Fprintln(os.Stderr, "\n[takeover] disconnect requested")
 					return nil
-				}
-				requestSeq++
-				if err := c.sendPTYInput(sessionID, chunk, fmt.Sprintf("pty-input-live-%d", requestSeq), jsonMode); err != nil {
-					return err
 				}
 				continue
 			default:
@@ -743,6 +741,35 @@ func readStdinChunks(r io.Reader, out chan<- []byte, errCh chan<- error) {
 			return
 		}
 	}
+}
+
+func processTakeoverInput(chunk []byte, atLineStart, pendingTilde *bool) ([]byte, bool) {
+	if len(chunk) == 0 {
+		return nil, false
+	}
+	forward := make([]byte, 0, len(chunk))
+	for _, b := range chunk {
+		if *pendingTilde {
+			if b == '.' {
+				*pendingTilde = false
+				*atLineStart = false
+				return forward, true
+			}
+			forward = append(forward, '~')
+			*pendingTilde = false
+		}
+		if b == 0x1d {
+			return forward, true
+		}
+		if *atLineStart && b == '~' {
+			*pendingTilde = true
+			*atLineStart = false
+			continue
+		}
+		forward = append(forward, b)
+		*atLineStart = b == '\r' || b == '\n'
+	}
+	return forward, false
 }
 
 func waitForInit(stream *envelopeStream, jsonMode bool, requestID string) error {

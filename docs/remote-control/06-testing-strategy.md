@@ -255,7 +255,7 @@ That confirms the explicit runtime-switch primitive works and that human takeove
 
 I also validated the reattach blank-screen fix by running takeover with a local terminal size available (or `LINES` / `COLUMNS` fallback) and confirming the session immediately recorded non-zero `pty_rows` / `pty_cols` without needing a second manual `pty-resize` command.
 
-Finally, I validated live stdin passthrough by piping `/session\r` plus the local disconnect escape (`Ctrl-]`, `\x1d`) into `weave-inspect relay takeover`, then confirming the PTY stream showed `/session` and the session status recorded the auto-established PTY size.
+Finally, I validated live stdin passthrough by piping `/session\r` plus the local disconnect escape (`Ctrl-]`, `\x1d`) into `weave-inspect relay takeover`, then confirming the PTY stream showed `/session` and the session status recorded the auto-established PTY size. The client also supports a second local detach escape, `~.` at line start, for terminals where `Ctrl-]` is awkward.
 
 ---
 

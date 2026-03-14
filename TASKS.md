@@ -294,6 +294,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 20:45: Added a more reliable local detach escape for interactive takeover: `weave-inspect relay takeover` still honors `Ctrl-]`, but now also disconnects on `~.` at line start, which is easier to trigger consistently across terminals.
 - 2026-03-14 20:40: Removed unnecessary pre-attach initialization for `attach` / `takeover` / `detach` / `release` in `weave-inspect relay`, so takeover of a stopped session now fails immediately instead of waiting through the initialize retry window.
 - 2026-03-14 20:36: Tightened takeover UX for dead sessions: relay now rejects `session.attach takeover` when `wrapper_connected=false` with a clear `cannot take over stopped session; load or spawn first` error, and relay tests cover the stopped-session case.
 - 2026-03-14 20:26: Finished the next Tier 5 UX step: `weave-inspect relay takeover` now acts as a real interactive PTY bridge, switches the local terminal into raw mode when possible, forwards live stdin bytes to `pty.input`, supports a local disconnect escape (`Ctrl-]`), and I manually validated a piped `/session` command crossing the takeover bridge while PTY size was auto-established.
