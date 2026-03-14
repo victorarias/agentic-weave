@@ -48,7 +48,7 @@ func runLocal(args []string) error {
 	if err != nil {
 		return err
 	}
-	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" || subcmd == "attach" || subcmd == "detach" || subcmd == "inject" {
+	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" || subcmd == "watch" || subcmd == "attach" || subcmd == "detach" || subcmd == "inject" {
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	}
 
