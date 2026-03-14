@@ -34,12 +34,13 @@ type Server struct {
 	cfg      Config
 	upgrader websocket.Upgrader
 
-	mu          sync.Mutex
-	wrappers    map[string]*connState
-	attachments map[string]*connState
-	subscribers map[string]map[*connState]struct{}
-	registry    *session.Registry
-	launcher    Launcher
+	mu             sync.Mutex
+	wrappers       map[string]*connState
+	attachments    map[string]*connState
+	pendingPrompts map[string][]protocol.Envelope
+	subscribers    map[string]map[*connState]struct{}
+	registry       *session.Registry
+	launcher       Launcher
 }
 
 type connState struct {
@@ -82,11 +83,12 @@ func NewServer(cfg Config) *Server {
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
-		wrappers:    make(map[string]*connState),
-		attachments: make(map[string]*connState),
-		subscribers: make(map[string]map[*connState]struct{}),
-		registry:    session.NewRegistry(),
-		launcher:    launcher,
+		wrappers:       make(map[string]*connState),
+		attachments:    make(map[string]*connState),
+		pendingPrompts: make(map[string][]protocol.Envelope),
+		subscribers:    make(map[string]map[*connState]struct{}),
+		registry:       session.NewRegistry(),
+		launcher:       launcher,
 	}
 }
 
@@ -275,6 +277,12 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 		s.subscribe(state, env.SessionID)
 	}
 	if meta.Command == protocol.CommandSessionPrompt {
+		if queued, err := s.tryQueuePrompt(state, env); err != nil {
+			_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+			return
+		} else if queued {
+			return
+		}
 		if !s.canPrompt(state, env.SessionID) {
 			_ = s.sendError(state, env.ID, env.SessionID, "attached client in observe mode cannot send prompts")
 			return
@@ -333,6 +341,7 @@ func (s *Server) handleListSessions(state *connState, env protocol.Envelope) {
 			"state":                    record.State,
 			"phase":                    record.Phase,
 			"attachment":               record.Attachment,
+			"queued_prompts":           record.QueuedPrompts,
 			"pending_permissions":      record.PendingPermissions,
 			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
 		})
@@ -482,7 +491,7 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.attach")
 		return
 	}
-	if cmd.Mode != "observe" && cmd.Mode != "inject" {
+	if cmd.Mode != "observe" && cmd.Mode != "inject" && cmd.Mode != "takeover" {
 		_ = s.sendError(state, env.ID, env.SessionID, fmt.Sprintf("unsupported attach mode %q", cmd.Mode))
 		return
 	}
@@ -496,12 +505,16 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 	}
 
 	var previousSessionID string
+	previousSessionMode := ""
 	previousMode := ""
 	action := "attached"
 	s.mu.Lock()
 	attachedSessionID, attachedOwner := s.findAttachmentByIdentityLocked(state.identity)
 	if attachedSessionID != "" && attachedSessionID != env.SessionID {
 		previousSessionID = attachedSessionID
+		if attachedOwner != nil {
+			previousSessionMode = attachedOwner.attachedMode
+		}
 		delete(s.attachments, attachedSessionID)
 		if attachedOwner != nil {
 			attachedOwner.attachedTo = ""
@@ -537,12 +550,18 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionAttach))
 	if previousSessionID != "" {
 		s.broadcastSessionStatus(previousSessionID, map[string]any{"attachment_action": "detached", "attachment_client_id": state.identity})
+		if previousSessionMode == "takeover" {
+			s.flushQueuedPrompts(previousSessionID)
+		}
 	}
 	details := map[string]any{"attachment_action": action}
 	if previousMode != "" {
 		details["previous_mode"] = previousMode
 	}
 	s.broadcastSessionStatus(env.SessionID, details)
+	if previousMode == "takeover" && cmd.Mode != "takeover" {
+		s.flushQueuedPrompts(env.SessionID)
+	}
 }
 
 func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
@@ -550,7 +569,7 @@ func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.detach")
 		return
 	}
-	cleared, record, err := s.detachIfOwner(state, env.SessionID)
+	cleared, previousMode, record, err := s.detachIfOwner(state, env.SessionID)
 	if err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 		return
@@ -561,6 +580,9 @@ func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
 	}
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionDetach))
 	s.broadcastSessionStatus(env.SessionID, map[string]any{"attachment_action": "detached", "attachment_client_id": state.identity})
+	if previousMode == "takeover" {
+		s.flushQueuedPrompts(env.SessionID)
+	}
 }
 
 func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelope) {
@@ -622,6 +644,49 @@ func (s *Server) findAttachmentByIdentityLocked(identity string) (string, *connS
 	return "", nil
 }
 
+func (s *Server) tryQueuePrompt(state *connState, env protocol.Envelope) (bool, error) {
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok || record.Attachment == nil || record.Attachment.Mode != "takeover" {
+		return false, nil
+	}
+	if record.Attachment.ClientID == state.identity {
+		return false, nil
+	}
+
+	s.mu.Lock()
+	s.pendingPrompts[env.SessionID] = append(s.pendingPrompts[env.SessionID], env)
+	queued := len(s.pendingPrompts[env.SessionID])
+	s.mu.Unlock()
+	record, _ = s.registry.SetQueuedPrompts(env.SessionID, queued)
+	if err := state.writeEnvelope(mustAckEnvelopeWithData(env.ID, env.SessionID, protocol.CommandSessionPrompt, map[string]any{
+		"queued":         true,
+		"queued_prompts": queued,
+		"reason":         "takeover",
+	})); err != nil {
+		return true, err
+	}
+	s.broadcastSessionStatus(env.SessionID, map[string]any{"takeover_queue_action": "enqueued", "queued_prompts": record.QueuedPrompts})
+	return true, nil
+}
+
+func (s *Server) flushQueuedPrompts(sessionID string) {
+	s.mu.Lock()
+	queue := append([]protocol.Envelope(nil), s.pendingPrompts[sessionID]...)
+	wrapper := s.wrappers[sessionID]
+	if wrapper != nil {
+		delete(s.pendingPrompts, sessionID)
+	}
+	s.mu.Unlock()
+	if wrapper == nil || len(queue) == 0 {
+		return
+	}
+	s.registry.SetQueuedPrompts(sessionID, 0)
+	for _, env := range queue {
+		_ = wrapper.writeEnvelope(env)
+	}
+	s.broadcastSessionStatus(sessionID, map[string]any{"takeover_queue_action": "flushed", "queued_prompts": 0})
+}
+
 func (s *Server) canPrompt(state *connState, sessionID string) bool {
 	record, ok := s.registry.Get(sessionID)
 	if !ok || record.Attachment == nil {
@@ -637,18 +702,22 @@ func (s *Server) canRespondToPermission(state *connState, record session.Record)
 	if record.Attachment == nil {
 		return true
 	}
-	if record.Attachment.Mode != "inject" {
+	if record.Attachment.Mode != "inject" && record.Attachment.Mode != "takeover" {
 		return true
 	}
 	return record.Attachment.ClientID == state.identity
 }
 
-func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, session.Record, error) {
+func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, string, session.Record, error) {
 	s.mu.Lock()
 	owner := s.attachments[sessionID]
 	if !sameAttachmentOwner(owner, state) {
 		s.mu.Unlock()
-		return false, session.Record{}, nil
+		return false, "", session.Record{}, nil
+	}
+	previousMode := ""
+	if owner != nil {
+		previousMode = owner.attachedMode
 	}
 	delete(s.attachments, sessionID)
 	if owner != nil {
@@ -660,9 +729,9 @@ func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, sessio
 	s.mu.Unlock()
 	record, ok := s.registry.ClearAttachment(sessionID)
 	if !ok {
-		return false, session.Record{}, fmt.Errorf("unknown session")
+		return false, previousMode, session.Record{}, fmt.Errorf("unknown session")
 	}
-	return true, record, nil
+	return true, previousMode, record, nil
 }
 
 func (s *Server) broadcastSessionStatus(sessionID string, extraDetails map[string]any) {
@@ -674,7 +743,7 @@ func (s *Server) broadcastSessionStatus(sessionID string, extraDetails map[strin
 	if phase == "" {
 		phase = record.State
 	}
-	details := map[string]any{"state": record.State}
+	details := map[string]any{"state": record.State, "queued_prompts": record.QueuedPrompts}
 	for key, value := range extraDetails {
 		details[key] = value
 	}
@@ -757,6 +826,7 @@ func (s *Server) unregister(state *connState) {
 	if state.role == protocol.RoleWrapper && state.sessionID != "" {
 		if s.wrappers[state.sessionID] == state {
 			delete(s.wrappers, state.sessionID)
+			delete(s.pendingPrompts, state.sessionID)
 			s.registry.SetDisconnected(state.sessionID, state.runtimeID)
 			if owner := s.attachments[state.sessionID]; owner != nil {
 				delete(s.attachments, state.sessionID)
@@ -867,20 +937,28 @@ func pathWithinBase(baseDir, target string) bool {
 }
 
 func mustAckEnvelope(id, sessionID string, record session.Record, command string) protocol.Envelope {
-	env, err := protocol.NewEnvelope(protocol.MessageAck, sessionID, record.Runtime.ID, "weave-relay", id, protocol.AckPayload{
+	data := map[string]any{
+		"session":                  record.Session,
+		"runtime":                  record.Runtime,
+		"persisted_session_handle": record.PersistedSessionHandle,
+		"wrapper_connected":        record.WrapperConnected,
+		"state":                    record.State,
+		"phase":                    record.Phase,
+		"attachment":               record.Attachment,
+		"queued_prompts":           record.QueuedPrompts,
+		"pending_permissions":      record.PendingPermissions,
+		"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
+	}
+	env := mustAckEnvelopeWithData(id, sessionID, command, data)
+	env.RuntimeID = record.Runtime.ID
+	return env
+}
+
+func mustAckEnvelopeWithData(id, sessionID, command string, data map[string]any) protocol.Envelope {
+	env, err := protocol.NewEnvelope(protocol.MessageAck, sessionID, "", "weave-relay", id, protocol.AckPayload{
 		Command: command,
 		Success: true,
-		Data: map[string]any{
-			"session":                  record.Session,
-			"runtime":                  record.Runtime,
-			"persisted_session_handle": record.PersistedSessionHandle,
-			"wrapper_connected":        record.WrapperConnected,
-			"state":                    record.State,
-			"phase":                    record.Phase,
-			"attachment":               record.Attachment,
-			"pending_permissions":      record.PendingPermissions,
-			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
-		},
+		Data:    data,
 	})
 	if err != nil {
 		panic(err)

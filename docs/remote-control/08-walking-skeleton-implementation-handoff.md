@@ -1,6 +1,6 @@
 # Walking Skeleton Implementation Handoff
 
-**Status:** Active handoff plan — Tier 0, Tier 1, and the first Tier 2 spawn/load skeleton are implemented, plus a small hardening pass for session listing/state visibility; Tier 3 delivery semantics and the richer confirm-style permission lifecycle are now in place, and Tier 4 now has an initial human observe/inject slice plus a small ergonomics pass (`watch`, explicit attachment status details, same-identity observe→inject escalation), including reproducible real relay validation via `scripts/remotecontrol-permission-smoke.sh` and `scripts/remotecontrol-attach-smoke.sh`
+**Status:** Active handoff plan — Tier 0, Tier 1, and the first Tier 2 spawn/load skeleton are implemented, plus a small hardening pass for session listing/state visibility; Tier 3 delivery semantics and the richer confirm-style permission lifecycle are now in place, Tier 4 has a human observe/inject slice plus a small ergonomics pass (`watch`, explicit attachment status details, same-identity observe→inject escalation), and Tier 5 has started with takeover control semantics (queued orchestrator prompts + takeover-held permission authority) ahead of PTY byte forwarding. Reproducible real relay validation now exists via `scripts/remotecontrol-permission-smoke.sh`, `scripts/remotecontrol-attach-smoke.sh`, and `scripts/remotecontrol-takeover-queue-smoke.sh`
 **Date:** 2026-03-10
 **Audience:** another implementation agent
 **Related:**

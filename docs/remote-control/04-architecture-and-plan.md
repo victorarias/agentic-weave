@@ -1,6 +1,6 @@
 # V1 Architecture and Phased Plan
 
-**Status (2026-03-14):** Tier 0, Tier 1, the first Tier 2 spawn/load identity skeleton, Tier 3 delivery/permission semantics, and an initial Tier 4 human observe/inject slice are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes plus relay `sessions` / `spawn` / `load` / `kill-runtime` / `status` / `watch` / `attach` / `detach` / one-shot `inject`, explicit prompt delivery flags, and `allow` / `deny` for permission responses), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test works end-to-end, the confirm-style permission lifecycle is hardened, and humans can now attach in `observe` or `inject` mode with relay-enforced single-controller semantics, same-identity observe→inject escalation across reconnects, and inject-mode permission authority. Real validation now uses committed smoke scripts for both permission and observe/watch/inject flows.
+**Status (2026-03-14):** Tier 0, Tier 1, the first Tier 2 spawn/load identity skeleton, Tier 3 delivery/permission semantics, Tier 4 human observe/inject, and initial Tier 5 takeover groundwork are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes plus relay `sessions` / `spawn` / `load` / `kill-runtime` / `status` / `watch` / `attach` / `detach` / one-shot `inject`, explicit prompt delivery flags, and `allow` / `deny` for permission responses), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test works end-to-end, the confirm-style permission lifecycle is hardened, humans can attach in `observe`, `inject`, or initial `takeover` mode with relay-enforced single-controller semantics, and takeover now queues orchestrator prompts until detach/de-escalation while exposing queued-count status. Real validation now uses committed smoke scripts for permission, observe/watch/inject, and takeover-queue flows.
 
 ## Architecture Overview
 
@@ -297,6 +297,8 @@ Deliverables:
 
 **Goal**: add raw terminal control only after structured control is already stable.
 
+**Status (2026-03-14):** started. The non-PTY takeover control-plane groundwork is now in place: `session.attach` accepts `takeover`, takeover holds permission authority, relay queues orchestrator prompts while takeover is active, and queued prompts flush on detach/de-escalation. PTY byte transport is still pending.
+
 Deliverables:
 1. PTY output forwarding to attached human
 2. `pty.input`
@@ -304,7 +306,9 @@ Deliverables:
 4. takeover / de-escalation flow
 5. queued orchestrator behavior during takeover
 
-**Smoke test:** human escalates to takeover, drives the TUI, de-escalates, orchestrator resumes.
+**Current smoke test:** attach in `takeover`, send an orchestrator prompt and observe it being acknowledged as queued, then detach and observe the queued prompt flush back to the runtime.
+
+**Full smoke test (target):** human escalates to takeover, drives the TUI, de-escalates, orchestrator resumes.
 
 ### Tier 6 — Remote Hosts + Failure Recovery
 

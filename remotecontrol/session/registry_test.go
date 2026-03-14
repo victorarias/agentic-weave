@@ -94,6 +94,14 @@ func TestRegistryTracksAttachment(t *testing.T) {
 		t.Fatalf("unexpected attachment record: %#v", record)
 	}
 
+	record, ok = registry.SetQueuedPrompts("sess-1", 2)
+	if !ok {
+		t.Fatal("expected queued prompt count to update")
+	}
+	if record.QueuedPrompts != 2 {
+		t.Fatalf("expected queued prompt count to be tracked: %#v", record)
+	}
+
 	record, ok = registry.ClearAttachment("sess-1")
 	if !ok {
 		t.Fatal("expected clear attachment to succeed")

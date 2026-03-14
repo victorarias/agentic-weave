@@ -1,6 +1,6 @@
 # Remote Agent Control — Requirements
 
-**Status (2026-03-14):** Active. Tier 0 through Tier 3 are implemented, and Tier 4 now has an initial human-presence slice: relay attach locks, `observe` / `inject` attachment, read-only `watch`, and attach-aware permission authority. Interactive PTY takeover and ACP shim work remain future tiers.
+**Status (2026-03-14):** Active. Tier 0 through Tier 4 are implemented, and Tier 5 has started with takeover control semantics but not PTY transport yet: relay-enforced `takeover` attachment, queued orchestrator prompts during takeover, queued-count visibility, and takeover-held permission authority are in place. Interactive PTY forwarding (`pty.output`, `pty.input`, `pty.resize`) and ACP shim work remain future tiers.
 
 Gathered 2026-02-20 via structured interview.
 

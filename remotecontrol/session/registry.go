@@ -16,6 +16,7 @@ type Record struct {
 	State                  string                       `json:"state,omitempty"`
 	Phase                  string                       `json:"phase,omitempty"`
 	Attachment             *protocol.AttachmentInfo     `json:"attachment,omitempty"`
+	QueuedPrompts          int                          `json:"queued_prompts,omitempty"`
 	PendingPermissions     []protocol.PermissionRequest `json:"pending_permissions,omitempty"`
 	UpdatedAt              time.Time                    `json:"updated_at"`
 }
@@ -55,6 +56,7 @@ func (r *Registry) SetConnected(sessionID string, runtime protocol.RuntimeInfo, 
 	record.WrapperConnected = true
 	record.Phase = "running"
 	record.PendingPermissions = nil
+	record.QueuedPrompts = 0
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = cloneRecord(record)
@@ -75,6 +77,7 @@ func (r *Registry) SetDisconnected(sessionID, runtimeID string) (Record, bool) {
 	record.Phase = ""
 	record.Attachment = nil
 	record.PendingPermissions = nil
+	record.QueuedPrompts = 0
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = cloneRecord(record)
@@ -162,6 +165,22 @@ func (r *Registry) SetAttachment(sessionID string, attachment protocol.Attachmen
 		return Record{}, false
 	}
 	record.Attachment = &protocol.AttachmentInfo{ClientID: attachment.ClientID, Mode: attachment.Mode}
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
+}
+
+func (r *Registry) SetQueuedPrompts(sessionID string, queued int) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return Record{}, false
+	}
+	if queued < 0 {
+		queued = 0
+	}
+	record.QueuedPrompts = queued
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = cloneRecord(record)
 	return cloneRecord(record), true

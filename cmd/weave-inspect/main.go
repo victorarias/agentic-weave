@@ -109,7 +109,7 @@ func parseSubcommand(args []string) (string, string, error) {
 		return subcmd, "", nil
 	case "attach":
 		if len(args) < 2 {
-			return "", "", fmt.Errorf("attach requires a mode: observe or inject")
+			return "", "", fmt.Errorf("attach requires a mode: observe, inject, or takeover")
 		}
 		return subcmd, args[1], nil
 	case "inject":
@@ -477,8 +477,14 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		if _, err := waitForAckEnvelope(c.stream, "prompt-1", jsonMode); err != nil {
+		ack, err := waitForAckEnvelope(c.stream, "prompt-1", jsonMode)
+		if err != nil {
 			return err
+		}
+		if queued, count, ok := queuedPromptAck(ack); ok {
+			fmt.Fprintf(os.Stdout, "queued=%t\n", queued)
+			fmt.Fprintf(os.Stdout, "queued_prompts=%d\n", count)
+			return nil
 		}
 		return streamUntilComplete(c.stream, c.errCh, jsonMode)
 	default:
@@ -592,6 +598,11 @@ func printStatus(env protocol.Envelope, jsonMode bool) error {
 		fmt.Fprintf(os.Stdout, "attached_client_id=%s\n", stringValue(attachment["client_id"]))
 		fmt.Fprintf(os.Stdout, "attached_mode=%s\n", stringValue(attachment["mode"]))
 	}
+	if queuedPrompts, ok := ack.Data["queued_prompts"].(float64); ok {
+		fmt.Fprintf(os.Stdout, "queued_prompts=%d\n", int(queuedPrompts))
+	} else if queuedPrompts, ok := ack.Data["queued_prompts"].(int); ok {
+		fmt.Fprintf(os.Stdout, "queued_prompts=%d\n", queuedPrompts)
+	}
 	if pending, ok := ack.Data["pending_permissions"].([]any); ok {
 		fmt.Fprintf(os.Stdout, "pending_permissions=%d\n", len(pending))
 		for _, item := range pending {
@@ -626,18 +637,25 @@ func printSessions(env protocol.Envelope, jsonMode bool) error {
 		if pending, ok := row["pending_permissions"].([]any); ok {
 			pendingCount = len(pending)
 		}
+		queuedCount := 0
+		if queued, ok := row["queued_prompts"].(float64); ok {
+			queuedCount = int(queued)
+		} else if queued, ok := row["queued_prompts"].(int); ok {
+			queuedCount = queued
+		}
 		attachmentID := ""
 		attachmentMode := ""
 		if attachment, ok := row["attachment"].(map[string]any); ok {
 			attachmentID = stringValue(attachment["client_id"])
 			attachmentMode = stringValue(attachment["mode"])
 		}
-		fmt.Fprintf(os.Stdout, "session_id=%s runtime_id=%s state=%s phase=%s wrapper_connected=%v pending_permissions=%d attached_client_id=%s attached_mode=%s\n",
+		fmt.Fprintf(os.Stdout, "session_id=%s runtime_id=%s state=%s phase=%s wrapper_connected=%v queued_prompts=%d pending_permissions=%d attached_client_id=%s attached_mode=%s\n",
 			stringValue(sessionMap["id"]),
 			stringValue(runtimeMap["id"]),
 			stringValue(row["state"]),
 			stringValue(row["phase"]),
 			row["wrapper_connected"],
+			queuedCount,
 			pendingCount,
 			attachmentID,
 			attachmentMode,
@@ -650,6 +668,24 @@ func printSessions(env protocol.Envelope, jsonMode bool) error {
 		}
 	}
 	return nil
+}
+
+func queuedPromptAck(env protocol.Envelope) (bool, int, bool) {
+	var ack protocol.AckPayload
+	if err := env.DecodePayload(&ack); err != nil {
+		return false, 0, false
+	}
+	queued, ok := ack.Data["queued"].(bool)
+	if !ok || !queued {
+		return false, 0, false
+	}
+	count := 0
+	if queuedCount, ok := ack.Data["queued_prompts"].(float64); ok {
+		count = int(queuedCount)
+	} else if queuedCount, ok := ack.Data["queued_prompts"].(int); ok {
+		count = queuedCount
+	}
+	return true, count, true
 }
 
 func streamUntilComplete(stream *envelopeStream, errCh <-chan error, jsonMode bool) error {
@@ -782,6 +818,15 @@ func printUpdate(update protocol.SessionUpdate) (bool, error) {
 			} else {
 				fmt.Fprintf(os.Stderr, "[attachment] action=%s client=%s mode=%s\n", action, clientID, mode)
 			}
+		}
+		if queueAction := stringValue(update.Details["takeover_queue_action"]); queueAction != "" {
+			queuedCount := 0
+			if queued, ok := update.Details["queued_prompts"].(float64); ok {
+				queuedCount = int(queued)
+			} else if queued, ok := update.Details["queued_prompts"].(int); ok {
+				queuedCount = queued
+			}
+			fmt.Fprintf(os.Stderr, "[takeover queue] action=%s queued_prompts=%d\n", queueAction, queuedCount)
 		}
 	case protocol.UpdateError:
 		return false, errors.New(update.Message)

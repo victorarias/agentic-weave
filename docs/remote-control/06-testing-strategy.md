@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Status (2026-03-14):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and reproducible real relay smoke coverage via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`. Tier 4 now adds relay tests for observe conflict, same-identity observe→inject mode escalation, inject visibility, permission authority while attached, and a real observe/watch/inject smoke script at `scripts/remotecontrol-attach-smoke.sh`.
+**Status (2026-03-14):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and reproducible real relay smoke coverage via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`. Tier 4 adds relay tests for observe conflict, same-identity observe→inject mode escalation, inject visibility, permission authority while attached, and a real observe/watch/inject smoke script at `scripts/remotecontrol-attach-smoke.sh`. Tier 5 groundwork now adds relay tests for takeover queueing and takeover-held permission authority plus a real takeover queue smoke script at `scripts/remotecontrol-takeover-queue-smoke.sh`.
 
 ## Three Test Tiers
 
@@ -177,6 +177,21 @@ What it verifies:
 2. a human client can `session.attach` in `observe` mode and appear in `session.status`
 3. the same human identity can reconnect and escalate from `observe` to `inject`
 4. the watch stream sees both the injected output and the explicit `mode_changed` attachment status event
+
+### Real takeover queue smoke
+
+Initial Tier 5 control-plane behavior is reproducible with:
+
+```bash
+./scripts/remotecontrol-takeover-queue-smoke.sh
+```
+
+What it verifies:
+
+1. a human client can `session.attach` in `takeover` mode
+2. orchestrator prompts are acknowledged as queued instead of being sent to the runtime immediately
+3. `session.status` reports the queued prompt count while takeover is active
+4. detaching the takeover human flushes the queued prompt back to the runtime
 
 ---
 

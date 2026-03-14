@@ -360,6 +360,116 @@ func TestRelayHumanInjectVisibleToOrchestrator(t *testing.T) {
 	awaitMessageComplete(t, orch, "hello world")
 }
 
+func TestRelayTakeoverQueuesOrchestratorPromptsUntilDetach(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-takeover",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-takeover")
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	orchInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "orch-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new orch init: %v", err)
+	}
+	if err := orch.WriteJSON(orchInit); err != nil {
+		t.Fatalf("write orch init: %v", err)
+	}
+	awaitWSAck(t, orch, "init-1")
+	awaitReadyEvent(t, orch)
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	humanInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "human-1", "init-2", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new human init: %v", err)
+	}
+	if err := human.WriteJSON(humanInit); err != nil {
+		t.Fatalf("write human init: %v", err)
+	}
+	awaitWSAck(t, human, "init-2")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	attachAck := awaitWSAckEnvelope(t, human, "attach-1")
+	attachPayload := decodeAckPayload(t, attachAck)
+	attachment, _ := attachPayload.Data["attachment"].(map[string]any)
+	if attachment["client_id"] != "human-1" || attachment["mode"] != "takeover" {
+		t.Fatalf("unexpected takeover attachment payload: %#v", attachPayload.Data)
+	}
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "orch-1", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "say hello"})
+	if err != nil {
+		t.Fatalf("new prompt env: %v", err)
+	}
+	if err := orch.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt env: %v", err)
+	}
+	promptAck := awaitWSAckEnvelope(t, orch, "prompt-1")
+	promptPayload := decodeAckPayload(t, promptAck)
+	if queued, _ := promptPayload.Data["queued"].(bool); !queued {
+		t.Fatalf("expected prompt to be queued during takeover: %#v", promptPayload.Data)
+	}
+	if queuedCount, _ := promptPayload.Data["queued_prompts"].(float64); int(queuedCount) != 1 {
+		t.Fatalf("expected queued prompt count to be 1: %#v", promptPayload.Data)
+	}
+
+	statusEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "orch-1", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new status env: %v", err)
+	}
+	if err := orch.WriteJSON(statusEnv); err != nil {
+		t.Fatalf("write status env: %v", err)
+	}
+	statusPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, orch, "status-1"))
+	if queuedCount, _ := statusPayload.Data["queued_prompts"].(float64); int(queuedCount) != 1 {
+		t.Fatalf("expected status to report queued prompt: %#v", statusPayload.Data)
+	}
+
+	detachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "human-1", "detach-1", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
+	if err != nil {
+		t.Fatalf("new detach env: %v", err)
+	}
+	if err := human.WriteJSON(detachEnv); err != nil {
+		t.Fatalf("write detach env: %v", err)
+	}
+	awaitWSAck(t, human, "detach-1")
+	awaitMessageComplete(t, orch, "hello world")
+
+	statusEnv2, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "orch-1", "status-2", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new second status env: %v", err)
+	}
+	if err := orch.WriteJSON(statusEnv2); err != nil {
+		t.Fatalf("write second status env: %v", err)
+	}
+	statusPayload2 := decodeAckPayload(t, awaitWSAckEnvelope(t, orch, "status-2"))
+	if queuedCount, _ := statusPayload2.Data["queued_prompts"].(float64); int(queuedCount) != 0 {
+		t.Fatalf("expected queued prompts to flush after detach: %#v", statusPayload2.Data)
+	}
+}
+
 func TestRelayPermissionFlow(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -502,6 +612,90 @@ func TestRelayPermissionAuthorityHeldByAttachedHuman(t *testing.T) {
 	awaitWSError(t, orch, "allow-1", "permission authority is held by attached human")
 
 	humanAllow, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-authority", "", "human-1", "allow-2", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
+	if err != nil {
+		t.Fatalf("new human allow env: %v", err)
+	}
+	if err := human.WriteJSON(humanAllow); err != nil {
+		t.Fatalf("write human allow env: %v", err)
+	}
+	awaitWSAck(t, human, "allow-2")
+	awaitPermissionResolvedWS(t, orch, "perm-1", "allow")
+}
+
+func TestRelayTakeoverAlsoHoldsPermissionAuthority(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-perm-takeover",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-perm-takeover")
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	orchInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "orch-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new orch init: %v", err)
+	}
+	if err := orch.WriteJSON(orchInit); err != nil {
+		t.Fatalf("write orch init: %v", err)
+	}
+	awaitWSAck(t, orch, "init-1")
+	awaitReadyEvent(t, orch)
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	humanInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "human-1", "init-2", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new human init: %v", err)
+	}
+	if err := human.WriteJSON(humanInit); err != nil {
+		t.Fatalf("write human init: %v", err)
+	}
+	awaitWSAck(t, human, "init-2")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+
+	humanPrompt, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "human-1", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "need approval"})
+	if err != nil {
+		t.Fatalf("new human prompt env: %v", err)
+	}
+	if err := human.WriteJSON(humanPrompt); err != nil {
+		t.Fatalf("write human prompt env: %v", err)
+	}
+	awaitWSAck(t, human, "prompt-1")
+	awaitPermissionRequestWS(t, orch, "perm-1")
+
+	allowEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "orch-1", "allow-1", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
+	if err != nil {
+		t.Fatalf("new allow env: %v", err)
+	}
+	if err := orch.WriteJSON(allowEnv); err != nil {
+		t.Fatalf("write allow env: %v", err)
+	}
+	awaitWSError(t, orch, "allow-1", "permission authority is held by attached human")
+
+	humanAllow, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "human-1", "allow-2", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
 	if err != nil {
 		t.Fatalf("new human allow env: %v", err)
 	}
