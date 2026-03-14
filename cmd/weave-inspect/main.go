@@ -1406,7 +1406,11 @@ type takeoverInputEvent struct {
 	disconnect bool
 }
 
-var ctrlRightBracketCSIU = []byte{0x1b, '[', '9', '3', ';', '5', 'u'}
+var ctrlRightBracketSequences = [][]byte{
+	{0x1d},                               // raw Ctrl-]
+	{0x1b, '[', '9', '3', ';', '5', 'u'}, // CSI-u
+	{0x1b, '[', '2', '7', ';', '5', ';', '9', '3', '~'}, // xterm modifyOtherKeys
+}
 
 func logTakeoverByte(w io.Writer, b byte, note string) {
 	if w == nil {
@@ -1437,12 +1441,37 @@ func isPrefixBytes(have, want []byte) bool {
 	return true
 }
 
+func matchesDisconnectSequence(data []byte) (string, bool) {
+	for _, seq := range ctrlRightBracketSequences {
+		if bytes.Equal(data, seq) {
+			switch {
+			case len(seq) == 1:
+				return "ctrl-right-bracket-disconnect", true
+			case bytes.HasSuffix(seq, []byte{'u'}):
+				return "ctrl-right-bracket-csiu-disconnect", true
+			default:
+				return "ctrl-right-bracket-modifyotherkeys-disconnect", true
+			}
+		}
+	}
+	return "", false
+}
+
+func hasDisconnectPrefix(data []byte) bool {
+	for _, seq := range ctrlRightBracketSequences {
+		if len(data) > 1 && isPrefixBytes(data, seq) {
+			return true
+		}
+	}
+	return false
+}
+
 func readTakeoverInput(r io.Reader, out chan<- takeoverInputEvent, errCh chan<- error, debug io.Writer) {
 	defer close(out)
 	buf := make([]byte, 1)
 	atLineStart := true
 	pendingTilde := false
-	pendingEscape := make([]byte, 0, len(ctrlRightBracketCSIU))
+	pendingEscape := make([]byte, 0, 16)
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
@@ -1451,16 +1480,13 @@ func readTakeoverInput(r io.Reader, out chan<- takeoverInputEvent, errCh chan<- 
 
 			if len(pendingEscape) > 0 || b == 0x1b {
 				pendingEscape = append(pendingEscape, b)
-				if bytes.Equal(pendingEscape, ctrlRightBracketCSIU) {
-					logTakeoverBytes(debug, pendingEscape, "ctrl-right-bracket-csiu-disconnect")
+				if note, ok := matchesDisconnectSequence(pendingEscape); ok {
+					logTakeoverBytes(debug, pendingEscape, note)
 					out <- takeoverInputEvent{disconnect: true}
 					pendingEscape = pendingEscape[:0]
 					continue
 				}
-				// Only continue waiting if we have a proper prefix (not just ESC alone)
-				// and we're expecting more bytes for the CSI-U sequence.
-				// A single ESC (0x1b) should be forwarded immediately if nothing follows.
-				if len(pendingEscape) > 1 && isPrefixBytes(pendingEscape, ctrlRightBracketCSIU) {
+				if hasDisconnectPrefix(pendingEscape) {
 					continue
 				}
 				logTakeoverBytes(debug, pendingEscape, "flush-escape")
