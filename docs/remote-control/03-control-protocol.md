@@ -1,6 +1,6 @@
 # Control Protocol
 
-**Status (2026-03-13):** Tier 0 local protocol, Tier 1 single-session relay routing, and the Tier 2 spawn/load identity skeleton are implemented for `auth`, `initialize`, `registry.list_sessions`, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, `session.prompt`, `session.cancel`, `session.agent_ready`, and normalized `session.update`. Attach/takeover and richer host routing remain future tiers.
+**Status (2026-03-13):** Tier 0 local protocol, Tier 1 single-session relay routing, and the Tier 2 spawn/load identity skeleton are implemented for `auth`, `initialize`, `registry.list_sessions`, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, `session.prompt`, `session.cancel`, `session.permission_response`, `session.agent_ready`, and normalized `session.update`. Attach/takeover and richer host routing remain future tiers.
 
 All messages are JSON over WebSocket. Every message has a common envelope.
 
@@ -236,6 +236,9 @@ Cancel the agent's current operation.
 
 #### `session.permission_response`
 Resolve a pending permission request from the agent.
+In the current implementation, permission requests are normalized from pi RPC
+`extension_ui_request` events with `method: "confirm"`, and responses are sent
+back as `extension_ui_response`.
 ```jsonc
 {
   "payload": {

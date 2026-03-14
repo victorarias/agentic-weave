@@ -22,7 +22,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|prompt|cancel> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|prompt|cancel|allow|deny> [message]")
 	}
 	switch os.Args[1] {
 	case "local":
@@ -30,7 +30,7 @@ func run() error {
 	case "relay":
 		return runRelay(os.Args[2:])
 	default:
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|prompt|cancel> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|prompt|cancel|allow|deny> [message]")
 	}
 }
 
@@ -99,12 +99,17 @@ func runRelay(args []string) error {
 
 func parseSubcommand(args []string) (string, string, error) {
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, prompt, or cancel")
+		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, prompt, cancel, allow, or deny")
 	}
 	subcmd := args[0]
 	switch subcmd {
 	case "init", "sessions", "status", "spawn", "load", "kill-runtime", "cancel":
 		return subcmd, "", nil
+	case "allow", "deny":
+		if len(args) < 2 {
+			return "", "", fmt.Errorf("%s requires a request id", subcmd)
+		}
+		return subcmd, args[1], nil
 	case "prompt":
 		if len(args) < 2 {
 			return "", "", fmt.Errorf("prompt requires a message")
@@ -183,6 +188,17 @@ func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonM
 			return err
 		}
 		_, err = waitForAckEnvelope(c.events, "cancel-1", jsonMode)
+		return err
+	case "allow", "deny":
+		decision := subcmd
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", decision+"-1", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: message, Decision: decision})
+		if err != nil {
+			return err
+		}
+		if err := protocol.WriteJSONLine(c.conn, env); err != nil {
+			return err
+		}
+		_, err = waitForAckEnvelope(c.events, decision+"-1", jsonMode)
 		return err
 	case "prompt":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: message, Delivery: delivery})
@@ -344,6 +360,17 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 			return err
 		}
 		_, err = waitForAckEnvelope(c.events, "cancel-1", jsonMode)
+		return err
+	case "allow", "deny":
+		decision := subcmd
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", decision+"-1", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: message, Decision: decision})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		_, err = waitForAckEnvelope(c.events, decision+"-1", jsonMode)
 		return err
 	case "prompt":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: message, Delivery: delivery})
@@ -515,6 +542,14 @@ func streamUntilComplete(events <-chan protocol.Envelope, errCh <-chan error, js
 				fmt.Fprintf(os.Stderr, "\n[tool start] %s\n", evt.Update.ToolName)
 			case protocol.UpdateToolEnd:
 				fmt.Fprintf(os.Stderr, "\n[tool end] %s\n", evt.Update.ToolName)
+			case protocol.UpdatePermissionRequest:
+				fmt.Fprintf(os.Stderr, "\n[permission request] id=%s title=%s\n", evt.Update.RequestID, evt.Update.Message)
+			case protocol.UpdatePermissionResolved:
+				fmt.Fprintf(os.Stderr, "\n[permission resolved] id=%s decision=%s\n", evt.Update.RequestID, evt.Update.Decision)
+			case protocol.UpdateStatus:
+				if evt.Update.Phase != "" {
+					fmt.Fprintf(os.Stderr, "\n[status] %s\n", evt.Update.Phase)
+				}
 			case protocol.UpdateError:
 				return errors.New(evt.Update.Message)
 			case protocol.UpdateComplete:
@@ -527,7 +562,7 @@ func streamUntilComplete(events <-chan protocol.Envelope, errCh <-chan error, js
 
 func shouldInitializeRelay(subcmd string) bool {
 	switch subcmd {
-	case "init", "prompt", "cancel":
+	case "init", "prompt", "cancel", "allow", "deny":
 		return true
 	default:
 		return false

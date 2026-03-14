@@ -165,6 +165,59 @@ func TestWrapperStatus(t *testing.T) {
 	}
 }
 
+func TestWrapperPermissionFlow(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "wrapper.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := NewWrapper(Config{
+		SocketPath:      socket,
+		SessionID:       "demo-session",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  2 * time.Second,
+	})
+	go func() { _ = wrapper.Run(ctx) }()
+	waitForSocket(t, socket)
+
+	conn := dialSocket(t, socket)
+	defer conn.Close()
+	reader := startReader(t, conn)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version}))
+	awaitAck(t, reader, "init-1")
+	awaitReady(t, reader)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "need approval"}))
+	awaitAck(t, reader, "prompt-1")
+	awaitPermissionRequest(t, reader, "perm-1")
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "allow-1", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"}))
+	awaitAck(t, reader, "allow-1")
+	awaitPermissionResolved(t, reader, "perm-1", "allow")
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case env := <-reader:
+			if env.Type != protocol.MessageEvent {
+				continue
+			}
+			var evt protocol.SessionUpdateEvent
+			if err := env.DecodePayload(&evt); err != nil {
+				continue
+			}
+			if evt.Event == protocol.EventSessionUpdate && evt.Update.Kind == protocol.UpdateComplete {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for completion after permission allow")
+		}
+	}
+}
+
 func TestWrapperCancel(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "wrapper.sock")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -240,6 +293,7 @@ func TestFakePIProcess(t *testing.T) {
 
 func runFakePI(scenario string) error {
 	aborted := make(chan struct{})
+	permissionResolved := make(chan bool, 1)
 	return protocol.ReadJSONL(os.Stdin, func(line []byte) error {
 		var cmd map[string]any
 		if err := json.Unmarshal(line, &cmd); err != nil {
@@ -269,6 +323,15 @@ func runFakePI(scenario string) error {
 					<-aborted
 					_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "agent_end", "messages": []any{}})
 					return
+				}
+				if scenario == "permission" {
+					_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "extension_ui_request", "id": "perm-1", "method": "confirm", "title": "Allow file write?", "message": "Need approval"})
+					allowed := <-permissionResolved
+					if !allowed {
+						_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "message_update", "assistantMessageEvent": map[string]any{"type": "error", "reason": "permission denied"}, "message": map[string]any{"role": "assistant"}})
+						_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "agent_end", "messages": []any{}})
+						return
+					}
 				}
 				time.Sleep(20 * time.Millisecond)
 				_ = protocol.WriteJSONLine(os.Stdout, map[string]any{
@@ -300,6 +363,13 @@ func runFakePI(scenario string) error {
 				return err
 			}
 			closeOnce(aborted)
+			return nil
+		case "extension_ui_response":
+			if cmd["id"] == "perm-1" {
+				confirmed, _ := cmd["confirmed"].(bool)
+				permissionResolved <- confirmed
+				return nil
+			}
 			return nil
 		default:
 			return protocol.WriteJSONLine(os.Stdout, map[string]any{
@@ -401,6 +471,50 @@ func awaitAckEnvelope(t *testing.T, ch <-chan protocol.Envelope, id string) prot
 			return env
 		case <-deadline:
 			t.Fatalf("timed out waiting for ack %s", id)
+		}
+	}
+}
+
+func awaitPermissionRequest(t *testing.T, ch <-chan protocol.Envelope, requestID string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case env := <-ch:
+			if env.Type != protocol.MessageEvent {
+				continue
+			}
+			var evt protocol.SessionUpdateEvent
+			if err := env.DecodePayload(&evt); err != nil {
+				continue
+			}
+			if evt.Event == protocol.EventSessionUpdate && evt.Update.Kind == protocol.UpdatePermissionRequest && evt.Update.RequestID == requestID {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for permission request %s", requestID)
+		}
+	}
+}
+
+func awaitPermissionResolved(t *testing.T, ch <-chan protocol.Envelope, requestID, decision string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case env := <-ch:
+			if env.Type != protocol.MessageEvent {
+				continue
+			}
+			var evt protocol.SessionUpdateEvent
+			if err := env.DecodePayload(&evt); err != nil {
+				continue
+			}
+			if evt.Event == protocol.EventSessionUpdate && evt.Update.Kind == protocol.UpdatePermissionResolved && evt.Update.RequestID == requestID && evt.Update.Decision == decision {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for permission resolved %s", requestID)
 		}
 	}
 }

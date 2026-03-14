@@ -18,15 +18,16 @@ const (
 	MessageEvent   = "event"
 	MessageError   = "error"
 
-	CommandAuth                 = "auth"
-	CommandInitialize           = "initialize"
-	CommandSessionStatus        = "session.status"
-	CommandSessionSpawn         = "session.spawn"
-	CommandSessionLoad          = "session.load"
-	CommandRuntimeStop          = "runtime.stop"
-	CommandRegistryListSessions = "registry.list_sessions"
-	CommandSessionPrompt        = "session.prompt"
-	CommandSessionCancel        = "session.cancel"
+	CommandAuth                      = "auth"
+	CommandInitialize                = "initialize"
+	CommandSessionStatus             = "session.status"
+	CommandSessionSpawn              = "session.spawn"
+	CommandSessionLoad               = "session.load"
+	CommandRuntimeStop               = "runtime.stop"
+	CommandRegistryListSessions      = "registry.list_sessions"
+	CommandSessionPermissionResponse = "session.permission_response"
+	CommandSessionPrompt             = "session.prompt"
+	CommandSessionCancel             = "session.cancel"
 
 	RoleWrapper = "wrapper"
 	RoleClient  = "client"
@@ -34,13 +35,16 @@ const (
 	EventSessionAgentReady = "session.agent_ready"
 	EventSessionUpdate     = "session.update"
 
-	UpdateLifecycle       = "lifecycle"
-	UpdateMessageDelta    = "message_delta"
-	UpdateMessageComplete = "message_complete"
-	UpdateToolBegin       = "tool_begin"
-	UpdateToolEnd         = "tool_end"
-	UpdateError           = "error"
-	UpdateComplete        = "complete"
+	UpdateLifecycle          = "lifecycle"
+	UpdateMessageDelta       = "message_delta"
+	UpdateMessageComplete    = "message_complete"
+	UpdateToolBegin          = "tool_begin"
+	UpdateToolEnd            = "tool_end"
+	UpdatePermissionRequest  = "permission_request"
+	UpdatePermissionResolved = "permission_resolved"
+	UpdateStatus             = "status"
+	UpdateError              = "error"
+	UpdateComplete           = "complete"
 )
 
 type Envelope struct {
@@ -85,6 +89,12 @@ type RuntimeStopCommand struct {
 
 type ListSessionsCommand struct {
 	Command string `json:"command"`
+}
+
+type PermissionResponseCommand struct {
+	Command   string `json:"command"`
+	RequestID string `json:"request_id"`
+	Decision  string `json:"decision"`
 }
 
 type SessionPromptCommand struct {
@@ -138,6 +148,8 @@ type SessionUpdate struct {
 	Message    string         `json:"message,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
 	ToolName   string         `json:"tool_name,omitempty"`
+	RequestID  string         `json:"request_id,omitempty"`
+	Decision   string         `json:"decision,omitempty"`
 	IsError    bool           `json:"is_error,omitempty"`
 	Details    map[string]any `json:"details,omitempty"`
 }

@@ -50,6 +50,9 @@ type Wrapper struct {
 
 	bootstrapState map[string]any
 
+	permissionMu      sync.Mutex
+	pendingPermission map[string]map[string]any
+
 	closed chan struct{}
 }
 
@@ -71,12 +74,13 @@ func NewWrapper(cfg Config) *Wrapper {
 		cfg.Logger = log.New(io.Discard, "", 0)
 	}
 	return &Wrapper{
-		cfg:        cfg,
-		runtimeID:  fmt.Sprintf("rt-%d", time.Now().UTC().UnixNano()),
-		descriptor: descriptor,
-		peers:      make(map[int64]peer),
-		pending:    make(map[string]chan piResponse),
-		closed:     make(chan struct{}),
+		cfg:               cfg,
+		runtimeID:         fmt.Sprintf("rt-%d", time.Now().UTC().UnixNano()),
+		descriptor:        descriptor,
+		peers:             make(map[int64]peer),
+		pending:           make(map[string]chan piResponse),
+		pendingPermission: make(map[string]map[string]any),
+		closed:            make(chan struct{}),
 	}
 }
 
@@ -303,6 +307,26 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 				"supports_permission": w.descriptor.SupportsPermission,
 			},
 		})
+	case protocol.CommandSessionPermissionResponse:
+		if !p.initialized() {
+			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.permission_response"))
+			return nil
+		}
+		var resp protocol.PermissionResponseCommand
+		if err := env.DecodePayload(&resp); err != nil {
+			_ = w.sendError(p, env.ID, err)
+			return nil
+		}
+		if err := w.respondToPermission(resp); err != nil {
+			_ = w.sendError(p, env.ID, err)
+			return nil
+		}
+		if err := w.sendAck(p, env.ID, protocol.CommandSessionPermissionResponse, nil); err != nil {
+			return err
+		}
+		w.broadcastUpdate(protocol.SessionUpdate{Kind: protocol.UpdatePermissionResolved, RequestID: resp.RequestID, Decision: resp.Decision, Details: map[string]any{"request_id": resp.RequestID, "decision": resp.Decision}})
+		w.broadcastUpdate(protocol.SessionUpdate{Kind: protocol.UpdateStatus, Phase: "running", Details: map[string]any{"run_state": "running"}})
+		return nil
 	case protocol.CommandSessionPrompt:
 		if !p.initialized() {
 			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.prompt"))
@@ -365,6 +389,36 @@ func promptToPICommand(prompt protocol.SessionPromptCommand) (map[string]any, er
 		return map[string]any{"type": "follow_up", "message": msg}, nil
 	default:
 		return nil, fmt.Errorf("unsupported delivery %q", prompt.Delivery)
+	}
+}
+
+func (w *Wrapper) respondToPermission(resp protocol.PermissionResponseCommand) error {
+	w.permissionMu.Lock()
+	request, ok := w.pendingPermission[resp.RequestID]
+	if ok {
+		delete(w.pendingPermission, resp.RequestID)
+	}
+	w.permissionMu.Unlock()
+	if !ok {
+		return fmt.Errorf("unknown permission request %q", resp.RequestID)
+	}
+	method := stringValue(request["method"])
+	payload := map[string]any{"type": "extension_ui_response", "id": resp.RequestID}
+	switch method {
+	case "confirm":
+		payload["confirmed"] = resp.Decision == "allow"
+		if resp.Decision != "allow" && resp.Decision != "deny" {
+			return fmt.Errorf("unsupported permission decision %q", resp.Decision)
+		}
+		if resp.Decision == "deny" {
+			payload["confirmed"] = false
+		}
+		w.piInMu.Lock()
+		err := protocol.WriteJSONLine(w.piIn, payload)
+		w.piInMu.Unlock()
+		return err
+	default:
+		return fmt.Errorf("unsupported permission request method %q", method)
 	}
 }
 

@@ -1,6 +1,6 @@
 # V1 Architecture and Phased Plan
 
-**Status (2026-03-13):** Tier 0, Tier 1, and the first Tier 2 spawn/load identity skeleton are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes plus relay `sessions` / `spawn` / `load` / `kill-runtime` / `status` and explicit prompt delivery flags), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test now works end-to-end, and Tier 3 delivery semantics work has started; permission mediation still remains ahead.
+**Status (2026-03-13):** Tier 0, Tier 1, and the first Tier 2 spawn/load identity skeleton are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes plus relay `sessions` / `spawn` / `load` / `kill-runtime` / `status`, explicit prompt delivery flags, and `allow` / `deny` for permission responses), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test now works end-to-end, and Tier 3 delivery semantics plus an initial permission-response seam are in place; richer permission behavior is still ahead.
 
 ## Architecture Overview
 

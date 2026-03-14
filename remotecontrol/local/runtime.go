@@ -158,11 +158,37 @@ func (w *Wrapper) readPiOutput(stdout io.Reader) {
 			}
 			return nil
 		}
+		if updates := w.normalizeUIRequest(msg); len(updates) > 0 {
+			for _, update := range updates {
+				w.broadcastUpdate(update)
+			}
+			return nil
+		}
 		for _, update := range normalizePIEvent(msg) {
 			w.broadcastUpdate(update)
 		}
 		return nil
 	})
+}
+
+func (w *Wrapper) normalizeUIRequest(msg map[string]any) []protocol.SessionUpdate {
+	if stringValue(msg["type"]) != "extension_ui_request" {
+		return nil
+	}
+	if stringValue(msg["method"]) != "confirm" {
+		return nil
+	}
+	requestID := stringValue(msg["id"])
+	if requestID == "" {
+		return nil
+	}
+	w.permissionMu.Lock()
+	w.pendingPermission[requestID] = msg
+	w.permissionMu.Unlock()
+	return []protocol.SessionUpdate{
+		{Kind: protocol.UpdatePermissionRequest, RequestID: requestID, Message: stringValue(msg["title"]), Details: msg},
+		{Kind: protocol.UpdateStatus, Phase: "waiting_permission", Details: map[string]any{"run_state": "waiting_permission", "request_id": requestID}},
+	}
 }
 
 func normalizePIEvent(msg map[string]any) []protocol.SessionUpdate {

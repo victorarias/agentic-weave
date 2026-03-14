@@ -223,7 +223,8 @@ This file tracks current work items and progress.
     - [x] explicit delivery aliases in wrapper/runtime mapping (`foreground`, `interrupt`, `queue`, `deliver_when_idle`)
     - [x] inspector `--delivery` flag for prompt commands
     - [x] tests for delivery mapping
-    - [ ] permission mediation lifecycle
+    - [x] initial permission response seam (`session.permission_response`, `allow` / `deny`)
+    - [ ] richer permission mediation lifecycle
 
 ---
 
@@ -258,6 +259,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-13 22:50: Extended the Tier 3 seam with initial permission mediation support: wrapper now normalizes pi `extension_ui_request` confirm dialogs into `permission_request`, accepts `session.permission_response`, `weave-inspect` supports `allow` / `deny`, and fake-pi-backed tests cover a local permission request/response loop.
 - 2026-03-13 22:39: Started Tier 3 delivery semantics: added explicit prompt delivery aliases (`foreground`, `interrupt`, `queue`, `deliver_when_idle`) in the wrapper/runtime mapping, added `weave-inspect --delivery ... prompt`, and added delivery mapping tests.
 - 2026-03-13 22:30: Added a Tier 2 hardening pass: relay `registry.list_sessions`, `weave-inspect relay sessions`, explicit running/stopped state in session records, a graceful-stop attempt before kill fallback, relay tests for session listing, and a manual smoke run showing session listing before and after runtime stop.
 - 2026-03-13 22:14: Finished the first Tier 2 spawn/load skeleton: added relay-managed `session.spawn`, `runtime.stop`, and `session.load`, extended `weave-inspect` with `spawn` / `kill-runtime` / `load`, added relay launcher + spawn/load tests, and verified a real pi-backed `spawn → prompt → runtime.stop → load → prompt` smoke flow returning `SPAWN_OK` then `LOAD_OK`.

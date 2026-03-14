@@ -1,6 +1,6 @@
 # Walking Skeleton Implementation Handoff
 
-**Status:** Active handoff plan — Tier 0, Tier 1, and the first Tier 2 spawn/load skeleton are implemented, plus a small hardening pass for session listing/state visibility; Tier 3 delivery semantics have started, but permission mediation is still pending
+**Status:** Active handoff plan — Tier 0, Tier 1, and the first Tier 2 spawn/load skeleton are implemented, plus a small hardening pass for session listing/state visibility; Tier 3 delivery semantics have started and an initial permission-response seam is in place, but richer permission mediation is still pending
 **Date:** 2026-03-10
 **Audience:** another implementation agent
 **Related:**
