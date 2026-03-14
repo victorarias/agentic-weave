@@ -23,7 +23,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|attach|detach|inject|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|watch|attach|detach|inject|prompt|cancel|allow|deny> [message]")
 	}
 	switch os.Args[1] {
 	case "local":
@@ -31,7 +31,7 @@ func run() error {
 	case "relay":
 		return runRelay(os.Args[2:])
 	default:
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|attach|detach|inject|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|watch|attach|detach|inject|prompt|cancel|allow|deny> [message]")
 	}
 }
 
@@ -48,7 +48,7 @@ func runLocal(args []string) error {
 	if err != nil {
 		return err
 	}
-	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" || subcmd == "attach" || subcmd == "detach" || subcmd == "inject" {
+	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" || subcmd == "watch" || subcmd == "attach" || subcmd == "detach" || subcmd == "inject" {
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	}
 
@@ -101,11 +101,11 @@ func runRelay(args []string) error {
 
 func parseSubcommand(args []string) (string, string, error) {
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, attach, detach, inject, prompt, cancel, allow, or deny")
+		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, watch, attach, detach, inject, prompt, cancel, allow, or deny")
 	}
 	subcmd := args[0]
 	switch subcmd {
-	case "init", "sessions", "status", "spawn", "load", "kill-runtime", "detach", "cancel":
+	case "init", "sessions", "status", "spawn", "load", "kill-runtime", "watch", "detach", "cancel":
 		return subcmd, "", nil
 	case "attach":
 		if len(args) < 2 {
@@ -323,6 +323,8 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 	switch subcmd {
 	case "init":
 		return nil
+	case "watch":
+		return streamUntilInterrupt(c.stream, c.errCh, jsonMode)
 	case "sessions":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, "", "", "weave-inspect", "sessions-1", protocol.ListSessionsCommand{Command: protocol.CommandRegistryListSessions})
 		if err != nil {
@@ -685,33 +687,11 @@ func streamUntilComplete(stream *envelopeStream, errCh <-chan error, jsonMode bo
 		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
 			continue
 		}
-		switch evt.Update.Kind {
-		case protocol.UpdateMessageDelta:
-			fmt.Fprint(os.Stdout, evt.Update.Delta)
-		case protocol.UpdateMessageComplete:
-			if evt.Update.Message != "" {
-				fmt.Fprintln(os.Stdout)
-			}
-		case protocol.UpdateToolBegin:
-			fmt.Fprintf(os.Stderr, "\n[tool start] %s\n", evt.Update.ToolName)
-		case protocol.UpdateToolEnd:
-			fmt.Fprintf(os.Stderr, "\n[tool end] %s\n", evt.Update.ToolName)
-		case protocol.UpdatePermissionRequest:
-			title := evt.Update.Message
-			if evt.Update.Permission != nil && evt.Update.Permission.Title != "" {
-				title = evt.Update.Permission.Title
-			}
-			fmt.Fprintf(os.Stderr, "\n[permission request] id=%s title=%s\n", evt.Update.RequestID, title)
-		case protocol.UpdatePermissionResolved:
-			fmt.Fprintf(os.Stderr, "\n[permission resolved] id=%s decision=%s\n", evt.Update.RequestID, evt.Update.Decision)
-		case protocol.UpdateStatus:
-			if evt.Update.Phase != "" {
-				fmt.Fprintf(os.Stderr, "\n[status] %s\n", evt.Update.Phase)
-			}
-		case protocol.UpdateError:
-			return errors.New(evt.Update.Message)
-		case protocol.UpdateComplete:
-			fmt.Fprintln(os.Stdout)
+		done, updateErr := printUpdate(evt.Update)
+		if updateErr != nil {
+			return updateErr
+		}
+		if done {
 			return nil
 		}
 	}
@@ -759,40 +739,62 @@ func streamUntilInterrupt(stream *envelopeStream, errCh <-chan error, jsonMode b
 		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
 			continue
 		}
-		switch evt.Update.Kind {
-		case protocol.UpdateMessageDelta:
-			fmt.Fprint(os.Stdout, evt.Update.Delta)
-		case protocol.UpdateMessageComplete:
-			if evt.Update.Message != "" {
-				fmt.Fprintln(os.Stdout)
-			}
-		case protocol.UpdateToolBegin:
-			fmt.Fprintf(os.Stderr, "\n[tool start] %s\n", evt.Update.ToolName)
-		case protocol.UpdateToolEnd:
-			fmt.Fprintf(os.Stderr, "\n[tool end] %s\n", evt.Update.ToolName)
-		case protocol.UpdatePermissionRequest:
-			title := evt.Update.Message
-			if evt.Update.Permission != nil && evt.Update.Permission.Title != "" {
-				title = evt.Update.Permission.Title
-			}
-			fmt.Fprintf(os.Stderr, "\n[permission request] id=%s title=%s\n", evt.Update.RequestID, title)
-		case protocol.UpdatePermissionResolved:
-			fmt.Fprintf(os.Stderr, "\n[permission resolved] id=%s decision=%s\n", evt.Update.RequestID, evt.Update.Decision)
-		case protocol.UpdateStatus:
-			if evt.Update.Phase != "" {
-				fmt.Fprintf(os.Stderr, "\n[status] %s\n", evt.Update.Phase)
-			}
-		case protocol.UpdateError:
-			return errors.New(evt.Update.Message)
-		case protocol.UpdateComplete:
-			fmt.Fprintln(os.Stdout)
+		_, updateErr := printUpdate(evt.Update)
+		if updateErr != nil {
+			return updateErr
 		}
 	}
 }
 
+func printUpdate(update protocol.SessionUpdate) (bool, error) {
+	switch update.Kind {
+	case protocol.UpdateMessageDelta:
+		fmt.Fprint(os.Stdout, update.Delta)
+	case protocol.UpdateMessageComplete:
+		if update.Message != "" {
+			fmt.Fprintln(os.Stdout)
+		}
+	case protocol.UpdateToolBegin:
+		fmt.Fprintf(os.Stderr, "\n[tool start] %s\n", update.ToolName)
+	case protocol.UpdateToolEnd:
+		fmt.Fprintf(os.Stderr, "\n[tool end] %s\n", update.ToolName)
+	case protocol.UpdatePermissionRequest:
+		title := update.Message
+		if update.Permission != nil && update.Permission.Title != "" {
+			title = update.Permission.Title
+		}
+		fmt.Fprintf(os.Stderr, "\n[permission request] id=%s title=%s\n", update.RequestID, title)
+	case protocol.UpdatePermissionResolved:
+		fmt.Fprintf(os.Stderr, "\n[permission resolved] id=%s decision=%s\n", update.RequestID, update.Decision)
+	case protocol.UpdateStatus:
+		if update.Phase != "" {
+			fmt.Fprintf(os.Stderr, "\n[status] %s\n", update.Phase)
+		}
+		if action := stringValue(update.Details["attachment_action"]); action != "" {
+			attachment := mapValue(update.Details["attachment"])
+			clientID := stringValue(update.Details["attachment_client_id"])
+			if clientID == "" {
+				clientID = stringValue(attachment["client_id"])
+			}
+			mode := stringValue(attachment["mode"])
+			if previousMode := stringValue(update.Details["previous_mode"]); previousMode != "" {
+				fmt.Fprintf(os.Stderr, "[attachment] action=%s client=%s mode=%s previous_mode=%s\n", action, clientID, mode, previousMode)
+			} else {
+				fmt.Fprintf(os.Stderr, "[attachment] action=%s client=%s mode=%s\n", action, clientID, mode)
+			}
+		}
+	case protocol.UpdateError:
+		return false, errors.New(update.Message)
+	case protocol.UpdateComplete:
+		fmt.Fprintln(os.Stdout)
+		return true, nil
+	}
+	return false, nil
+}
+
 func shouldInitializeRelay(subcmd string) bool {
 	switch subcmd {
-	case "init", "attach", "detach", "inject", "prompt", "cancel", "allow", "deny":
+	case "init", "watch", "attach", "detach", "inject", "prompt", "cancel", "allow", "deny":
 		return true
 	default:
 		return false
@@ -802,4 +804,9 @@ func shouldInitializeRelay(subcmd string) bool {
 func stringValue(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+func mapValue(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
 }

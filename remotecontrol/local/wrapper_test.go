@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -404,12 +405,16 @@ func TestWrapperCancel(t *testing.T) {
 	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "cancel-1", protocol.SessionCancelCommand{
 		Command: protocol.CommandSessionCancel,
 	}))
-	awaitAck(t, reader, "cancel-1")
-
 	deadline := time.After(10 * time.Second)
-	for {
+	seenAck := false
+	seenComplete := false
+	for !seenAck || !seenComplete {
 		select {
 		case env := <-reader:
+			if env.Type == protocol.MessageAck && env.ID == "cancel-1" {
+				seenAck = true
+				continue
+			}
 			if env.Type != protocol.MessageEvent {
 				continue
 			}
@@ -418,10 +423,10 @@ func TestWrapperCancel(t *testing.T) {
 				continue
 			}
 			if evt.Event == protocol.EventSessionUpdate && evt.Update.Kind == protocol.UpdateComplete {
-				return
+				seenComplete = true
 			}
 		case <-deadline:
-			t.Fatal("timed out waiting for completion after cancel")
+			t.Fatal("timed out waiting for cancel ack and completion")
 		}
 	}
 }
@@ -441,6 +446,12 @@ func TestFakePIProcess(t *testing.T) {
 func runFakePI(scenario string) error {
 	aborted := make(chan struct{})
 	permissionResolved := make(chan bool, 1)
+	var writeMu sync.Mutex
+	write := func(payload map[string]any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return protocol.WriteJSONLine(os.Stdout, payload)
+	}
 	return protocol.ReadJSONL(os.Stdin, func(line []byte) error {
 		var cmd map[string]any
 		if err := json.Unmarshal(line, &cmd); err != nil {
@@ -448,7 +459,7 @@ func runFakePI(scenario string) error {
 		}
 		switch cmd["type"] {
 		case "get_state":
-			return protocol.WriteJSONLine(os.Stdout, map[string]any{
+			return write(map[string]any{
 				"id":      cmd["id"],
 				"type":    "response",
 				"command": "get_state",
@@ -462,39 +473,39 @@ func runFakePI(scenario string) error {
 				"command": cmd["type"],
 				"success": true,
 			}
-			if err := protocol.WriteJSONLine(os.Stdout, response); err != nil {
+			if err := write(response); err != nil {
 				return err
 			}
 			if scenario == "duplicate_response" {
-				if err := protocol.WriteJSONLine(os.Stdout, response); err != nil {
+				if err := write(response); err != nil {
 					return err
 				}
 			}
 			go func() {
-				_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "agent_start"})
+				_ = write(map[string]any{"type": "agent_start"})
 				if scenario == "abortable" {
 					<-aborted
-					_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "agent_end", "messages": []any{}})
+					_ = write(map[string]any{"type": "agent_end", "messages": []any{}})
 					return
 				}
 				if scenario == "permission" {
 					time.Sleep(20 * time.Millisecond)
-					_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "extension_ui_request", "id": "perm-1", "method": "confirm", "title": "Allow file write?", "message": "Need approval"})
+					_ = write(map[string]any{"type": "extension_ui_request", "id": "perm-1", "method": "confirm", "title": "Allow file write?", "message": "Need approval"})
 					allowed := <-permissionResolved
 					if !allowed {
-						_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "message_update", "assistantMessageEvent": map[string]any{"type": "error", "reason": "permission denied"}, "message": map[string]any{"role": "assistant"}})
-						_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "agent_end", "messages": []any{}})
+						_ = write(map[string]any{"type": "message_update", "assistantMessageEvent": map[string]any{"type": "error", "reason": "permission denied"}, "message": map[string]any{"role": "assistant"}})
+						_ = write(map[string]any{"type": "agent_end", "messages": []any{}})
 						return
 					}
 				}
 				time.Sleep(20 * time.Millisecond)
-				_ = protocol.WriteJSONLine(os.Stdout, map[string]any{
+				_ = write(map[string]any{
 					"type":                  "message_update",
 					"assistantMessageEvent": map[string]any{"type": "text_delta", "delta": "hello"},
 					"message":               map[string]any{"role": "assistant"},
 				})
 				time.Sleep(20 * time.Millisecond)
-				_ = protocol.WriteJSONLine(os.Stdout, map[string]any{
+				_ = write(map[string]any{
 					"type": "message_end",
 					"message": map[string]any{
 						"role": "assistant",
@@ -504,11 +515,11 @@ func runFakePI(scenario string) error {
 					},
 				})
 				time.Sleep(20 * time.Millisecond)
-				_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "agent_end", "messages": []any{}})
+				_ = write(map[string]any{"type": "agent_end", "messages": []any{}})
 			}()
 			return nil
 		case "abort":
-			if err := protocol.WriteJSONLine(os.Stdout, map[string]any{
+			if err := write(map[string]any{
 				"id":      cmd["id"],
 				"type":    "response",
 				"command": "abort",
@@ -526,7 +537,7 @@ func runFakePI(scenario string) error {
 			}
 			return nil
 		default:
-			return protocol.WriteJSONLine(os.Stdout, map[string]any{
+			return write(map[string]any{
 				"id":      cmd["id"],
 				"type":    "response",
 				"command": cmd["type"],
