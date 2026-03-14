@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -620,6 +622,116 @@ func TestRelayPermissionAuthorityHeldByAttachedHuman(t *testing.T) {
 	}
 	awaitWSAck(t, human, "allow-2")
 	awaitPermissionResolvedWS(t, orch, "perm-1", "allow")
+}
+
+func TestRelayTakeoverPTYInputVisibleToAttachedHuman(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:      "sess-pty",
+		PTYBin:         helperProcessPath(t),
+		PTYArgs:        []string{"-test.run=TestFakePTYProcess", "--"},
+		Env:            map[string]string{"WEAVE_FAKE_PTY": "1"},
+		StartupTimeout: 5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-pty")
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new init env: %v", err)
+	}
+	if err := human.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init env: %v", err)
+	}
+	awaitWSAck(t, human, "init-1")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+
+	inputEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "pty-1", protocol.PTYInputCommand{Command: protocol.CommandPTYInput, Data: "aGVsbG8NCg=="})
+	if err != nil {
+		t.Fatalf("new pty input env: %v", err)
+	}
+	if err := human.WriteJSON(inputEnv); err != nil {
+		t.Fatalf("write pty input env: %v", err)
+	}
+	awaitWSAck(t, human, "pty-1")
+	awaitPTYOutputContainsWS(t, human, "hello")
+
+	resizeEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "resize-1", protocol.PTYResizeCommand{Command: protocol.CommandPTYResize, Rows: 30, Cols: 90})
+	if err != nil {
+		t.Fatalf("new pty resize env: %v", err)
+	}
+	if err := human.WriteJSON(resizeEnv); err != nil {
+		t.Fatalf("write pty resize env: %v", err)
+	}
+	awaitWSAck(t, human, "resize-1")
+}
+
+func TestRelayRejectsPTYInputWithoutTakeover(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:      "sess-pty-observe",
+		PTYBin:         helperProcessPath(t),
+		PTYArgs:        []string{"-test.run=TestFakePTYProcess", "--"},
+		Env:            map[string]string{"WEAVE_FAKE_PTY": "1"},
+		StartupTimeout: 5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-pty-observe")
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-observe", "", "human-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new init env: %v", err)
+	}
+	if err := human.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init env: %v", err)
+	}
+	awaitWSAck(t, human, "init-1")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-observe", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "observe"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+
+	inputEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-observe", "", "human-1", "pty-1", protocol.PTYInputCommand{Command: protocol.CommandPTYInput, Data: "aGVsbG8NCg=="})
+	if err != nil {
+		t.Fatalf("new pty input env: %v", err)
+	}
+	if err := human.WriteJSON(inputEnv); err != nil {
+		t.Fatalf("write pty input env: %v", err)
+	}
+	awaitWSError(t, human, "pty-1", "pty authority is held by attached human in takeover")
 }
 
 func TestRelayTakeoverAlsoHoldsPermissionAuthority(t *testing.T) {
@@ -1402,6 +1514,14 @@ func TestFakePIProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestFakePTYProcess(t *testing.T) {
+	if os.Getenv("WEAVE_FAKE_PTY") != "1" {
+		return
+	}
+	_, _ = io.Copy(os.Stdout, os.Stdin)
+	os.Exit(0)
+}
+
 func helperProcessPath(t *testing.T) string {
 	t.Helper()
 	exe, err := os.Executable()
@@ -1608,6 +1728,32 @@ func awaitPermissionRequestWS(t *testing.T, conn *websocket.Conn, requestID stri
 			continue
 		}
 		if evt.Update.Kind == protocol.UpdatePermissionRequest && evt.Update.RequestID == requestID {
+			return
+		}
+	}
+}
+
+func awaitPTYOutputContainsWS(t *testing.T, conn *websocket.Conn, want string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	for {
+		var env protocol.Envelope
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read pty output: %v", err)
+		}
+		if env.Type != protocol.MessageEvent {
+			continue
+		}
+		var evt protocol.PTYOutputEvent
+		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventPTYOutput {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(evt.Data)
+		if err != nil {
+			t.Fatalf("decode pty output: %v", err)
+		}
+		if strings.Contains(string(data), want) {
 			return
 		}
 	}

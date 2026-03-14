@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +25,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|watch|attach|detach|inject|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|watch|attach|detach|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
 	}
 	switch os.Args[1] {
 	case "local":
@@ -31,7 +33,7 @@ func run() error {
 	case "relay":
 		return runRelay(os.Args[2:])
 	default:
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|watch|attach|detach|inject|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|watch|attach|detach|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
 	}
 }
 
@@ -48,7 +50,7 @@ func runLocal(args []string) error {
 	if err != nil {
 		return err
 	}
-	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" || subcmd == "watch" || subcmd == "attach" || subcmd == "detach" || subcmd == "inject" {
+	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" || subcmd == "watch" || subcmd == "attach" || subcmd == "detach" || subcmd == "inject" || subcmd == "pty-input" || subcmd == "pty-resize" {
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	}
 
@@ -72,7 +74,7 @@ func runRelay(args []string) error {
 	sessionID := fs.String("session", "local", "Logical session id")
 	jsonMode := fs.Bool("json", false, "Print raw JSON envelopes")
 	delivery := fs.String("delivery", "", "Prompt delivery mode: default, foreground, interrupt, queue, deliver_when_idle")
-	identity := fs.String("identity", "weave-inspect", "Client identity used for attach/inject authority")
+	identity := fs.String("identity", "weave-inspect", "Client identity used for attach/inject/takeover authority")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -101,7 +103,7 @@ func runRelay(args []string) error {
 
 func parseSubcommand(args []string) (string, string, error) {
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, watch, attach, detach, inject, prompt, cancel, allow, or deny")
+		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, watch, attach, detach, inject, pty-input, pty-resize, prompt, cancel, allow, or deny")
 	}
 	subcmd := args[0]
 	switch subcmd {
@@ -115,6 +117,16 @@ func parseSubcommand(args []string) (string, string, error) {
 	case "inject":
 		if len(args) < 2 {
 			return "", "", fmt.Errorf("inject requires a message")
+		}
+		return subcmd, strings.Join(args[1:], " "), nil
+	case "pty-input":
+		if len(args) < 2 {
+			return "", "", fmt.Errorf("pty-input requires text to send")
+		}
+		return subcmd, strings.Join(args[1:], " "), nil
+	case "pty-resize":
+		if len(args) != 3 {
+			return "", "", fmt.Errorf("pty-resize requires rows and cols")
 		}
 		return subcmd, strings.Join(args[1:], " "), nil
 	case "allow", "deny":
@@ -212,7 +224,7 @@ func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonM
 			return err
 		}
 		return printStatus(ack, jsonMode)
-	case "sessions", "spawn", "load", "kill-runtime", "attach", "detach", "inject":
+	case "sessions", "spawn", "load", "kill-runtime", "attach", "detach", "inject", "pty-input", "pty-resize":
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
@@ -448,6 +460,36 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 			}
 		}
 		return streamErr
+	case "pty-input":
+		encoded := base64.StdEncoding.EncodeToString([]byte(message))
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "pty-input-1", protocol.PTYInputCommand{Command: protocol.CommandPTYInput, Data: encoded})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		_, err = waitForAckEnvelope(c.stream, "pty-input-1", jsonMode)
+		return err
+	case "pty-resize":
+		parts := strings.Fields(message)
+		rows, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return fmt.Errorf("invalid rows %q", parts[0])
+		}
+		cols, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return fmt.Errorf("invalid cols %q", parts[1])
+		}
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "pty-resize-1", protocol.PTYResizeCommand{Command: protocol.CommandPTYResize, Rows: rows, Cols: cols})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		_, err = waitForAckEnvelope(c.stream, "pty-resize-1", jsonMode)
+		return err
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
 		if err != nil {
@@ -603,6 +645,12 @@ func printStatus(env protocol.Envelope, jsonMode bool) error {
 	} else if queuedPrompts, ok := ack.Data["queued_prompts"].(int); ok {
 		fmt.Fprintf(os.Stdout, "queued_prompts=%d\n", queuedPrompts)
 	}
+	if ptyRows, ok := ack.Data["pty_rows"].(float64); ok {
+		fmt.Fprintf(os.Stdout, "pty_rows=%d\n", int(ptyRows))
+	}
+	if ptyCols, ok := ack.Data["pty_cols"].(float64); ok {
+		fmt.Fprintf(os.Stdout, "pty_cols=%d\n", int(ptyCols))
+	}
 	if pending, ok := ack.Data["pending_permissions"].([]any); ok {
 		fmt.Fprintf(os.Stdout, "pending_permissions=%d\n", len(pending))
 		for _, item := range pending {
@@ -716,16 +764,12 @@ func streamUntilComplete(stream *envelopeStream, errCh <-chan error, jsonMode bo
 			_ = protocol.WriteJSONLine(os.Stdout, env)
 			continue
 		}
-		if env.Type != protocol.MessageEvent {
-			continue
+		done, handled, eventErr := printEventEnvelope(env)
+		if eventErr != nil {
+			return eventErr
 		}
-		var evt protocol.SessionUpdateEvent
-		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
+		if !handled {
 			continue
-		}
-		done, updateErr := printUpdate(evt.Update)
-		if updateErr != nil {
-			return updateErr
 		}
 		if done {
 			return nil
@@ -768,17 +812,47 @@ func streamUntilInterrupt(stream *envelopeStream, errCh <-chan error, jsonMode b
 			_ = protocol.WriteJSONLine(os.Stdout, env)
 			continue
 		}
-		if env.Type != protocol.MessageEvent {
-			continue
-		}
-		var evt protocol.SessionUpdateEvent
-		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
-			continue
-		}
-		_, updateErr := printUpdate(evt.Update)
+		_, handled, updateErr := printEventEnvelope(env)
 		if updateErr != nil {
 			return updateErr
 		}
+		if !handled {
+			continue
+		}
+	}
+}
+
+func printEventEnvelope(env protocol.Envelope) (bool, bool, error) {
+	if env.Type != protocol.MessageEvent {
+		return false, false, nil
+	}
+	var meta struct {
+		Event string `json:"event"`
+	}
+	if err := env.DecodePayload(&meta); err != nil {
+		return false, false, nil
+	}
+	switch meta.Event {
+	case protocol.EventSessionUpdate:
+		var evt protocol.SessionUpdateEvent
+		if err := env.DecodePayload(&evt); err != nil {
+			return false, false, nil
+		}
+		done, err := printUpdate(evt.Update)
+		return done, true, err
+	case protocol.EventPTYOutput:
+		var evt protocol.PTYOutputEvent
+		if err := env.DecodePayload(&evt); err != nil {
+			return false, false, nil
+		}
+		data, err := base64.StdEncoding.DecodeString(evt.Data)
+		if err != nil {
+			return false, true, err
+		}
+		fmt.Fprint(os.Stdout, string(data))
+		return false, true, nil
+	default:
+		return false, false, nil
 	}
 }
 
@@ -839,7 +913,7 @@ func printUpdate(update protocol.SessionUpdate) (bool, error) {
 
 func shouldInitializeRelay(subcmd string) bool {
 	switch subcmd {
-	case "init", "watch", "attach", "detach", "inject", "prompt", "cancel", "allow", "deny":
+	case "init", "watch", "attach", "detach", "inject", "pty-input", "pty-resize", "prompt", "cancel", "allow", "deny":
 		return true
 	default:
 		return false

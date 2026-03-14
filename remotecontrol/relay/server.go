@@ -267,6 +267,12 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 	case protocol.CommandSessionDetach:
 		s.handleSessionDetach(state, env)
 		return
+	case protocol.CommandPTYInput:
+		s.handlePTYInput(state, env)
+		return
+	case protocol.CommandPTYResize:
+		s.handlePTYResize(state, env)
+		return
 	}
 
 	if env.SessionID == "" {
@@ -323,6 +329,10 @@ func (s *Server) handleWrapperEnvelope(state *connState, env protocol.Envelope) 
 	}
 	s.mu.Unlock()
 
+	if isPTYOutputEnvelope(env) {
+		s.forwardPTYOutput(sessionID, env)
+		return
+	}
 	s.applyWrapperEnvelope(state, env)
 	for _, client := range clients {
 		_ = client.writeEnvelope(env)
@@ -622,6 +632,62 @@ func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelop
 	_ = wrapper.writeEnvelope(env)
 }
 
+func (s *Server) handlePTYInput(state *connState, env protocol.Envelope) {
+	if env.SessionID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for pty.input")
+		return
+	}
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok {
+		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
+		return
+	}
+	if !record.WrapperConnected {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	if !s.canUsePTY(state, record) {
+		_ = s.sendError(state, env.ID, env.SessionID, "pty authority is held by attached human in takeover")
+		return
+	}
+	s.mu.Lock()
+	wrapper := s.wrappers[env.SessionID]
+	s.mu.Unlock()
+	if wrapper == nil {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	_ = wrapper.writeEnvelope(env)
+}
+
+func (s *Server) handlePTYResize(state *connState, env protocol.Envelope) {
+	if env.SessionID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for pty.resize")
+		return
+	}
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok {
+		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
+		return
+	}
+	if !record.WrapperConnected {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	if !s.canUsePTY(state, record) {
+		_ = s.sendError(state, env.ID, env.SessionID, "pty authority is held by attached human in takeover")
+		return
+	}
+	s.mu.Lock()
+	wrapper := s.wrappers[env.SessionID]
+	s.mu.Unlock()
+	if wrapper == nil {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	_ = wrapper.writeEnvelope(env)
+}
+
 func sameAttachmentOwner(owner, candidate *connState) bool {
 	if owner == nil || candidate == nil {
 		return false
@@ -642,6 +708,29 @@ func (s *Server) findAttachmentByIdentityLocked(identity string) (string, *connS
 		}
 	}
 	return "", nil
+}
+
+func isPTYOutputEnvelope(env protocol.Envelope) bool {
+	if env.Type != protocol.MessageEvent {
+		return false
+	}
+	var meta struct {
+		Event string `json:"event"`
+	}
+	if err := env.DecodePayload(&meta); err != nil {
+		return false
+	}
+	return meta.Event == protocol.EventPTYOutput
+}
+
+func (s *Server) forwardPTYOutput(sessionID string, env protocol.Envelope) {
+	s.mu.Lock()
+	owner := s.attachments[sessionID]
+	s.mu.Unlock()
+	if owner == nil || owner.attachedMode != "takeover" {
+		return
+	}
+	_ = owner.writeEnvelope(env)
 }
 
 func (s *Server) tryQueuePrompt(state *connState, env protocol.Envelope) (bool, error) {
@@ -704,6 +793,16 @@ func (s *Server) canRespondToPermission(state *connState, record session.Record)
 	}
 	if record.Attachment.Mode != "inject" && record.Attachment.Mode != "takeover" {
 		return true
+	}
+	return record.Attachment.ClientID == state.identity
+}
+
+func (s *Server) canUsePTY(state *connState, record session.Record) bool {
+	if record.Attachment == nil {
+		return false
+	}
+	if record.Attachment.Mode != "takeover" {
+		return false
 	}
 	return record.Attachment.ClientID == state.identity
 }

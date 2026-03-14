@@ -31,12 +31,15 @@ const (
 	CommandSessionDetach             = "session.detach"
 	CommandSessionPrompt             = "session.prompt"
 	CommandSessionCancel             = "session.cancel"
+	CommandPTYInput                  = "pty.input"
+	CommandPTYResize                 = "pty.resize"
 
 	RoleWrapper = "wrapper"
 	RoleClient  = "client"
 
 	EventSessionAgentReady = "session.agent_ready"
 	EventSessionUpdate     = "session.update"
+	EventPTYOutput         = "pty.output"
 
 	UpdateLifecycle          = "lifecycle"
 	UpdateMessageDelta       = "message_delta"
@@ -121,6 +124,17 @@ type SessionCancelCommand struct {
 	Command string `json:"command"`
 }
 
+type PTYInputCommand struct {
+	Command string `json:"command"`
+	Data    string `json:"data"`
+}
+
+type PTYResizeCommand struct {
+	Command string `json:"command"`
+	Rows    int    `json:"rows"`
+	Cols    int    `json:"cols"`
+}
+
 type AckPayload struct {
 	Command string         `json:"command"`
 	Success bool           `json:"success"`
@@ -158,6 +172,11 @@ type AttachmentInfo struct {
 type SessionUpdateEvent struct {
 	Event  string        `json:"event"`
 	Update SessionUpdate `json:"update"`
+}
+
+type PTYOutputEvent struct {
+	Event string `json:"event"`
+	Data  string `json:"data"`
 }
 
 type PermissionRequest struct {

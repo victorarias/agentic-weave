@@ -89,7 +89,7 @@
 | STARTING | `timeout` / `error` | FAILED | Failure policy evaluated |
 | AUTONOMOUS | `human.attach(observe)` | OBSERVING | Relay streams events to human client |
 | AUTONOMOUS | `human.attach(inject)` | INJECTING | Human can send messages |
-| AUTONOMOUS | `human.attach(takeover)` | TAKEOVER | Orchestrator prompts queue, permission authority moves to human, PTY forwarding is added in the next slice |
+| AUTONOMOUS | `human.attach(takeover)` | TAKEOVER | Orchestrator prompts queue, permission authority moves to human, PTY byte forwarding is available |
 | OBSERVING | `human.escalate(inject)` | INJECTING | — |
 | OBSERVING | `human.detach` | AUTONOMOUS | — |
 | INJECTING | `human.escalate(takeover)` | TAKEOVER | Orchestrator paused |

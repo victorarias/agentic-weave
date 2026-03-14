@@ -243,7 +243,7 @@ This file tracks current work items and progress.
     - [x] real smoke script for observe/watch/inject behavior (`scripts/remotecontrol-attach-smoke.sh`)
 
 - [ ] PR 7: Tier 5 takeover groundwork
-  - Description: Start Tier 5 by introducing takeover as a distinct control state before PTY forwarding lands.
+  - Description: Start Tier 5 by introducing takeover as a distinct control state before full real-pi PTY forwarding lands.
   - Depends on: PR 6
   - Output:
     - [x] relay accepts `session.attach` with `takeover`
@@ -253,7 +253,9 @@ This file tracks current work items and progress.
     - [x] inspector prints queued prompt acknowledgements and queued-count status
     - [x] relay tests for takeover queueing + takeover permission authority
     - [x] real smoke script for takeover queue behavior (`scripts/remotecontrol-takeover-queue-smoke.sh`)
-    - [ ] PTY output forwarding / `pty.input` / `pty.resize`
+    - [x] initial PTY byte transport plumbing: `pty.output`, `pty.input`, `pty.resize`
+    - [x] relay tests and scripted smoke for PTY I/O (`scripts/remotecontrol-pty-smoke.sh`, `testdata/pty/echo.py`)
+    - [ ] switch PTY transport from scripted echo helper to real interactive pi takeover
 
 ---
 
@@ -288,6 +290,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 15:33: Added the first PTY byte-transport slice for takeover: wrapper now supports a PTY-backed runtime mode, protocol/relay/inspector support `pty.output`, `pty.input`, and `pty.resize`, relay routes PTY output only to the attached takeover human, tests cover takeover PTY I/O, and a scripted smoke flow now exercises the path via `scripts/remotecontrol-pty-smoke.sh` and `testdata/pty/echo.py`.
 - 2026-03-14 15:05: Started Tier 5 groundwork without PTY yet: relay now accepts `takeover` attachment mode, queues orchestrator prompts while takeover is active, flushes them when takeover detaches/de-escalates, exposes queued prompt counts in status/listing, extends permission authority to takeover, adds relay tests for the new behavior, and adds a real `scripts/remotecontrol-takeover-queue-smoke.sh` smoke flow.
 - 2026-03-14 12:54: Added a Tier 4 ergonomics pass on top of observe/inject: `weave-inspect relay watch`, explicit attachment action details on `status` updates, same-identity observe→inject escalation across reconnects, relay tests for mode escalation, and a real observe/watch/inject smoke script.
 - 2026-03-14 12:30: Added the Tier 4 human observe/inject slice: relay attach locks, `session.attach` / `session.detach` for `observe` and `inject`, inspector `attach` / `detach` / one-shot `inject`, attachment visibility in status/listing, permission authority handoff to an attached human in inject mode, relay tests for observe/inject semantics, and a real `scripts/remotecontrol-attach-smoke.sh` smoke run against pi.

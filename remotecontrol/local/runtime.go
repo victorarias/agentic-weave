@@ -23,6 +23,9 @@ type piResponse struct {
 }
 
 func (w *Wrapper) startRuntime(ctx context.Context) (<-chan error, func(), error) {
+	if w.descriptor.Transport == "pty" {
+		return w.startPTYRuntime(ctx)
+	}
 	cmd, stdout, stderr, err := w.startPi(ctx)
 	if err != nil {
 		return nil, nil, err
