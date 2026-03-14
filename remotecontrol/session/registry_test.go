@@ -102,6 +102,14 @@ func TestRegistryTracksAttachment(t *testing.T) {
 		t.Fatalf("expected queued prompt count to be tracked: %#v", record)
 	}
 
+	record, ok = registry.SetPTYSize("sess-1", 30, 90)
+	if !ok {
+		t.Fatal("expected pty size to update")
+	}
+	if record.PTYRows != 30 || record.PTYCols != 90 {
+		t.Fatalf("expected pty size to be tracked: %#v", record)
+	}
+
 	record, ok = registry.ClearAttachment("sess-1")
 	if !ok {
 		t.Fatal("expected clear attachment to succeed")

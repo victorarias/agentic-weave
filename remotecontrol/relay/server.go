@@ -352,6 +352,8 @@ func (s *Server) handleListSessions(state *connState, env protocol.Envelope) {
 			"phase":                    record.Phase,
 			"attachment":               record.Attachment,
 			"queued_prompts":           record.QueuedPrompts,
+			"pty_rows":                 record.PTYRows,
+			"pty_cols":                 record.PTYCols,
 			"pending_permissions":      record.PendingPermissions,
 			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
 		})
@@ -842,7 +844,7 @@ func (s *Server) broadcastSessionStatus(sessionID string, extraDetails map[strin
 	if phase == "" {
 		phase = record.State
 	}
-	details := map[string]any{"state": record.State, "queued_prompts": record.QueuedPrompts}
+	details := map[string]any{"state": record.State, "queued_prompts": record.QueuedPrompts, "pty_rows": record.PTYRows, "pty_cols": record.PTYCols}
 	for key, value := range extraDetails {
 		details[key] = value
 	}
@@ -906,6 +908,11 @@ func (s *Server) applyWrapperEnvelope(state *connState, env protocol.Envelope) {
 		s.registry.ResolvePermission(env.SessionID, state.runtimeID, evt.Update.RequestID)
 	case protocol.UpdateStatus:
 		s.registry.SetPhase(env.SessionID, state.runtimeID, evt.Update.Phase)
+		rows, hasRows := intValue(evt.Update.Details["pty_rows"])
+		cols, hasCols := intValue(evt.Update.Details["pty_cols"])
+		if hasRows || hasCols {
+			s.registry.SetPTYSize(env.SessionID, rows, cols)
+		}
 	}
 }
 
@@ -1035,6 +1042,19 @@ func pathWithinBase(baseDir, target string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }
 
+func intValue(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
 func mustAckEnvelope(id, sessionID string, record session.Record, command string) protocol.Envelope {
 	data := map[string]any{
 		"session":                  record.Session,
@@ -1045,6 +1065,8 @@ func mustAckEnvelope(id, sessionID string, record session.Record, command string
 		"phase":                    record.Phase,
 		"attachment":               record.Attachment,
 		"queued_prompts":           record.QueuedPrompts,
+		"pty_rows":                 record.PTYRows,
+		"pty_cols":                 record.PTYCols,
 		"pending_permissions":      record.PendingPermissions,
 		"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
 	}

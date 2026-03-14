@@ -682,6 +682,21 @@ func TestRelayTakeoverPTYInputVisibleToAttachedHuman(t *testing.T) {
 		t.Fatalf("write pty resize env: %v", err)
 	}
 	awaitWSAck(t, human, "resize-1")
+
+	statusEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new status env: %v", err)
+	}
+	if err := human.WriteJSON(statusEnv); err != nil {
+		t.Fatalf("write status env: %v", err)
+	}
+	statusPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, human, "status-1"))
+	if gotRows, _ := statusPayload.Data["pty_rows"].(float64); int(gotRows) != 30 {
+		t.Fatalf("expected status to report pty_rows=30: %#v", statusPayload.Data)
+	}
+	if gotCols, _ := statusPayload.Data["pty_cols"].(float64); int(gotCols) != 90 {
+		t.Fatalf("expected status to report pty_cols=90: %#v", statusPayload.Data)
+	}
 }
 
 func TestRelayRejectsPTYInputWithoutTakeover(t *testing.T) {

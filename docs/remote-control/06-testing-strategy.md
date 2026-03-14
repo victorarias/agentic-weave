@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Status (2026-03-14):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and reproducible real relay smoke coverage via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`. Tier 4 adds relay tests for observe conflict, same-identity observe→inject mode escalation, inject visibility, permission authority while attached, and a real observe/watch/inject smoke script at `scripts/remotecontrol-attach-smoke.sh`. Tier 5 now adds relay tests for takeover queueing, takeover-held permission authority, initial PTY output/input/resize forwarding via a scripted helper runtime, plus smoke scripts at `scripts/remotecontrol-takeover-queue-smoke.sh` and `scripts/remotecontrol-pty-smoke.sh`.
+**Status (2026-03-14):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and reproducible real relay smoke coverage via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`. Tier 4 adds relay tests for observe conflict, same-identity observe→inject mode escalation, inject visibility, permission authority while attached, and a real observe/watch/inject smoke script at `scripts/remotecontrol-attach-smoke.sh`. Tier 5 now adds relay tests for takeover queueing, takeover-held permission authority, initial PTY output/input/resize forwarding via a scripted helper runtime, plus smoke scripts at `scripts/remotecontrol-takeover-queue-smoke.sh`, `scripts/remotecontrol-pty-smoke.sh`, and `scripts/remotecontrol-real-pi-pty-smoke.sh`.
 
 ## Three Test Tiers
 
@@ -208,7 +208,22 @@ What it verifies:
 3. the same human identity can send `pty-input`
 4. `pty-resize` is accepted while takeover is active
 
-**Note:** this currently uses the tracked echo helper at `testdata/pty/echo.py`, not a real interactive pi TUI yet.
+This uses the tracked echo helper at `testdata/pty/echo.py`.
+
+### Real interactive pi takeover smoke
+
+The same PTY path is also reproducible against a real interactive `pi` process with:
+
+```bash
+./scripts/remotecontrol-real-pi-pty-smoke.sh
+```
+
+What it verifies:
+
+1. wrapper PTY mode can launch a real `pi` child process
+2. a human in `takeover` mode can attach to that live interactive `pi` runtime
+3. `pty-input` can drive a real TUI command (`/session` + Enter)
+4. `pty-resize` updates are reflected in `session.status`
 
 ---
 

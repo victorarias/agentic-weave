@@ -17,6 +17,8 @@ type Record struct {
 	Phase                  string                       `json:"phase,omitempty"`
 	Attachment             *protocol.AttachmentInfo     `json:"attachment,omitempty"`
 	QueuedPrompts          int                          `json:"queued_prompts,omitempty"`
+	PTYRows                int                          `json:"pty_rows,omitempty"`
+	PTYCols                int                          `json:"pty_cols,omitempty"`
 	PendingPermissions     []protocol.PermissionRequest `json:"pending_permissions,omitempty"`
 	UpdatedAt              time.Time                    `json:"updated_at"`
 }
@@ -78,6 +80,8 @@ func (r *Registry) SetDisconnected(sessionID, runtimeID string) (Record, bool) {
 	record.Attachment = nil
 	record.PendingPermissions = nil
 	record.QueuedPrompts = 0
+	record.PTYRows = 0
+	record.PTYCols = 0
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = cloneRecord(record)
@@ -181,6 +185,24 @@ func (r *Registry) SetQueuedPrompts(sessionID string, queued int) (Record, bool)
 		queued = 0
 	}
 	record.QueuedPrompts = queued
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
+}
+
+func (r *Registry) SetPTYSize(sessionID string, rows, cols int) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return Record{}, false
+	}
+	if rows > 0 {
+		record.PTYRows = rows
+	}
+	if cols > 0 {
+		record.PTYCols = cols
+	}
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = cloneRecord(record)
 	return cloneRecord(record), true

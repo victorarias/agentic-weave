@@ -255,7 +255,8 @@ This file tracks current work items and progress.
     - [x] real smoke script for takeover queue behavior (`scripts/remotecontrol-takeover-queue-smoke.sh`)
     - [x] initial PTY byte transport plumbing: `pty.output`, `pty.input`, `pty.resize`
     - [x] relay tests and scripted smoke for PTY I/O (`scripts/remotecontrol-pty-smoke.sh`, `testdata/pty/echo.py`)
-    - [ ] switch PTY transport from scripted echo helper to real interactive pi takeover
+    - [x] real interactive pi takeover smoke via `--pty-bin pi` (`scripts/remotecontrol-real-pi-pty-smoke.sh`)
+    - [ ] make relay-managed spawn/load choose real interactive pi PTY runtime when takeover is requested
 
 ---
 
@@ -290,6 +291,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 15:46: Validated the takeover PTY path against a real interactive pi process: added `scripts/remotecontrol-real-pi-pty-smoke.sh`, launched wrapper PTY mode with `--pty-bin pi --pty-arg=--no-session`, verified the wrapper actually spawned a `pi` child, drove `/session` through `pty-input`, and confirmed `pty-resize` surfaced through `session.status`.
 - 2026-03-14 15:33: Added the first PTY byte-transport slice for takeover: wrapper now supports a PTY-backed runtime mode, protocol/relay/inspector support `pty.output`, `pty.input`, and `pty.resize`, relay routes PTY output only to the attached takeover human, tests cover takeover PTY I/O, and a scripted smoke flow now exercises the path via `scripts/remotecontrol-pty-smoke.sh` and `testdata/pty/echo.py`.
 - 2026-03-14 15:05: Started Tier 5 groundwork without PTY yet: relay now accepts `takeover` attachment mode, queues orchestrator prompts while takeover is active, flushes them when takeover detaches/de-escalates, exposes queued prompt counts in status/listing, extends permission authority to takeover, adds relay tests for the new behavior, and adds a real `scripts/remotecontrol-takeover-queue-smoke.sh` smoke flow.
 - 2026-03-14 12:54: Added a Tier 4 ergonomics pass on top of observe/inject: `weave-inspect relay watch`, explicit attachment action details on `status` updates, same-identity observe→inject escalation across reconnects, relay tests for mode escalation, and a real observe/watch/inject smoke script.
