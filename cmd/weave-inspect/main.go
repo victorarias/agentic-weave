@@ -78,6 +78,7 @@ func runRelay(args []string) error {
 	delivery := fs.String("delivery", "", "Prompt delivery mode: default, foreground, interrupt, queue, deliver_when_idle")
 	transport := fs.String("transport", "", "Spawn/load transport: rpc or pty")
 	identity := fs.String("identity", "weave-inspect", "Client identity used for attach/inject/takeover authority")
+	debugKeysFile := fs.String("debug-keys-file", "", "Append takeover stdin bytes to this file for debugging")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -92,7 +93,7 @@ func runRelay(args []string) error {
 	}
 	defer conn.Close()
 
-	client := newRelayClient(conn, *token, *identity)
+	client := newRelayClient(conn, *token, *identity, *debugKeysFile)
 	if err := client.authenticate(*jsonMode); err != nil {
 		return err
 	}
@@ -273,16 +274,17 @@ func (c *localClient) execute(subcmd, message, delivery, transport, sessionID st
 }
 
 type relayClient struct {
-	conn     *websocket.Conn
-	token    string
-	identity string
-	stream   *envelopeStream
-	errCh    chan error
+	conn          *websocket.Conn
+	token         string
+	identity      string
+	debugKeysFile string
+	stream        *envelopeStream
+	errCh         chan error
 }
 
-func newRelayClient(conn *websocket.Conn, token, identity string) *relayClient {
+func newRelayClient(conn *websocket.Conn, token, identity, debugKeysFile string) *relayClient {
 	events := make(chan protocol.Envelope, 64)
-	c := &relayClient{conn: conn, token: token, identity: identity, stream: newEnvelopeStream(events), errCh: make(chan error, 1)}
+	c := &relayClient{conn: conn, token: token, identity: identity, debugKeysFile: debugKeysFile, stream: newEnvelopeStream(events), errCh: make(chan error, 1)}
 	go func() {
 		for {
 			var env protocol.Envelope
@@ -612,9 +614,21 @@ func (c *relayClient) interactiveTakeover(sessionID string, jsonMode bool) error
 		defer restore()
 	}
 
+	var debugWriter io.WriteCloser
+	if c.debugKeysFile != "" {
+		f, fileErr := os.OpenFile(c.debugKeysFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if fileErr != nil {
+			fmt.Fprintf(os.Stderr, "[takeover] failed to open debug key log %s: %v\n", c.debugKeysFile, fileErr)
+		} else {
+			debugWriter = f
+			fmt.Fprintf(os.Stderr, "[takeover] logging raw stdin bytes to %s\n", c.debugKeysFile)
+			defer debugWriter.Close()
+		}
+	}
+
 	inputCh := make(chan takeoverInputEvent, 64)
 	errorCh := make(chan error, 1)
-	go readTakeoverInput(os.Stdin, inputCh, errorCh)
+	go readTakeoverInput(os.Stdin, inputCh, errorCh, debugWriter)
 
 	requestSeq := 0
 	for {
@@ -750,7 +764,18 @@ type takeoverInputEvent struct {
 	disconnect bool
 }
 
-func readTakeoverInput(r io.Reader, out chan<- takeoverInputEvent, errCh chan<- error) {
+func logTakeoverByte(w io.Writer, b byte, note string) {
+	if w == nil {
+		return
+	}
+	printable := '.'
+	if b >= 32 && b <= 126 {
+		printable = rune(b)
+	}
+	_, _ = fmt.Fprintf(w, "%s hex=%02x dec=%d printable=%q note=%s\n", time.Now().UTC().Format(time.RFC3339Nano), b, b, printable, note)
+}
+
+func readTakeoverInput(r io.Reader, out chan<- takeoverInputEvent, errCh chan<- error, debug io.Writer) {
 	defer close(out)
 	buf := make([]byte, 1)
 	atLineStart := true
@@ -759,25 +784,31 @@ func readTakeoverInput(r io.Reader, out chan<- takeoverInputEvent, errCh chan<- 
 		n, err := r.Read(buf)
 		if n > 0 {
 			b := buf[0]
+			logTakeoverByte(debug, b, "read")
 			if pendingTilde {
 				pendingTilde = false
 				if b == '.' {
+					logTakeoverByte(debug, b, "tilde-dot-disconnect")
 					out <- takeoverInputEvent{disconnect: true}
 					continue
 				}
+				logTakeoverByte(debug, b, "flush-pending-tilde")
 				out <- takeoverInputEvent{data: []byte{'~', b}}
 				atLineStart = b == '\r' || b == '\n'
 				continue
 			}
 			if b == 0x1d {
+				logTakeoverByte(debug, b, "ctrl-right-bracket-disconnect")
 				out <- takeoverInputEvent{disconnect: true}
 				continue
 			}
 			if atLineStart && b == '~' {
+				logTakeoverByte(debug, b, "pending-tilde")
 				pendingTilde = true
 				atLineStart = false
 				continue
 			}
+			logTakeoverByte(debug, b, "forward")
 			out <- takeoverInputEvent{data: []byte{b}}
 			atLineStart = b == '\r' || b == '\n'
 		}
