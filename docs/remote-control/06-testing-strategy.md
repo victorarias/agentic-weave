@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Status (2026-03-13):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 currently has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, and real manual relay smoke coverage for an extension-driven pi confirm dialog resolved by `allow` / `deny`.
+**Status (2026-03-13):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 currently has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, and real manual relay smoke coverage for an extension-driven pi confirm dialog resolved by `allow` / `deny`. That real permission flow is now reproducible from the repo via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`.
 
 ## Three Test Tiers
 
@@ -131,6 +131,37 @@ Implementation options (needs investigation):
 | `session-resume` | Start session, crash, restart with `--session` → verify history is loaded |
 | `permission-roundtrip` | Agent requests tool permission → client responds allow/deny → verify wrapper/runtime behavior |
 | `rpc-startup` | Verify wrapper bootstrap (`get_state`), ready handshake, and runtime metadata |
+
+### Deterministic real permission smoke
+
+To make the real permission flow reproducible, keep a tiny fixture extension in the repo:
+
+- `testdata/pi/permission_fixture.ts`
+  - registers `/permtest`
+  - calls `ctx.ui.confirm(...)`
+  - sends `PERMISSION_ALLOWED` or `PERMISSION_DENIED`
+
+Run the end-to-end relay smoke with:
+
+```bash
+./scripts/remotecontrol-permission-smoke.sh
+```
+
+Or a single branch of the flow:
+
+```bash
+./scripts/remotecontrol-permission-smoke.sh allow
+./scripts/remotecontrol-permission-smoke.sh deny
+```
+
+What the script verifies:
+
+1. `weave-wrapper` loads the fixture extension into a real pi RPC process.
+2. `weave-inspect relay ... prompt "/permtest"` receives a normalized `permission_request`.
+3. `weave-inspect relay ... allow|deny <request-id>` resolves the request.
+4. The prompt completes with the expected final output token.
+
+This avoids relying on model-specific tool-choice behavior just to trigger a confirm dialog.
 
 ---
 
