@@ -141,17 +141,28 @@ type SessionUpdateEvent struct {
 	Update SessionUpdate `json:"update"`
 }
 
+type PermissionRequest struct {
+	ID        string         `json:"id"`
+	Kind      string         `json:"kind"`
+	Title     string         `json:"title,omitempty"`
+	Message   string         `json:"message,omitempty"`
+	Options   []string       `json:"options,omitempty"`
+	CreatedAt string         `json:"created_at,omitempty"`
+	Raw       map[string]any `json:"raw,omitempty"`
+}
+
 type SessionUpdate struct {
-	Kind       string         `json:"kind"`
-	Phase      string         `json:"phase,omitempty"`
-	Delta      string         `json:"delta,omitempty"`
-	Message    string         `json:"message,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-	ToolName   string         `json:"tool_name,omitempty"`
-	RequestID  string         `json:"request_id,omitempty"`
-	Decision   string         `json:"decision,omitempty"`
-	IsError    bool           `json:"is_error,omitempty"`
-	Details    map[string]any `json:"details,omitempty"`
+	Kind       string             `json:"kind"`
+	Phase      string             `json:"phase,omitempty"`
+	Delta      string             `json:"delta,omitempty"`
+	Message    string             `json:"message,omitempty"`
+	ToolCallID string             `json:"tool_call_id,omitempty"`
+	ToolName   string             `json:"tool_name,omitempty"`
+	RequestID  string             `json:"request_id,omitempty"`
+	Decision   string             `json:"decision,omitempty"`
+	Permission *PermissionRequest `json:"permission,omitempty"`
+	IsError    bool               `json:"is_error,omitempty"`
+	Details    map[string]any     `json:"details,omitempty"`
 }
 
 func NewEnvelope(messageType, sessionID, runtimeID, from, id string, payload any) (Envelope, error) {

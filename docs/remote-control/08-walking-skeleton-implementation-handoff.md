@@ -1,6 +1,6 @@
 # Walking Skeleton Implementation Handoff
 
-**Status:** Active handoff plan — Tier 0, Tier 1, and the first Tier 2 spawn/load skeleton are implemented, plus a small hardening pass for session listing/state visibility; Tier 3 delivery semantics have started and an initial permission-response seam is in place, including reproducible real relay validation via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`
+**Status:** Active handoff plan — Tier 0, Tier 1, and the first Tier 2 spawn/load skeleton are implemented, plus a small hardening pass for session listing/state visibility; Tier 3 delivery semantics and the richer confirm-style permission lifecycle are now in place, including reproducible real relay validation via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`
 **Date:** 2026-03-10
 **Audience:** another implementation agent
 **Related:**

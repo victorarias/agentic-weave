@@ -1,6 +1,6 @@
 # Control Protocol
 
-**Status (2026-03-13):** Tier 0 local protocol, Tier 1 single-session relay routing, and the Tier 2 spawn/load identity skeleton are implemented for `auth`, `initialize`, `registry.list_sessions`, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, `session.prompt`, `session.cancel`, `session.permission_response`, `session.agent_ready`, and normalized `session.update`. Initial permission lifecycle normalization (`permission_request`, `permission_resolved`, `status`) is now wired through the wrapper/inspector path. Attach/takeover and richer host routing remain future tiers.
+**Status (2026-03-13):** Tier 0 local protocol, Tier 1 single-session relay routing, and the Tier 2 spawn/load identity skeleton are implemented for `auth`, `initialize`, `registry.list_sessions`, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, `session.prompt`, `session.cancel`, `session.permission_response`, `session.agent_ready`, and normalized `session.update`. The confirm-style permission lifecycle is now protocol-shaped end-to-end: `permission_request` / `permission_resolved` updates are normalized through the wrapper, pending permissions are visible in `session.status` and `registry.list_sessions`, and stale/duplicate responses are rejected deterministically. Attach/takeover and richer host routing remain future tiers.
 
 All messages are JSON over WebSocket. Every message has a common envelope.
 
@@ -101,7 +101,17 @@ Expected `ack.data.sessions[]` item shape:
   "session": { "id": "sess-uuid" },
   "runtime": { "id": "rt-uuid", "kind": "pi", "transport": "rpc" },
   "persisted_session_handle": "/path/to/session.jsonl",
-  "state": "running|stopped",
+  "state": "running|waiting_permission|stopped",
+  "phase": "running|waiting_permission",
+  "pending_permissions": [
+    {
+      "id": "perm-1",
+      "kind": "confirm",
+      "title": "Permission test",
+      "message": "Allow this action to proceed?",
+      "options": ["allow", "deny"]
+    }
+  ],
   "wrapper_connected": true,
   "updated_at": "2026-03-13T22:30:00Z"
 }
@@ -127,6 +137,9 @@ Expected `ack.data` shape:
   "session": { "id": "sess-uuid" },
   "runtime": { "id": "rt-uuid", "kind": "pi", "transport": "rpc" },
   "persisted_session_handle": "/path/to/session.jsonl",
+  "state": "running|waiting_permission|stopped",
+  "phase": "running|waiting_permission",
+  "pending_permissions": [],
   "wrapper_connected": true,
   "updated_at": "2026-03-13T21:45:00Z"
 }
@@ -355,9 +368,9 @@ Required fields by kind:
 - `message_complete`: `message_id`, `content`
 - `tool_begin`: `tool_call_id`, `tool`
 - `tool_end`: `tool_call_id`, `tool`, `status`
-- `permission_request`: `request_id`, `tool`, `args`, `timeout_ms`
+- `permission_request`: `request_id`, `permission.kind`, plus protocol-shaped request metadata (currently `title`, `message`, `options` for confirm-style requests)
 - `permission_resolved`: `request_id`, `decision`
-- `status`: `run_state`, optional summary counters
+- `status`: `run_state`, optional summary counters, and may include pending-permission visibility in command responses such as `session.status`
 - `error`: `code`, `message`, optional `recoverable`
 - `complete`: final outcome summary
 
@@ -467,11 +480,13 @@ Normalization rules:
     "kind": "permission_request",
     "run_state": "waiting_permission",
     "request_id": "perm-1",
-    "tool": "bash",
-    "args": {
-      "command": "go test ./..."
-    },
-    "timeout_ms": 30000
+    "permission": {
+      "id": "perm-1",
+      "kind": "confirm",
+      "title": "Permission test",
+      "message": "Allow this action to proceed?",
+      "options": ["allow", "deny"]
+    }
   }
 }
 ```

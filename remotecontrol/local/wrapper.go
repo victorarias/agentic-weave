@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,7 +52,8 @@ type Wrapper struct {
 	bootstrapState map[string]any
 
 	permissionMu      sync.Mutex
-	pendingPermission map[string]map[string]any
+	pendingPermission map[string]protocol.PermissionRequest
+	phase             string
 
 	closed chan struct{}
 }
@@ -79,7 +81,8 @@ func NewWrapper(cfg Config) *Wrapper {
 		descriptor:        descriptor,
 		peers:             make(map[int64]peer),
 		pending:           make(map[string]chan piResponse),
-		pendingPermission: make(map[string]map[string]any),
+		pendingPermission: make(map[string]protocol.PermissionRequest),
+		phase:             "running",
 		closed:            make(chan struct{}),
 	}
 }
@@ -294,10 +297,14 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.status"))
 			return nil
 		}
+		status := w.statusSnapshot()
 		return w.sendAck(p, env.ID, protocol.CommandSessionStatus, map[string]any{
 			"session":                  protocol.SessionInfo{ID: w.cfg.SessionID},
 			"runtime":                  protocol.RuntimeInfo{ID: w.runtimeID, Kind: "pi", Transport: w.descriptor.Transport},
 			"persisted_session_handle": stringValue(w.bootstrapState["sessionFile"]),
+			"state":                    status["state"],
+			"phase":                    status["phase"],
+			"pending_permissions":      status["pending_permissions"],
 			"runtime_descriptor": map[string]any{
 				"name":                w.descriptor.Name,
 				"command":             w.descriptor.Command,
@@ -395,31 +402,30 @@ func promptToPICommand(prompt protocol.SessionPromptCommand) (map[string]any, er
 func (w *Wrapper) respondToPermission(resp protocol.PermissionResponseCommand) error {
 	w.permissionMu.Lock()
 	request, ok := w.pendingPermission[resp.RequestID]
-	if ok {
-		delete(w.pendingPermission, resp.RequestID)
-	}
 	w.permissionMu.Unlock()
 	if !ok {
 		return fmt.Errorf("unknown permission request %q", resp.RequestID)
 	}
-	method := stringValue(request["method"])
+	if resp.Decision != "allow" && resp.Decision != "deny" {
+		return fmt.Errorf("unsupported permission decision %q", resp.Decision)
+	}
 	payload := map[string]any{"type": "extension_ui_response", "id": resp.RequestID}
-	switch method {
+	switch request.Kind {
 	case "confirm":
 		payload["confirmed"] = resp.Decision == "allow"
-		if resp.Decision != "allow" && resp.Decision != "deny" {
-			return fmt.Errorf("unsupported permission decision %q", resp.Decision)
-		}
-		if resp.Decision == "deny" {
-			payload["confirmed"] = false
-		}
-		w.piInMu.Lock()
-		err := protocol.WriteJSONLine(w.piIn, payload)
-		w.piInMu.Unlock()
-		return err
 	default:
-		return fmt.Errorf("unsupported permission request method %q", method)
+		return fmt.Errorf("unsupported permission request method %q", request.Kind)
 	}
+	w.piInMu.Lock()
+	err := protocol.WriteJSONLine(w.piIn, payload)
+	w.piInMu.Unlock()
+	if err != nil {
+		return err
+	}
+	w.permissionMu.Lock()
+	delete(w.pendingPermission, resp.RequestID)
+	w.permissionMu.Unlock()
+	return nil
 }
 
 func (w *Wrapper) sendAck(p peer, id, command string, data map[string]any) error {
@@ -451,6 +457,11 @@ func (w *Wrapper) sendEvent(p peer, payload any) error {
 }
 
 func (w *Wrapper) broadcastUpdate(update protocol.SessionUpdate) {
+	if update.Kind == protocol.UpdateStatus && update.Phase != "" {
+		w.permissionMu.Lock()
+		w.phase = update.Phase
+		w.permissionMu.Unlock()
+	}
 	event := protocol.SessionUpdateEvent{Event: protocol.EventSessionUpdate, Update: update}
 	env, err := protocol.NewEnvelope(protocol.MessageEvent, w.cfg.SessionID, w.runtimeID, "weave-wrapper", "", event)
 	if err != nil {
@@ -477,6 +488,26 @@ func (w logWriter) Write(p []byte) (int, error) {
 		w.logger.Print(text)
 	}
 	return len(p), nil
+}
+
+func (w *Wrapper) statusSnapshot() map[string]any {
+	w.permissionMu.Lock()
+	defer w.permissionMu.Unlock()
+	pending := make([]protocol.PermissionRequest, 0, len(w.pendingPermission))
+	for _, permission := range w.pendingPermission {
+		pending = append(pending, permission)
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].ID < pending[j].ID })
+	phase := w.phase
+	state := "running"
+	if len(pending) > 0 || phase == "waiting_permission" {
+		state = "waiting_permission"
+	}
+	return map[string]any{
+		"state":               state,
+		"phase":               phase,
+		"pending_permissions": pending,
+	}
 }
 
 func containsArg(args []string, name string) bool {

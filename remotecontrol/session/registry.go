@@ -9,12 +9,14 @@ import (
 )
 
 type Record struct {
-	Session                protocol.SessionInfo `json:"session"`
-	Runtime                protocol.RuntimeInfo `json:"runtime"`
-	PersistedSessionHandle string               `json:"persisted_session_handle,omitempty"`
-	WrapperConnected       bool                 `json:"wrapper_connected"`
-	State                  string               `json:"state,omitempty"`
-	UpdatedAt              time.Time            `json:"updated_at"`
+	Session                protocol.SessionInfo         `json:"session"`
+	Runtime                protocol.RuntimeInfo         `json:"runtime"`
+	PersistedSessionHandle string                       `json:"persisted_session_handle,omitempty"`
+	WrapperConnected       bool                         `json:"wrapper_connected"`
+	State                  string                       `json:"state,omitempty"`
+	Phase                  string                       `json:"phase,omitempty"`
+	PendingPermissions     []protocol.PermissionRequest `json:"pending_permissions,omitempty"`
+	UpdatedAt              time.Time                    `json:"updated_at"`
 }
 
 type Registry struct {
@@ -34,7 +36,7 @@ func (r *Registry) Ensure(sessionID, persistedHandle string) Record {
 	if persistedHandle != "" {
 		record.PersistedSessionHandle = persistedHandle
 	}
-	record.State = deriveState(record.WrapperConnected)
+	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = record
 	return record
@@ -50,7 +52,9 @@ func (r *Registry) SetConnected(sessionID string, runtime protocol.RuntimeInfo, 
 		record.PersistedSessionHandle = persistedHandle
 	}
 	record.WrapperConnected = true
-	record.State = deriveState(record.WrapperConnected)
+	record.Phase = "running"
+	record.PendingPermissions = nil
+	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = record
 	return record
@@ -67,10 +71,100 @@ func (r *Registry) SetDisconnected(sessionID, runtimeID string) (Record, bool) {
 		return record, false
 	}
 	record.WrapperConnected = false
-	record.State = deriveState(record.WrapperConnected)
+	record.Phase = ""
+	record.PendingPermissions = nil
+	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = record
 	return record, true
+}
+
+func (r *Registry) SetPhase(sessionID, runtimeID, phase string) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return Record{}, false
+	}
+	if runtimeID != "" && record.Runtime.ID != "" && record.Runtime.ID != runtimeID {
+		return record, false
+	}
+	record.Phase = phase
+	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = record
+	return record, true
+}
+
+func (r *Registry) AddPermission(sessionID, runtimeID string, permission protocol.PermissionRequest) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return Record{}, false
+	}
+	if runtimeID != "" && record.Runtime.ID != "" && record.Runtime.ID != runtimeID {
+		return record, false
+	}
+	updated := false
+	for i := range record.PendingPermissions {
+		if record.PendingPermissions[i].ID == permission.ID {
+			record.PendingPermissions[i] = permission
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		record.PendingPermissions = append(record.PendingPermissions, permission)
+	}
+	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = record
+	return record, true
+}
+
+func (r *Registry) ResolvePermission(sessionID, runtimeID, requestID string) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return Record{}, false
+	}
+	if runtimeID != "" && record.Runtime.ID != "" && record.Runtime.ID != runtimeID {
+		return record, false
+	}
+	filtered := record.PendingPermissions[:0]
+	removed := false
+	for _, permission := range record.PendingPermissions {
+		if permission.ID == requestID {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, permission)
+	}
+	if !removed {
+		return record, false
+	}
+	record.PendingPermissions = append([]protocol.PermissionRequest(nil), filtered...)
+	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = record
+	return record, true
+}
+
+func (r *Registry) HasPendingPermission(sessionID, requestID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return false
+	}
+	for _, permission := range record.PendingPermissions {
+		if permission.ID == requestID {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Registry) Get(sessionID string) (Record, bool) {
@@ -93,9 +187,15 @@ func (r *Registry) List() []Record {
 	return out
 }
 
-func deriveState(connected bool) string {
-	if connected {
-		return "running"
+func deriveState(connected bool, phase string, pendingCount int) string {
+	if !connected {
+		return "stopped"
 	}
-	return "stopped"
+	if pendingCount > 0 || phase == "waiting_permission" {
+		return "waiting_permission"
+	}
+	if phase != "" {
+		return phase
+	}
+	return "running"
 }

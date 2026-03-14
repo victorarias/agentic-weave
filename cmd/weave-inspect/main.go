@@ -514,8 +514,18 @@ func printStatus(env protocol.Envelope, jsonMode bool) error {
 	if state := stringValue(ack.Data["state"]); state != "" {
 		fmt.Fprintf(os.Stdout, "state=%s\n", state)
 	}
+	if phase := stringValue(ack.Data["phase"]); phase != "" {
+		fmt.Fprintf(os.Stdout, "phase=%s\n", phase)
+	}
 	if wrapperConnected, ok := ack.Data["wrapper_connected"].(bool); ok {
 		fmt.Fprintf(os.Stdout, "wrapper_connected=%t\n", wrapperConnected)
+	}
+	if pending, ok := ack.Data["pending_permissions"].([]any); ok {
+		fmt.Fprintf(os.Stdout, "pending_permissions=%d\n", len(pending))
+		for _, item := range pending {
+			row, _ := item.(map[string]any)
+			fmt.Fprintf(os.Stdout, "pending_permission_id=%s kind=%s title=%s\n", stringValue(row["id"]), stringValue(row["kind"]), stringValue(row["title"]))
+		}
 	}
 	if updatedAt := stringValue(ack.Data["updated_at"]); updatedAt != "" {
 		fmt.Fprintf(os.Stdout, "updated_at=%s\n", updatedAt)
@@ -540,11 +550,17 @@ func printSessions(env protocol.Envelope, jsonMode bool) error {
 		row, _ := item.(map[string]any)
 		sessionMap, _ := row["session"].(map[string]any)
 		runtimeMap, _ := row["runtime"].(map[string]any)
-		fmt.Fprintf(os.Stdout, "session_id=%s runtime_id=%s state=%s wrapper_connected=%v\n",
+		pendingCount := 0
+		if pending, ok := row["pending_permissions"].([]any); ok {
+			pendingCount = len(pending)
+		}
+		fmt.Fprintf(os.Stdout, "session_id=%s runtime_id=%s state=%s phase=%s wrapper_connected=%v pending_permissions=%d\n",
 			stringValue(sessionMap["id"]),
 			stringValue(runtimeMap["id"]),
 			stringValue(row["state"]),
+			stringValue(row["phase"]),
 			row["wrapper_connected"],
+			pendingCount,
 		)
 		if persisted := stringValue(row["persisted_session_handle"]); persisted != "" {
 			fmt.Fprintf(os.Stdout, "  persisted_session_handle=%s\n", persisted)
@@ -603,7 +619,11 @@ func streamUntilComplete(stream *envelopeStream, errCh <-chan error, jsonMode bo
 		case protocol.UpdateToolEnd:
 			fmt.Fprintf(os.Stderr, "\n[tool end] %s\n", evt.Update.ToolName)
 		case protocol.UpdatePermissionRequest:
-			fmt.Fprintf(os.Stderr, "\n[permission request] id=%s title=%s\n", evt.Update.RequestID, evt.Update.Message)
+			title := evt.Update.Message
+			if evt.Update.Permission != nil && evt.Update.Permission.Title != "" {
+				title = evt.Update.Permission.Title
+			}
+			fmt.Fprintf(os.Stderr, "\n[permission request] id=%s title=%s\n", evt.Update.RequestID, title)
 		case protocol.UpdatePermissionResolved:
 			fmt.Fprintf(os.Stderr, "\n[permission resolved] id=%s decision=%s\n", evt.Update.RequestID, evt.Update.Decision)
 		case protocol.UpdateStatus:

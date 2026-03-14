@@ -194,6 +194,216 @@ func TestRelayPermissionFlow(t *testing.T) {
 	awaitMessageComplete(t, clientConn, "hello world")
 }
 
+func TestRelayStatusShowsPendingPermission(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-perm-status",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() {
+		_ = wrapper.RunRelay(ctx, relayURL, "secret")
+	}()
+	waitForWrapperRegistration(t, srv, "sess-perm-status")
+
+	clientConn := dialWS(t, relayURL)
+	defer clientConn.Close()
+	authenticateWS(t, clientConn, protocol.RoleClient, "secret", "")
+
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-status", "", "test-client", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new init envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init: %v", err)
+	}
+	awaitWSAck(t, clientConn, "init-1")
+	awaitReadyEvent(t, clientConn)
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-status", "", "test-client", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "need approval"})
+	if err != nil {
+		t.Fatalf("new prompt envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	awaitWSAck(t, clientConn, "prompt-1")
+	awaitPermissionRequestWS(t, clientConn, "perm-1")
+	awaitStatusWS(t, clientConn, "waiting_permission")
+
+	statusEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-status", "", "test-client", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new status envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(statusEnv); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	ack := awaitWSAckEnvelope(t, clientConn, "status-1")
+	payload := decodeAckPayload(t, ack)
+	if payload.Data["state"] != "waiting_permission" || payload.Data["phase"] != "waiting_permission" {
+		t.Fatalf("expected waiting permission status: %#v", payload.Data)
+	}
+	pending, _ := payload.Data["pending_permissions"].([]any)
+	if len(pending) != 1 {
+		t.Fatalf("expected one pending permission: %#v", payload.Data)
+	}
+	first, _ := pending[0].(map[string]any)
+	if first["id"] != "perm-1" || first["kind"] != "confirm" {
+		t.Fatalf("unexpected pending permission payload: %#v", first)
+	}
+}
+
+func TestRelayInitializeDoesNotClearPendingPermission(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-perm-init",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() {
+		_ = wrapper.RunRelay(ctx, relayURL, "secret")
+	}()
+	waitForWrapperRegistration(t, srv, "sess-perm-init")
+
+	clientConn := dialWS(t, relayURL)
+	defer clientConn.Close()
+	authenticateWS(t, clientConn, protocol.RoleClient, "secret", "")
+
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-init", "", "test-client", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new init envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init: %v", err)
+	}
+	awaitWSAck(t, clientConn, "init-1")
+	awaitReadyEvent(t, clientConn)
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-init", "", "test-client", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "need approval"})
+	if err != nil {
+		t.Fatalf("new prompt envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	awaitWSAck(t, clientConn, "prompt-1")
+	awaitPermissionRequestWS(t, clientConn, "perm-1")
+	awaitStatusWS(t, clientConn, "waiting_permission")
+
+	secondConn := dialWS(t, relayURL)
+	defer secondConn.Close()
+	authenticateWS(t, secondConn, protocol.RoleClient, "secret", "")
+	secondInitEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-init", "", "test-client-2", "init-2", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new second init envelope: %v", err)
+	}
+	if err := secondConn.WriteJSON(secondInitEnv); err != nil {
+		t.Fatalf("write second init: %v", err)
+	}
+	awaitWSAck(t, secondConn, "init-2")
+	awaitReadyEvent(t, secondConn)
+
+	statusEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-init", "", "test-client", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new status envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(statusEnv); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	ack := awaitWSAckEnvelope(t, clientConn, "status-1")
+	payload := decodeAckPayload(t, ack)
+	pending, _ := payload.Data["pending_permissions"].([]any)
+	if len(pending) != 1 {
+		t.Fatalf("expected pending permission to survive reinitialize: %#v", payload.Data)
+	}
+}
+
+func TestRelayRejectsDuplicatePermissionResponse(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-perm-dup",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() {
+		_ = wrapper.RunRelay(ctx, relayURL, "secret")
+	}()
+	waitForWrapperRegistration(t, srv, "sess-perm-dup")
+
+	clientConn := dialWS(t, relayURL)
+	defer clientConn.Close()
+	authenticateWS(t, clientConn, protocol.RoleClient, "secret", "")
+
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-dup", "", "test-client", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new init envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init: %v", err)
+	}
+	awaitWSAck(t, clientConn, "init-1")
+	awaitReadyEvent(t, clientConn)
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-dup", "", "test-client", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "need approval"})
+	if err != nil {
+		t.Fatalf("new prompt envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	awaitWSAck(t, clientConn, "prompt-1")
+	awaitPermissionRequestWS(t, clientConn, "perm-1")
+
+	allowEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-dup", "", "test-client", "allow-1", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
+	if err != nil {
+		t.Fatalf("new allow envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(allowEnv); err != nil {
+		t.Fatalf("write allow: %v", err)
+	}
+	awaitWSAck(t, clientConn, "allow-1")
+	awaitPermissionResolvedWS(t, clientConn, "perm-1", "allow")
+
+	dupeEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-dup", "", "test-client", "allow-2", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
+	if err != nil {
+		t.Fatalf("new duplicate allow envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(dupeEnv); err != nil {
+		t.Fatalf("write duplicate allow: %v", err)
+	}
+	awaitWSError(t, clientConn, "allow-2", `unknown permission request "perm-1"`)
+}
+
 func TestRelayListSessions(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -485,6 +695,7 @@ func runFakePI(scenario string) error {
 					return
 				}
 				if scenario == "permission" {
+					time.Sleep(20 * time.Millisecond)
 					_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "extension_ui_request", "id": "perm-1", "method": "confirm", "title": "Allow file write?", "message": "Need approval"})
 					allowed := <-permissionResolved
 					if !allowed {
@@ -594,6 +805,29 @@ func awaitWSAckEnvelope(t *testing.T, conn *websocket.Conn, id string) protocol.
 	}
 }
 
+func awaitWSError(t *testing.T, conn *websocket.Conn, id, want string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	for {
+		var env protocol.Envelope
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read error envelope: %v", err)
+		}
+		if env.ID != id || env.Type != protocol.MessageError {
+			continue
+		}
+		var payload protocol.ErrorPayload
+		if err := env.DecodePayload(&payload); err != nil {
+			t.Fatalf("decode error payload: %v", err)
+		}
+		if payload.Error != want {
+			t.Fatalf("unexpected error %q, want %q", payload.Error, want)
+		}
+		return
+	}
+}
+
 func decodeAckPayload(t *testing.T, env protocol.Envelope) protocol.AckPayload {
 	t.Helper()
 	var payload protocol.AckPayload
@@ -630,6 +864,28 @@ func awaitPermissionRequestWS(t *testing.T, conn *websocket.Conn, requestID stri
 			continue
 		}
 		if evt.Update.Kind == protocol.UpdatePermissionRequest && evt.Update.RequestID == requestID {
+			return
+		}
+	}
+}
+
+func awaitStatusWS(t *testing.T, conn *websocket.Conn, phase string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	for {
+		var env protocol.Envelope
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read status event: %v", err)
+		}
+		if env.Type != protocol.MessageEvent {
+			continue
+		}
+		var evt protocol.SessionUpdateEvent
+		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
+			continue
+		}
+		if evt.Update.Kind == protocol.UpdateStatus && evt.Update.Phase == phase {
 			return
 		}
 	}

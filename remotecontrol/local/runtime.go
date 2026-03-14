@@ -182,11 +182,20 @@ func (w *Wrapper) normalizeUIRequest(msg map[string]any) []protocol.SessionUpdat
 	if requestID == "" {
 		return nil
 	}
+	permission := protocol.PermissionRequest{
+		ID:        requestID,
+		Kind:      "confirm",
+		Title:     stringValue(msg["title"]),
+		Message:   stringValue(msg["message"]),
+		Options:   []string{"allow", "deny"},
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Raw:       msg,
+	}
 	w.permissionMu.Lock()
-	w.pendingPermission[requestID] = msg
+	w.pendingPermission[requestID] = permission
 	w.permissionMu.Unlock()
 	return []protocol.SessionUpdate{
-		{Kind: protocol.UpdatePermissionRequest, RequestID: requestID, Message: stringValue(msg["title"]), Details: msg},
+		{Kind: protocol.UpdatePermissionRequest, RequestID: requestID, Message: permission.Title, Permission: &permission, Details: map[string]any{"permission": permission}},
 		{Kind: protocol.UpdateStatus, Phase: "waiting_permission", Details: map[string]any{"run_state": "waiting_permission", "request_id": requestID}},
 	}
 }

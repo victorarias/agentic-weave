@@ -216,7 +216,7 @@ This file tracks current work items and progress.
     - [x] explicit running/stopped session state in registry output
     - [x] graceful-stop attempt in relay launcher before hard kill fallback
 
-- [ ] PR 5: Tier 3 delivery semantics
+- [x] PR 5: Tier 3 delivery semantics
   - Description: Make prompt delivery policy explicit in protocol and tooling before permission mediation lands.
   - Depends on: PR 4
   - Output:
@@ -227,7 +227,7 @@ This file tracks current work items and progress.
     - [x] fake-pi-backed local and relay permission lifecycle tests
     - [x] real manual relay permission smoke test with a pi extension confirm dialog
     - [x] committed fixture extension + reproducible smoke script for the real permission path
-    - [ ] richer permission mediation lifecycle
+    - [x] richer permission mediation lifecycle for confirm-style requests (protocol-shaped payloads, pending permission status/list visibility, duplicate/stale response handling, runtime invalidation)
 
 ---
 
@@ -262,6 +262,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-13 23:42: Finished the richer confirm-style permission lifecycle: permission requests are now protocol-shaped, `session.status` / `registry.list_sessions` expose pending permissions and waiting state, relay rejects stale/duplicate permission responses before forwarding, runtime transitions clear stale pending requests, tests cover the new cases, and the real permission smoke script now asserts waiting state before resolving the request.
 - 2026-03-13 23:18: Checked in a deterministic real-permission test fixture: added `testdata/pi/permission_fixture.ts`, added `scripts/remotecontrol-permission-smoke.sh`, and documented the exact relay repro flow so real permission validation no longer depends on an ad hoc temporary extension.
 - 2026-03-13 23:04: Added relay-level permission lifecycle coverage and manual real-pi validation: relay tests now cover permission request/response flow, `weave-inspect` now buffers early events so permission requests are not lost before prompt ack, and I manually ran a real relay flow with a temporary pi extension confirm dialog that produced both `PERMISSION_ALLOWED` and `PERMISSION_DENIED` through `allow` / `deny`.
 - 2026-03-13 22:50: Extended the Tier 3 seam with initial permission mediation support: wrapper now normalizes pi `extension_ui_request` confirm dialogs into `permission_request`, accepts `session.permission_response`, `weave-inspect` supports `allow` / `deny`, and fake-pi-backed tests cover a local permission request/response loop.

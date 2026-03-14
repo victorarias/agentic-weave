@@ -145,6 +145,27 @@ run_case() {
   fi
 
   echo "==> observed permission request id=${req}"
+
+  local status_out="$tmpdir/${decision}-status.out"
+  (
+    cd "$repo_root"
+    go run ./cmd/weave-inspect relay \
+      --relay "$relay_url" \
+      --token dev-token \
+      --session "$session" \
+      status >"$status_out"
+  )
+  if ! rg '^state=waiting_permission$' "$status_out" >/dev/null 2>&1; then
+    echo "FAILED: expected waiting_permission state during pending permission" >&2
+    cat "$status_out" >&2 || true
+    exit 1
+  fi
+  if ! rg "^pending_permission_id=${req} " "$status_out" >/dev/null 2>&1; then
+    echo "FAILED: expected pending permission id ${req} in status output" >&2
+    cat "$status_out" >&2 || true
+    exit 1
+  fi
+
   (
     cd "$repo_root"
     go run ./cmd/weave-inspect relay \

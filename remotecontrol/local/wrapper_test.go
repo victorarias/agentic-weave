@@ -218,6 +218,95 @@ func TestWrapperPermissionFlow(t *testing.T) {
 	}
 }
 
+func TestWrapperStatusShowsPendingPermission(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "wrapper.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := NewWrapper(Config{
+		SocketPath:      socket,
+		SessionID:       "demo-session",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  2 * time.Second,
+	})
+	go func() { _ = wrapper.Run(ctx) }()
+	waitForSocket(t, socket)
+
+	conn := dialSocket(t, socket)
+	defer conn.Close()
+	reader := startReader(t, conn)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version}))
+	awaitAck(t, reader, "init-1")
+	awaitReady(t, reader)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "need approval"}))
+	awaitAck(t, reader, "prompt-1")
+	awaitPermissionRequest(t, reader, "perm-1")
+	awaitStatusPhase(t, reader, "waiting_permission")
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus}))
+	ack := awaitAckEnvelope(t, reader, "status-1")
+	var payload protocol.AckPayload
+	if err := ack.DecodePayload(&payload); err != nil {
+		t.Fatalf("decode status ack: %v", err)
+	}
+	if payload.Data["state"] != "waiting_permission" {
+		t.Fatalf("expected waiting_permission state: %#v", payload.Data)
+	}
+	if payload.Data["phase"] != "waiting_permission" {
+		t.Fatalf("expected waiting_permission phase: %#v", payload.Data)
+	}
+	pending, _ := payload.Data["pending_permissions"].([]any)
+	if len(pending) != 1 {
+		t.Fatalf("expected one pending permission: %#v", payload.Data)
+	}
+	first, _ := pending[0].(map[string]any)
+	if first["id"] != "perm-1" || first["kind"] != "confirm" {
+		t.Fatalf("unexpected pending permission: %#v", first)
+	}
+}
+
+func TestWrapperPermissionInvalidDecisionDoesNotDropRequest(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "wrapper.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := NewWrapper(Config{
+		SocketPath:      socket,
+		SessionID:       "demo-session",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  2 * time.Second,
+	})
+	go func() { _ = wrapper.Run(ctx) }()
+	waitForSocket(t, socket)
+
+	conn := dialSocket(t, socket)
+	defer conn.Close()
+	reader := startReader(t, conn)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version}))
+	awaitAck(t, reader, "init-1")
+	awaitReady(t, reader)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "need approval"}))
+	awaitAck(t, reader, "prompt-1")
+	awaitPermissionRequest(t, reader, "perm-1")
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "maybe-1", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "maybe"}))
+	awaitErrorEnvelope(t, reader, "maybe-1", `unsupported permission decision "maybe"`)
+
+	sendEnvelope(t, conn, mustEnvelope(t, protocol.MessageCommand, "demo-session", "", "client", "allow-1", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"}))
+	awaitAck(t, reader, "allow-1")
+	awaitPermissionResolved(t, reader, "perm-1", "allow")
+}
+
 func TestWrapperCancel(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "wrapper.sock")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -475,6 +564,29 @@ func awaitAckEnvelope(t *testing.T, ch <-chan protocol.Envelope, id string) prot
 	}
 }
 
+func awaitErrorEnvelope(t *testing.T, ch <-chan protocol.Envelope, id, want string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case env := <-ch:
+			if env.ID != id || env.Type != protocol.MessageError {
+				continue
+			}
+			var payload protocol.ErrorPayload
+			if err := env.DecodePayload(&payload); err != nil {
+				t.Fatalf("decode error payload: %v", err)
+			}
+			if payload.Error != want {
+				t.Fatalf("unexpected error %q, want %q", payload.Error, want)
+			}
+			return
+		case <-deadline:
+			t.Fatalf("timed out waiting for error %s", id)
+		}
+	}
+}
+
 func awaitPermissionRequest(t *testing.T, ch <-chan protocol.Envelope, requestID string) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
@@ -493,6 +605,28 @@ func awaitPermissionRequest(t *testing.T, ch <-chan protocol.Envelope, requestID
 			}
 		case <-deadline:
 			t.Fatalf("timed out waiting for permission request %s", requestID)
+		}
+	}
+}
+
+func awaitStatusPhase(t *testing.T, ch <-chan protocol.Envelope, phase string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case env := <-ch:
+			if env.Type != protocol.MessageEvent {
+				continue
+			}
+			var evt protocol.SessionUpdateEvent
+			if err := env.DecodePayload(&evt); err != nil {
+				continue
+			}
+			if evt.Event == protocol.EventSessionUpdate && evt.Update.Kind == protocol.UpdateStatus && evt.Update.Phase == phase {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for status phase %s", phase)
 		}
 	}
 }

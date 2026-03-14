@@ -242,6 +242,9 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 	case protocol.CommandRuntimeStop:
 		s.handleRuntimeStop(state, env)
 		return
+	case protocol.CommandSessionPermissionResponse:
+		s.handlePermissionResponse(state, env)
+		return
 	}
 
 	if env.SessionID == "" {
@@ -268,6 +271,7 @@ func (s *Server) handleWrapperEnvelope(state *connState, env protocol.Envelope) 
 		sessionID = state.sessionID
 		env.SessionID = sessionID
 	}
+	s.applyWrapperEnvelope(state, env)
 
 	s.mu.Lock()
 	subs := s.subscribers[sessionID]
@@ -292,6 +296,8 @@ func (s *Server) handleListSessions(state *connState, env protocol.Envelope) {
 			"persisted_session_handle": record.PersistedSessionHandle,
 			"wrapper_connected":        record.WrapperConnected,
 			"state":                    record.State,
+			"phase":                    record.Phase,
+			"pending_permissions":      record.PendingPermissions,
 			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
 		})
 	}
@@ -424,6 +430,78 @@ func (s *Server) handleRuntimeStop(state *connState, env protocol.Envelope) {
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandRuntimeStop))
 }
 
+func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelope) {
+	var cmd protocol.PermissionResponseCommand
+	if err := env.DecodePayload(&cmd); err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	if env.SessionID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.permission_response")
+		return
+	}
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok {
+		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
+		return
+	}
+	if !s.registry.HasPendingPermission(env.SessionID, cmd.RequestID) {
+		_ = s.sendError(state, env.ID, env.SessionID, fmt.Sprintf("unknown permission request %q", cmd.RequestID))
+		return
+	}
+	if !record.WrapperConnected {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	s.mu.Lock()
+	wrapper := s.wrappers[env.SessionID]
+	s.mu.Unlock()
+	if wrapper == nil {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	_ = wrapper.writeEnvelope(env)
+}
+
+func (s *Server) applyWrapperEnvelope(state *connState, env protocol.Envelope) {
+	if env.Type != protocol.MessageEvent {
+		return
+	}
+	var meta struct {
+		Event string `json:"event"`
+	}
+	if err := env.DecodePayload(&meta); err != nil {
+		return
+	}
+	if meta.Event == protocol.EventSessionAgentReady {
+		var ready protocol.AgentReadyEvent
+		if err := env.DecodePayload(&ready); err == nil {
+			record, ok := s.registry.Get(env.SessionID)
+			if !ok || !record.WrapperConnected || record.Runtime.ID != ready.Runtime.ID {
+				s.registry.SetConnected(env.SessionID, ready.Runtime, "")
+			}
+		}
+		return
+	}
+	if meta.Event != protocol.EventSessionUpdate {
+		return
+	}
+	var evt protocol.SessionUpdateEvent
+	if err := env.DecodePayload(&evt); err != nil {
+		return
+	}
+	switch evt.Update.Kind {
+	case protocol.UpdatePermissionRequest:
+		if evt.Update.Permission != nil {
+			s.registry.AddPermission(env.SessionID, state.runtimeID, *evt.Update.Permission)
+		}
+	case protocol.UpdatePermissionResolved:
+		s.registry.ResolvePermission(env.SessionID, state.runtimeID, evt.Update.RequestID)
+	case protocol.UpdateStatus:
+		s.registry.SetPhase(env.SessionID, state.runtimeID, evt.Update.Phase)
+	}
+}
+
 func (s *Server) subscribe(state *connState, sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -498,6 +576,8 @@ func mustAckEnvelope(id, sessionID string, record session.Record, command string
 			"persisted_session_handle": record.PersistedSessionHandle,
 			"wrapper_connected":        record.WrapperConnected,
 			"state":                    record.State,
+			"phase":                    record.Phase,
+			"pending_permissions":      record.PendingPermissions,
 			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
 		},
 	})
