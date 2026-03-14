@@ -26,6 +26,7 @@ type Config struct {
 	PublicURL      string
 	WrapperBin     string
 	PiBin          string
+	PTYBin         string
 	StartupTimeout time.Duration
 	Launcher       Launcher
 }
@@ -70,6 +71,9 @@ func NewServer(cfg Config) *Server {
 	}
 	if cfg.PiBin == "" {
 		cfg.PiBin = runtime.PiRPC().Command
+	}
+	if cfg.PTYBin == "" {
+		cfg.PTYBin = runtime.PiPTY().Command
 	}
 	if cfg.StartupTimeout <= 0 {
 		cfg.StartupTimeout = 20 * time.Second
@@ -175,6 +179,16 @@ func (s *Server) handleAuth(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "invalid auth role")
 		return
 	}
+	transport := strings.TrimSpace(cmd.Transport)
+	if cmd.Role == protocol.RoleWrapper {
+		if transport == "" {
+			transport = runtime.PiRPC().Transport
+		}
+		if transport != runtime.PiRPC().Transport && transport != runtime.PiPTY().Transport {
+			_ = s.sendError(state, env.ID, env.SessionID, fmt.Sprintf("invalid wrapper transport %q", cmd.Transport))
+			return
+		}
+	}
 	if cmd.Role == protocol.RoleWrapper && env.SessionID == "" {
 		_ = s.sendError(state, env.ID, env.SessionID, "wrapper auth requires session_id")
 		return
@@ -197,7 +211,7 @@ func (s *Server) handleAuth(state *connState, env protocol.Envelope) {
 			return
 		}
 		s.wrappers[env.SessionID] = state
-		s.registry.SetConnected(env.SessionID, protocol.RuntimeInfo{ID: env.RuntimeID, Kind: "pi", Transport: runtime.PiRPC().Transport}, "")
+		s.registry.SetConnected(env.SessionID, protocol.RuntimeInfo{ID: env.RuntimeID, Kind: "pi", Transport: transport}, "")
 	}
 	s.mu.Unlock()
 
@@ -387,6 +401,11 @@ func (s *Server) handleSessionSpawn(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 		return
 	}
+	descriptor, err := runtimeDescriptorForTransport(cmd.Transport)
+	if err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
 	if env.SessionID == "" {
 		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.spawn")
 		return
@@ -411,7 +430,8 @@ func (s *Server) handleSessionSpawn(state *connState, env protocol.Envelope) {
 		RelayURL:               s.relayURL(),
 		Token:                  s.cfg.Token,
 		PiBin:                  s.cfg.PiBin,
-		RuntimeDescriptor:      runtime.PiRPC(),
+		PTYBin:                 s.cfg.PTYBin,
+		RuntimeDescriptor:      descriptor,
 	}); err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, normalizeSpawnError(err))
 		return
@@ -427,6 +447,11 @@ func (s *Server) handleSessionSpawn(state *connState, env protocol.Envelope) {
 func (s *Server) handleSessionLoad(state *connState, env protocol.Envelope) {
 	var cmd protocol.SessionLoadCommand
 	if err := env.DecodePayload(&cmd); err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	descriptor, err := runtimeDescriptorForTransport(cmd.Transport)
+	if err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 		return
 	}
@@ -463,7 +488,8 @@ func (s *Server) handleSessionLoad(state *connState, env protocol.Envelope) {
 		RelayURL:               s.relayURL(),
 		Token:                  s.cfg.Token,
 		PiBin:                  s.cfg.PiBin,
-		RuntimeDescriptor:      runtime.PiRPC(),
+		PTYBin:                 s.cfg.PTYBin,
+		RuntimeDescriptor:      descriptor,
 	}); err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, normalizeSpawnError(err))
 		return
@@ -996,6 +1022,17 @@ func (s *Server) relayURL() string {
 	}
 	addr = strings.Replace(addr, "0.0.0.0:", "127.0.0.1:", 1)
 	return "ws://" + addr + "/ws"
+}
+
+func runtimeDescriptorForTransport(transport string) (runtime.Descriptor, error) {
+	switch strings.TrimSpace(transport) {
+	case "", "rpc":
+		return runtime.PiRPC(), nil
+	case "pty":
+		return runtime.PiPTY(), nil
+	default:
+		return runtime.Descriptor{}, fmt.Errorf("unsupported transport %q", transport)
+	}
 }
 
 func resolveSessionHandle(sessionDir, sessionID, requested string) (string, error) {

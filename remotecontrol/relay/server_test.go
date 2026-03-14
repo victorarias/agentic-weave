@@ -1359,6 +1359,59 @@ func TestRelayRejectsSpawnAndLoadPathTraversal(t *testing.T) {
 	awaitWSError(t, conn, "load-1", "session_path must stay within "+tempDir)
 }
 
+func TestRelaySpawnAndLoadPTYTransport(t *testing.T) {
+	tempDir := t.TempDir()
+	launcher := newFakeLauncher(t)
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir, PublicURL: "ws://127.0.0.1:0/ws", Launcher: launcher})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+	srv.cfg.PublicURL = relayURL
+
+	conn := dialWS(t, relayURL)
+	defer conn.Close()
+	authenticateWS(t, conn, protocol.RoleClient, "secret", "")
+
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-spawn", "", "test-client", "spawn-1", protocol.SessionSpawnCommand{
+		Command:   protocol.CommandSessionSpawn,
+		Transport: "pty",
+	})
+	if err != nil {
+		t.Fatalf("new pty spawn envelope: %v", err)
+	}
+	if err := conn.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write pty spawn: %v", err)
+	}
+	spawnPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, conn, "spawn-1"))
+	if nestedString(spawnPayload.Data, "runtime", "transport") != "pty" {
+		t.Fatalf("expected pty runtime transport after spawn: %#v", spawnPayload.Data)
+	}
+
+	stopEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-spawn", "", "test-client", "stop-1", protocol.RuntimeStopCommand{Command: protocol.CommandRuntimeStop})
+	if err != nil {
+		t.Fatalf("new stop envelope: %v", err)
+	}
+	if err := conn.WriteJSON(stopEnv); err != nil {
+		t.Fatalf("write stop: %v", err)
+	}
+	awaitWSAck(t, conn, "stop-1")
+
+	loadEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-spawn", "", "test-client", "load-1", protocol.SessionLoadCommand{
+		Command:   protocol.CommandSessionLoad,
+		Transport: "pty",
+	})
+	if err != nil {
+		t.Fatalf("new pty load envelope: %v", err)
+	}
+	if err := conn.WriteJSON(loadEnv); err != nil {
+		t.Fatalf("write pty load: %v", err)
+	}
+	loadPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, conn, "load-1"))
+	if nestedString(loadPayload.Data, "runtime", "transport") != "pty" {
+		t.Fatalf("expected pty runtime transport after load: %#v", loadPayload.Data)
+	}
+}
+
 func TestRelayDuplicateWrapperAuthDoesNotAuthenticateConnection(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -1436,7 +1489,8 @@ func TestRelayRejectsInvalidToken(t *testing.T) {
 }
 
 type fakeLaunchState struct {
-	cancel context.CancelFunc
+	cancel    context.CancelFunc
+	transport string
 }
 
 type fakeLauncher struct {
@@ -1456,7 +1510,7 @@ func (l *fakeLauncher) Spawn(_ context.Context, req LaunchRequest) error {
 		return errRuntimeAlreadyManaged
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	state := &fakeLaunchState{cancel: cancel}
+	state := &fakeLaunchState{cancel: cancel, transport: req.RuntimeDescriptor.Transport}
 	l.states[req.SessionID] = state
 	l.mu.Unlock()
 
@@ -1471,14 +1525,21 @@ func (l *fakeLauncher) Spawn(_ context.Context, req LaunchRequest) error {
 		}
 	}
 
-	wrapper := local.NewWrapper(local.Config{
-		SessionID:       req.SessionID,
-		PiBin:           helperProcessPath(l.t),
-		PiArgs:          []string{"-test.run=TestFakePIProcess", "--", "--session=" + req.PersistedSessionHandle},
-		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
-		NoDefaultPiArgs: true,
-		StartupTimeout:  5 * time.Second,
-	})
+	config := local.Config{
+		SessionID:      req.SessionID,
+		StartupTimeout: 5 * time.Second,
+	}
+	if req.RuntimeDescriptor.Transport == "pty" {
+		config.PTYBin = helperProcessPath(l.t)
+		config.PTYArgs = []string{"-test.run=TestFakePTYProcess", "--"}
+		config.Env = map[string]string{"WEAVE_FAKE_PTY": "1"}
+	} else {
+		config.PiBin = helperProcessPath(l.t)
+		config.PiArgs = []string{"-test.run=TestFakePIProcess", "--", "--session=" + req.PersistedSessionHandle}
+		config.Env = map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"}
+		config.NoDefaultPiArgs = true
+	}
+	wrapper := local.NewWrapper(config)
 	go func() {
 		_ = wrapper.RunRelay(ctx, req.RelayURL, req.Token)
 		l.mu.Lock()

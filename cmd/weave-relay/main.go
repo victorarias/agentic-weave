@@ -26,7 +26,8 @@ func run() error {
 	sessionDir := fs.String("session-dir", "", "Directory for persisted session handles in spawn/load mode")
 	publicURL := fs.String("public-url", "", "Public websocket URL wrappers should use to reach this relay")
 	wrapperBin := fs.String("wrapper-bin", "weave-wrapper", "Path to weave-wrapper binary for spawn/load")
-	piBin := fs.String("pi-bin", "pi", "Path to pi binary for spawned wrappers")
+	piBin := fs.String("pi-bin", "pi", "Path to pi binary for RPC spawned wrappers")
+	ptyBin := fs.String("pty-bin", "pi", "Path to pi binary for PTY spawned wrappers")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -41,6 +42,7 @@ func run() error {
 		PublicURL:  *publicURL,
 		WrapperBin: *wrapperBin,
 		PiBin:      *piBin,
+		PTYBin:     *ptyBin,
 		Logger:     log.New(os.Stderr, "weave-relay: ", log.LstdFlags),
 	})
 	return server.Run(ctx)

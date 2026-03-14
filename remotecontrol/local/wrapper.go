@@ -201,9 +201,10 @@ func (w *Wrapper) RunRelay(ctx context.Context, relayURL, token string) error {
 
 func (w *Wrapper) authRelay(conn *websocket.Conn, token string) error {
 	env, err := protocol.NewEnvelope(protocol.MessageCommand, w.cfg.SessionID, w.runtimeID, "weave-wrapper", "auth-wrapper", protocol.AuthCommand{
-		Command: protocol.CommandAuth,
-		Token:   token,
-		Role:    protocol.RoleWrapper,
+		Command:   protocol.CommandAuth,
+		Token:     token,
+		Role:      protocol.RoleWrapper,
+		Transport: w.descriptor.Transport,
 	})
 	if err != nil {
 		return err

@@ -225,6 +225,20 @@ What it verifies:
 3. `pty-input` can drive a real TUI command (`/session` + Enter)
 4. `pty-resize` updates are reflected in `session.status`
 
+### Manual relay-managed PTY spawn/load validation
+
+I also manually validated the new transport-selection path with relay-managed launch:
+
+```bash
+weave-inspect relay --session <id> --transport pty spawn
+weave-inspect relay --session <id> attach takeover
+weave-inspect relay --session <id> pty-input $'/session\r'
+weave-inspect relay --session <id> kill-runtime
+weave-inspect relay --session <id> --transport pty load
+```
+
+That confirms `session.spawn` / `session.load` can now choose the real interactive PTY-backed pi runtime instead of always defaulting to RPC.
+
 ---
 
 ## Tier 3: Real LLM (Integration)

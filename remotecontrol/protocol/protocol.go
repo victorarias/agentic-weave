@@ -66,9 +66,10 @@ type Envelope struct {
 }
 
 type AuthCommand struct {
-	Command string `json:"command"`
-	Token   string `json:"token"`
-	Role    string `json:"role"`
+	Command   string `json:"command"`
+	Token     string `json:"token"`
+	Role      string `json:"role"`
+	Transport string `json:"transport,omitempty"`
 }
 
 type InitializeCommand struct {
@@ -84,11 +85,13 @@ type SessionStatusCommand struct {
 type SessionSpawnCommand struct {
 	Command     string `json:"command"`
 	SessionPath string `json:"session_path,omitempty"`
+	Transport   string `json:"transport,omitempty"`
 }
 
 type SessionLoadCommand struct {
 	Command     string `json:"command"`
 	SessionPath string `json:"session_path,omitempty"`
+	Transport   string `json:"transport,omitempty"`
 }
 
 type RuntimeStopCommand struct {

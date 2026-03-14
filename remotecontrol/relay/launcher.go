@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ type LaunchRequest struct {
 	RelayURL               string
 	Token                  string
 	PiBin                  string
+	PTYBin                 string
 	RuntimeDescriptor      runtime.Descriptor
 }
 
@@ -70,11 +72,37 @@ func (l *ProcessLauncher) Spawn(ctx context.Context, req LaunchRequest) error {
 		"--token", req.Token,
 		"--session", req.SessionID,
 	}
-	if req.PiBin != "" {
-		args = append(args, "--pi-bin", req.PiBin)
+	if req.RuntimeDescriptor.Transport == "pty" {
+		ptyBin := req.PTYBin
+		if ptyBin == "" {
+			ptyBin = req.PiBin
+		}
+		if ptyBin != "" {
+			args = append(args, "--pty-bin", ptyBin)
+		}
+		if req.PersistedSessionHandle != "" {
+			args = append(args, "--pty-arg=--session", "--pty-arg="+req.PersistedSessionHandle)
+		} else {
+			args = append(args, "--pty-arg=--no-session")
+		}
+	} else {
+		if req.PiBin != "" {
+			args = append(args, "--pi-bin", req.PiBin)
+		}
+		if req.PersistedSessionHandle != "" {
+			args = append(args, "--pi-arg=--session", "--pi-arg="+req.PersistedSessionHandle)
+		}
 	}
+
 	if req.PersistedSessionHandle != "" {
-		args = append(args, "--pi-arg=--session", "--pi-arg="+req.PersistedSessionHandle)
+		if err := os.MkdirAll(filepath.Dir(req.PersistedSessionHandle), 0o755); err != nil {
+			return err
+		}
+		if _, err := os.Stat(req.PersistedSessionHandle); err != nil {
+			if err := os.WriteFile(req.PersistedSessionHandle, nil, 0o644); err != nil {
+				return err
+			}
+		}
 	}
 
 	cmd := exec.CommandContext(ctx, l.WrapperBin, args...)

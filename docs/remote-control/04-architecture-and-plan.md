@@ -297,7 +297,7 @@ Deliverables:
 
 **Goal**: add raw terminal control only after structured control is already stable.
 
-**Status (2026-03-14):** in progress. The takeover control-plane groundwork is in place (`session.attach` accepts `takeover`, takeover holds permission authority, relay queues orchestrator prompts while takeover is active, and queued prompts flush on detach/de-escalation), and the first PTY byte-transport slice is now working against both a scripted PTY-backed runtime and a real interactive `pi` process launched via wrapper PTY mode: relay forwards `pty.output` only to the attached takeover human and accepts `pty.input` / `pty.resize` from that human. The remaining gap is making relay-managed spawn/load choose that real interactive pi PTY runtime automatically and polishing takeover/de-escalation UX.
+**Status (2026-03-14):** in progress. The takeover control-plane groundwork is in place (`session.attach` accepts `takeover`, takeover holds permission authority, relay queues orchestrator prompts while takeover is active, and queued prompts flush on detach/de-escalation), and the first PTY byte-transport slice is now working against both a scripted PTY-backed runtime and a real interactive `pi` process launched via wrapper PTY mode: relay forwards `pty.output` only to the attached takeover human and accepts `pty.input` / `pty.resize` from that human. Relay-managed `session.spawn` / `session.load` can now explicitly choose that real interactive pi PTY runtime via transport selection. The remaining gap is polishing takeover/de-escalation UX and making runtime switching more automatic from attach intent.
 
 Deliverables:
 1. PTY output forwarding to attached human

@@ -64,7 +64,7 @@ func runLocal(args []string) error {
 	if err := client.initialize(*sessionID, *jsonMode); err != nil {
 		return err
 	}
-	return client.execute(subcmd, message, *delivery, *sessionID, *jsonMode)
+	return client.execute(subcmd, message, *delivery, "", *sessionID, *jsonMode)
 }
 
 func runRelay(args []string) error {
@@ -74,6 +74,7 @@ func runRelay(args []string) error {
 	sessionID := fs.String("session", "local", "Logical session id")
 	jsonMode := fs.Bool("json", false, "Print raw JSON envelopes")
 	delivery := fs.String("delivery", "", "Prompt delivery mode: default, foreground, interrupt, queue, deliver_when_idle")
+	transport := fs.String("transport", "", "Spawn/load transport: rpc or pty")
 	identity := fs.String("identity", "weave-inspect", "Client identity used for attach/inject/takeover authority")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -98,7 +99,7 @@ func runRelay(args []string) error {
 			return err
 		}
 	}
-	return client.execute(subcmd, message, *delivery, *sessionID, *jsonMode)
+	return client.execute(subcmd, message, *delivery, *transport, *sessionID, *jsonMode)
 }
 
 func parseSubcommand(args []string) (string, string, error) {
@@ -207,7 +208,7 @@ func (c *localClient) initialize(sessionID string, jsonMode bool) error {
 	return waitForInit(c.stream, jsonMode, "init-1")
 }
 
-func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonMode bool) error {
+func (c *localClient) execute(subcmd, message, delivery, transport, sessionID string, jsonMode bool) error {
 	switch subcmd {
 	case "init":
 		return nil
@@ -331,7 +332,7 @@ func (c *relayClient) initialize(sessionID string, jsonMode bool) error {
 	}
 }
 
-func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonMode bool) error {
+func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID string, jsonMode bool) error {
 	switch subcmd {
 	case "init":
 		return nil
@@ -364,7 +365,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		}
 		return printStatus(ack, jsonMode)
 	case "spawn":
-		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "spawn-1", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn})
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "spawn-1", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn, Transport: transport})
 		if err != nil {
 			return err
 		}
@@ -377,7 +378,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		}
 		return printStatus(ack, jsonMode)
 	case "load":
-		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "load-1", protocol.SessionLoadCommand{Command: protocol.CommandSessionLoad})
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "load-1", protocol.SessionLoadCommand{Command: protocol.CommandSessionLoad, Transport: transport})
 		if err != nil {
 			return err
 		}
