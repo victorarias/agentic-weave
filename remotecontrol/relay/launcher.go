@@ -31,6 +31,10 @@ type Launcher interface {
 
 var errRuntimeAlreadyManaged = errors.New("runtime already managed for session")
 
+var processLauncherStart = func(cmd *exec.Cmd) error {
+	return cmd.Start()
+}
+
 const gracefulStopTimeout = 3 * time.Second
 
 type managedProcess struct {
@@ -61,13 +65,6 @@ func NewProcessLauncher(wrapperBin string, logger *log.Logger) *ProcessLauncher 
 }
 
 func (l *ProcessLauncher) Spawn(ctx context.Context, req LaunchRequest) error {
-	l.mu.Lock()
-	if existing := l.processes[req.SessionID]; existing != nil && existing.cmd != nil && existing.cmd.Process != nil {
-		l.mu.Unlock()
-		return errRuntimeAlreadyManaged
-	}
-	l.mu.Unlock()
-
 	args := []string{
 		"--relay", req.RelayURL,
 		"--token", req.Token,
@@ -83,14 +80,18 @@ func (l *ProcessLauncher) Spawn(ctx context.Context, req LaunchRequest) error {
 	cmd := exec.CommandContext(ctx, l.WrapperBin, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.processes[req.SessionID] != nil {
+		return errRuntimeAlreadyManaged
+	}
+	if err := processLauncherStart(cmd); err != nil {
 		return err
 	}
 
 	proc := &managedProcess{cmd: cmd, done: make(chan error, 1)}
-	l.mu.Lock()
 	l.processes[req.SessionID] = proc
-	l.mu.Unlock()
 
 	go func(sessionID string, proc *managedProcess) {
 		err := proc.cmd.Wait()

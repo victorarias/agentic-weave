@@ -496,17 +496,32 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 	}
 
 	var previousSessionID string
+	previousMode := ""
+	action := "attached"
 	s.mu.Lock()
+	attachedSessionID, attachedOwner := s.findAttachmentByIdentityLocked(state.identity)
+	if attachedSessionID != "" && attachedSessionID != env.SessionID {
+		previousSessionID = attachedSessionID
+		delete(s.attachments, attachedSessionID)
+		if attachedOwner != nil {
+			attachedOwner.attachedTo = ""
+			attachedOwner.attachedMode = ""
+		}
+	}
 	attached := s.attachments[env.SessionID]
-	if attached != nil && attached != state {
+	if attached != nil && !sameAttachmentOwner(attached, state) {
 		s.mu.Unlock()
 		_ = s.sendError(state, env.ID, env.SessionID, "another controller is already attached")
 		return
 	}
-	if state.attachedTo != "" && state.attachedTo != env.SessionID {
-		previousSessionID = state.attachedTo
-		if s.attachments[state.attachedTo] == state {
-			delete(s.attachments, state.attachedTo)
+	if attached != nil {
+		previousMode = attached.attachedMode
+		if previousMode != "" && previousMode != cmd.Mode {
+			action = "mode_changed"
+		}
+		if attached != state {
+			attached.attachedTo = ""
+			attached.attachedMode = ""
 		}
 	}
 	s.attachments[env.SessionID] = state
@@ -521,9 +536,13 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 	record, _ := s.registry.SetAttachment(env.SessionID, protocol.AttachmentInfo{ClientID: state.identity, Mode: cmd.Mode})
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionAttach))
 	if previousSessionID != "" {
-		s.broadcastSessionStatus(previousSessionID)
+		s.broadcastSessionStatus(previousSessionID, map[string]any{"attachment_action": "detached", "attachment_client_id": state.identity})
 	}
-	s.broadcastSessionStatus(env.SessionID)
+	details := map[string]any{"attachment_action": action}
+	if previousMode != "" {
+		details["previous_mode"] = previousMode
+	}
+	s.broadcastSessionStatus(env.SessionID, details)
 }
 
 func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
@@ -541,7 +560,7 @@ func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
 		return
 	}
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionDetach))
-	s.broadcastSessionStatus(env.SessionID)
+	s.broadcastSessionStatus(env.SessionID, map[string]any{"attachment_action": "detached", "attachment_client_id": state.identity})
 }
 
 func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelope) {
@@ -581,6 +600,28 @@ func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelop
 	_ = wrapper.writeEnvelope(env)
 }
 
+func sameAttachmentOwner(owner, candidate *connState) bool {
+	if owner == nil || candidate == nil {
+		return false
+	}
+	if owner == candidate {
+		return true
+	}
+	return owner.role == candidate.role && owner.identity != "" && owner.identity == candidate.identity
+}
+
+func (s *Server) findAttachmentByIdentityLocked(identity string) (string, *connState) {
+	if identity == "" {
+		return "", nil
+	}
+	for sessionID, owner := range s.attachments {
+		if owner != nil && owner.identity == identity {
+			return sessionID, owner
+		}
+	}
+	return "", nil
+}
+
 func (s *Server) canPrompt(state *connState, sessionID string) bool {
 	record, ok := s.registry.Get(sessionID)
 	if !ok || record.Attachment == nil {
@@ -605,11 +646,15 @@ func (s *Server) canRespondToPermission(state *connState, record session.Record)
 func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, session.Record, error) {
 	s.mu.Lock()
 	owner := s.attachments[sessionID]
-	if owner != state {
+	if !sameAttachmentOwner(owner, state) {
 		s.mu.Unlock()
 		return false, session.Record{}, nil
 	}
 	delete(s.attachments, sessionID)
+	if owner != nil {
+		owner.attachedTo = ""
+		owner.attachedMode = ""
+	}
 	state.attachedTo = ""
 	state.attachedMode = ""
 	s.mu.Unlock()
@@ -620,7 +665,7 @@ func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, sessio
 	return true, record, nil
 }
 
-func (s *Server) broadcastSessionStatus(sessionID string) {
+func (s *Server) broadcastSessionStatus(sessionID string, extraDetails map[string]any) {
 	record, ok := s.registry.Get(sessionID)
 	if !ok {
 		return
@@ -629,7 +674,11 @@ func (s *Server) broadcastSessionStatus(sessionID string) {
 	if phase == "" {
 		phase = record.State
 	}
-	update := protocol.SessionUpdate{Kind: protocol.UpdateStatus, Phase: phase, Details: map[string]any{"state": record.State}}
+	details := map[string]any{"state": record.State}
+	for key, value := range extraDetails {
+		details[key] = value
+	}
+	update := protocol.SessionUpdate{Kind: protocol.UpdateStatus, Phase: phase, Details: details}
 	if record.Attachment != nil {
 		update.Details["attachment"] = record.Attachment
 	}
@@ -733,7 +782,7 @@ func (s *Server) unregister(state *connState) {
 	}
 	s.mu.Unlock()
 	if broadcastSessionID != "" {
-		s.broadcastSessionStatus(broadcastSessionID)
+		s.broadcastSessionStatus(broadcastSessionID, map[string]any{"attachment_action": "detached"})
 	}
 }
 
