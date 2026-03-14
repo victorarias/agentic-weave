@@ -81,6 +81,28 @@ func TestRegistryTracksPendingPermissionsAndPhase(t *testing.T) {
 	}
 }
 
+func TestRegistryTracksAttachment(t *testing.T) {
+	registry := NewRegistry()
+	registry.Ensure("sess-1", "/tmp/sess-1.jsonl")
+	registry.SetConnected("sess-1", protocol.RuntimeInfo{ID: "rt-1", Kind: "pi", Transport: "rpc"}, "")
+
+	record, ok := registry.SetAttachment("sess-1", protocol.AttachmentInfo{ClientID: "human-1", Mode: "observe"})
+	if !ok {
+		t.Fatal("expected set attachment to succeed")
+	}
+	if record.Attachment == nil || record.Attachment.ClientID != "human-1" || record.Attachment.Mode != "observe" {
+		t.Fatalf("unexpected attachment record: %#v", record)
+	}
+
+	record, ok = registry.ClearAttachment("sess-1")
+	if !ok {
+		t.Fatal("expected clear attachment to succeed")
+	}
+	if record.Attachment != nil {
+		t.Fatalf("expected attachment to be cleared: %#v", record)
+	}
+}
+
 func TestRegistryConnectClearsStalePendingPermissions(t *testing.T) {
 	registry := NewRegistry()
 	registry.Ensure("sess-1", "/tmp/sess-1.jsonl")

@@ -126,6 +126,139 @@ func TestRelaySessionStatusUsesRegistry(t *testing.T) {
 	}
 }
 
+func TestRelayObserveAttachConflict(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-observe",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-observe")
+
+	human1 := dialWS(t, relayURL)
+	defer human1.Close()
+	authenticateWSAs(t, human1, protocol.RoleClient, "secret", "", "human-1")
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-observe", "", "human-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new init envelope: %v", err)
+	}
+	if err := human1.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init: %v", err)
+	}
+	awaitWSAck(t, human1, "init-1")
+	awaitReadyEvent(t, human1)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-observe", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "observe"})
+	if err != nil {
+		t.Fatalf("new attach envelope: %v", err)
+	}
+	if err := human1.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach: %v", err)
+	}
+	ack := awaitWSAckEnvelope(t, human1, "attach-1")
+	payload := decodeAckPayload(t, ack)
+	attachment, _ := payload.Data["attachment"].(map[string]any)
+	if attachment["client_id"] != "human-1" || attachment["mode"] != "observe" {
+		t.Fatalf("unexpected attachment payload: %#v", payload.Data)
+	}
+
+	human2 := dialWS(t, relayURL)
+	defer human2.Close()
+	authenticateWSAs(t, human2, protocol.RoleClient, "secret", "", "human-2")
+	initEnv2, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-observe", "", "human-2", "init-2", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new second init envelope: %v", err)
+	}
+	if err := human2.WriteJSON(initEnv2); err != nil {
+		t.Fatalf("write second init: %v", err)
+	}
+	awaitWSAck(t, human2, "init-2")
+	awaitReadyEvent(t, human2)
+	attachEnv2, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-observe", "", "human-2", "attach-2", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "observe"})
+	if err != nil {
+		t.Fatalf("new second attach envelope: %v", err)
+	}
+	if err := human2.WriteJSON(attachEnv2); err != nil {
+		t.Fatalf("write second attach: %v", err)
+	}
+	awaitWSError(t, human2, "attach-2", "another controller is already attached")
+}
+
+func TestRelayHumanInjectVisibleToOrchestrator(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-inject",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-inject")
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	orchInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-inject", "", "orch-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new orch init: %v", err)
+	}
+	if err := orch.WriteJSON(orchInit); err != nil {
+		t.Fatalf("write orch init: %v", err)
+	}
+	awaitWSAck(t, orch, "init-1")
+	awaitReadyEvent(t, orch)
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	humanInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-inject", "", "human-1", "init-2", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new human init: %v", err)
+	}
+	if err := human.WriteJSON(humanInit); err != nil {
+		t.Fatalf("write human init: %v", err)
+	}
+	awaitWSAck(t, human, "init-2")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-inject", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "inject"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-inject", "", "human-1", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "say hello"})
+	if err != nil {
+		t.Fatalf("new prompt env: %v", err)
+	}
+	if err := human.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt env: %v", err)
+	}
+	awaitWSAck(t, human, "prompt-1")
+	awaitMessageComplete(t, orch, "hello world")
+}
+
 func TestRelayPermissionFlow(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -192,6 +325,90 @@ func TestRelayPermissionFlow(t *testing.T) {
 	awaitWSAck(t, clientConn, "allow-1")
 	awaitPermissionResolvedWS(t, clientConn, "perm-1", "allow")
 	awaitMessageComplete(t, clientConn, "hello world")
+}
+
+func TestRelayPermissionAuthorityHeldByAttachedHuman(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-perm-authority",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-perm-authority")
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	orchInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-authority", "", "orch-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new orch init: %v", err)
+	}
+	if err := orch.WriteJSON(orchInit); err != nil {
+		t.Fatalf("write orch init: %v", err)
+	}
+	awaitWSAck(t, orch, "init-1")
+	awaitReadyEvent(t, orch)
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	humanInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-authority", "", "human-1", "init-2", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new human init: %v", err)
+	}
+	if err := human.WriteJSON(humanInit); err != nil {
+		t.Fatalf("write human init: %v", err)
+	}
+	awaitWSAck(t, human, "init-2")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-authority", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "inject"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-authority", "", "orch-1", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "need approval"})
+	if err != nil {
+		t.Fatalf("new prompt env: %v", err)
+	}
+	if err := orch.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt env: %v", err)
+	}
+	awaitWSAck(t, orch, "prompt-1")
+	awaitPermissionRequestWS(t, orch, "perm-1")
+
+	allowEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-authority", "", "orch-1", "allow-1", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
+	if err != nil {
+		t.Fatalf("new allow env: %v", err)
+	}
+	if err := orch.WriteJSON(allowEnv); err != nil {
+		t.Fatalf("write allow env: %v", err)
+	}
+	awaitWSError(t, orch, "allow-1", "permission authority is held by attached human")
+
+	humanAllow, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-authority", "", "human-1", "allow-2", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
+	if err != nil {
+		t.Fatalf("new human allow env: %v", err)
+	}
+	if err := human.WriteJSON(humanAllow); err != nil {
+		t.Fatalf("write human allow env: %v", err)
+	}
+	awaitWSAck(t, human, "allow-2")
+	awaitPermissionResolvedWS(t, orch, "perm-1", "allow")
 }
 
 func TestRelayStatusShowsPendingPermission(t *testing.T) {
@@ -402,6 +619,136 @@ func TestRelayRejectsDuplicatePermissionResponse(t *testing.T) {
 		t.Fatalf("write duplicate allow: %v", err)
 	}
 	awaitWSError(t, clientConn, "allow-2", `unknown permission request "perm-1"`)
+}
+
+func TestRelayAttachMovesOwnershipBetweenSessions(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for _, sessionID := range []string{"sess-attach-a", "sess-attach-b"} {
+		wrapper := local.NewWrapper(local.Config{
+			SessionID:       sessionID,
+			PiBin:           helperProcessPath(t),
+			PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+			Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+			NoDefaultPiArgs: true,
+			StartupTimeout:  5 * time.Second,
+		})
+		go func(wrapper *local.Wrapper) {
+			_ = wrapper.RunRelay(ctx, relayURL, "secret")
+		}(wrapper)
+		waitForWrapperRegistration(t, srv, sessionID)
+	}
+
+	clientConn := dialWS(t, relayURL)
+	defer clientConn.Close()
+	authenticateWSAs(t, clientConn, protocol.RoleClient, "secret", "", "controller")
+
+	attachA, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-attach-a", "", "controller", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "observe"})
+	if err != nil {
+		t.Fatalf("new attach-a envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(attachA); err != nil {
+		t.Fatalf("write attach-a: %v", err)
+	}
+	awaitWSAck(t, clientConn, "attach-1")
+
+	statusA, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-attach-a", "", "controller", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new status-a envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(statusA); err != nil {
+		t.Fatalf("write status-a: %v", err)
+	}
+	statusAPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, clientConn, "status-1"))
+	attachmentA, _ := statusAPayload.Data["attachment"].(map[string]any)
+	if stringValue(attachmentA["client_id"]) != "controller" || stringValue(attachmentA["mode"]) != "observe" {
+		t.Fatalf("expected observe attachment on sess-attach-a: %#v", statusAPayload.Data)
+	}
+
+	attachB, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-attach-b", "", "controller", "attach-2", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "inject"})
+	if err != nil {
+		t.Fatalf("new attach-b envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(attachB); err != nil {
+		t.Fatalf("write attach-b: %v", err)
+	}
+	awaitWSAck(t, clientConn, "attach-2")
+
+	statusA2, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-attach-a", "", "controller", "status-2", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new status-a2 envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(statusA2); err != nil {
+		t.Fatalf("write status-a2: %v", err)
+	}
+	statusA2Payload := decodeAckPayload(t, awaitWSAckEnvelope(t, clientConn, "status-2"))
+	if attachment, ok := statusA2Payload.Data["attachment"]; ok && attachment != nil {
+		t.Fatalf("expected sess-attach-a attachment to be cleared: %#v", statusA2Payload.Data)
+	}
+
+	statusB, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-attach-b", "", "controller", "status-3", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new status-b envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(statusB); err != nil {
+		t.Fatalf("write status-b: %v", err)
+	}
+	statusBPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, clientConn, "status-3"))
+	attachmentB, _ := statusBPayload.Data["attachment"].(map[string]any)
+	if stringValue(attachmentB["client_id"]) != "controller" || stringValue(attachmentB["mode"]) != "inject" {
+		t.Fatalf("expected inject attachment on sess-attach-b: %#v", statusBPayload.Data)
+	}
+}
+
+func TestRelayObserveAttachmentBlocksPromptFromOwner(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-observe",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() {
+		_ = wrapper.RunRelay(ctx, relayURL, "secret")
+	}()
+	waitForWrapperRegistration(t, srv, "sess-observe")
+
+	clientConn := dialWS(t, relayURL)
+	defer clientConn.Close()
+	authenticateWSAs(t, clientConn, protocol.RoleClient, "secret", "", "controller")
+
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-observe", "", "controller", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "observe"})
+	if err != nil {
+		t.Fatalf("new attach envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach: %v", err)
+	}
+	awaitWSAck(t, clientConn, "attach-1")
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-observe", "", "controller", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "say hello"})
+	if err != nil {
+		t.Fatalf("new prompt envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	awaitWSError(t, clientConn, "prompt-1", "attached client in observe mode cannot send prompts")
 }
 
 func TestRelayListSessions(t *testing.T) {
@@ -761,7 +1108,12 @@ func dialWS(t *testing.T, relayURL string) *websocket.Conn {
 
 func authenticateWS(t *testing.T, conn *websocket.Conn, role, token, sessionID string) {
 	t.Helper()
-	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "test", "auth-1", protocol.AuthCommand{
+	authenticateWSAs(t, conn, role, token, sessionID, "test")
+}
+
+func authenticateWSAs(t *testing.T, conn *websocket.Conn, role, token, sessionID, identity string) {
+	t.Helper()
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", identity, "auth-1", protocol.AuthCommand{
 		Command: protocol.CommandAuth,
 		Token:   token,
 		Role:    role,

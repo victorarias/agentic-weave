@@ -15,6 +15,7 @@ type Record struct {
 	WrapperConnected       bool                         `json:"wrapper_connected"`
 	State                  string                       `json:"state,omitempty"`
 	Phase                  string                       `json:"phase,omitempty"`
+	Attachment             *protocol.AttachmentInfo     `json:"attachment,omitempty"`
 	PendingPermissions     []protocol.PermissionRequest `json:"pending_permissions,omitempty"`
 	UpdatedAt              time.Time                    `json:"updated_at"`
 }
@@ -72,6 +73,7 @@ func (r *Registry) SetDisconnected(sessionID, runtimeID string) (Record, bool) {
 	}
 	record.WrapperConnected = false
 	record.Phase = ""
+	record.Attachment = nil
 	record.PendingPermissions = nil
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
@@ -147,6 +149,32 @@ func (r *Registry) ResolvePermission(sessionID, runtimeID, requestID string) (Re
 	}
 	record.PendingPermissions = append([]protocol.PermissionRequest(nil), filtered...)
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = record
+	return record, true
+}
+
+func (r *Registry) SetAttachment(sessionID string, attachment protocol.AttachmentInfo) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return Record{}, false
+	}
+	record.Attachment = &protocol.AttachmentInfo{ClientID: attachment.ClientID, Mode: attachment.Mode}
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = record
+	return record, true
+}
+
+func (r *Registry) ClearAttachment(sessionID string) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return Record{}, false
+	}
+	record.Attachment = nil
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = record
 	return record, true

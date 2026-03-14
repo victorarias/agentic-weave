@@ -36,19 +36,23 @@ type Server struct {
 
 	mu          sync.Mutex
 	wrappers    map[string]*connState
+	attachments map[string]*connState
 	subscribers map[string]map[*connState]struct{}
 	registry    *session.Registry
 	launcher    Launcher
 }
 
 type connState struct {
-	conn      *websocket.Conn
-	role      string
-	sessionID string
-	runtimeID string
-	mu        sync.Mutex
-	authed    bool
-	sessions  map[string]struct{}
+	conn         *websocket.Conn
+	role         string
+	identity     string
+	sessionID    string
+	runtimeID    string
+	attachedTo   string
+	attachedMode string
+	mu           sync.Mutex
+	authed       bool
+	sessions     map[string]struct{}
 }
 
 func NewServer(cfg Config) *Server {
@@ -77,6 +81,7 @@ func NewServer(cfg Config) *Server {
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
 		wrappers:    make(map[string]*connState),
+		attachments: make(map[string]*connState),
 		subscribers: make(map[string]map[*connState]struct{}),
 		registry:    session.NewRegistry(),
 		launcher:    launcher,
@@ -176,6 +181,10 @@ func (s *Server) handleAuth(state *connState, env protocol.Envelope) {
 
 	state.authed = true
 	state.role = cmd.Role
+	state.identity = env.From
+	if state.identity == "" {
+		state.identity = cmd.Role
+	}
 	state.sessionID = env.SessionID
 	state.runtimeID = env.RuntimeID
 
@@ -245,6 +254,12 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 	case protocol.CommandSessionPermissionResponse:
 		s.handlePermissionResponse(state, env)
 		return
+	case protocol.CommandSessionAttach:
+		s.handleSessionAttach(state, env)
+		return
+	case protocol.CommandSessionDetach:
+		s.handleSessionDetach(state, env)
+		return
 	}
 
 	if env.SessionID == "" {
@@ -253,6 +268,12 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 	}
 	if meta.Command == protocol.CommandInitialize || meta.Command == protocol.CommandSessionPrompt || meta.Command == protocol.CommandSessionCancel {
 		s.subscribe(state, env.SessionID)
+	}
+	if meta.Command == protocol.CommandSessionPrompt {
+		if !s.canPrompt(state, env.SessionID) {
+			_ = s.sendError(state, env.ID, env.SessionID, "attached client in observe mode cannot send prompts")
+			return
+		}
 	}
 
 	s.mu.Lock()
@@ -297,6 +318,7 @@ func (s *Server) handleListSessions(state *connState, env protocol.Envelope) {
 			"wrapper_connected":        record.WrapperConnected,
 			"state":                    record.State,
 			"phase":                    record.Phase,
+			"attachment":               record.Attachment,
 			"pending_permissions":      record.PendingPermissions,
 			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
 		})
@@ -430,6 +452,78 @@ func (s *Server) handleRuntimeStop(state *connState, env protocol.Envelope) {
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandRuntimeStop))
 }
 
+func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
+	var cmd protocol.SessionAttachCommand
+	if err := env.DecodePayload(&cmd); err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	if env.SessionID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.attach")
+		return
+	}
+	if cmd.Mode != "observe" && cmd.Mode != "inject" {
+		_ = s.sendError(state, env.ID, env.SessionID, fmt.Sprintf("unsupported attach mode %q", cmd.Mode))
+		return
+	}
+	if state.identity == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "attach requires client identity")
+		return
+	}
+	if _, ok := s.registry.Get(env.SessionID); !ok {
+		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
+		return
+	}
+
+	var previousSessionID string
+	s.mu.Lock()
+	attached := s.attachments[env.SessionID]
+	if attached != nil && attached != state {
+		s.mu.Unlock()
+		_ = s.sendError(state, env.ID, env.SessionID, "another controller is already attached")
+		return
+	}
+	if state.attachedTo != "" && state.attachedTo != env.SessionID {
+		previousSessionID = state.attachedTo
+		if s.attachments[state.attachedTo] == state {
+			delete(s.attachments, state.attachedTo)
+		}
+	}
+	s.attachments[env.SessionID] = state
+	state.attachedTo = env.SessionID
+	state.attachedMode = cmd.Mode
+	s.mu.Unlock()
+
+	if previousSessionID != "" {
+		s.registry.ClearAttachment(previousSessionID)
+	}
+	s.subscribe(state, env.SessionID)
+	record, _ := s.registry.SetAttachment(env.SessionID, protocol.AttachmentInfo{ClientID: state.identity, Mode: cmd.Mode})
+	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionAttach))
+	if previousSessionID != "" {
+		s.broadcastSessionStatus(previousSessionID)
+	}
+	s.broadcastSessionStatus(env.SessionID)
+}
+
+func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
+	if env.SessionID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.detach")
+		return
+	}
+	cleared, record, err := s.detachIfOwner(state, env.SessionID)
+	if err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	if !cleared {
+		_ = s.sendError(state, env.ID, env.SessionID, "client is not attached to session")
+		return
+	}
+	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionDetach))
+	s.broadcastSessionStatus(env.SessionID)
+}
+
 func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelope) {
 	var cmd protocol.PermissionResponseCommand
 	if err := env.DecodePayload(&cmd); err != nil {
@@ -449,6 +543,10 @@ func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelop
 		_ = s.sendError(state, env.ID, env.SessionID, fmt.Sprintf("unknown permission request %q", cmd.RequestID))
 		return
 	}
+	if !s.canRespondToPermission(state, record) {
+		_ = s.sendError(state, env.ID, env.SessionID, "permission authority is held by attached human")
+		return
+	}
 	if !record.WrapperConnected {
 		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
 		return
@@ -461,6 +559,78 @@ func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelop
 		return
 	}
 	_ = wrapper.writeEnvelope(env)
+}
+
+func (s *Server) canPrompt(state *connState, sessionID string) bool {
+	record, ok := s.registry.Get(sessionID)
+	if !ok || record.Attachment == nil {
+		return true
+	}
+	if record.Attachment.ClientID != state.identity {
+		return true
+	}
+	return record.Attachment.Mode != "observe"
+}
+
+func (s *Server) canRespondToPermission(state *connState, record session.Record) bool {
+	if record.Attachment == nil {
+		return true
+	}
+	if record.Attachment.Mode != "inject" {
+		return true
+	}
+	return record.Attachment.ClientID == state.identity
+}
+
+func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, session.Record, error) {
+	s.mu.Lock()
+	owner := s.attachments[sessionID]
+	if owner != state {
+		s.mu.Unlock()
+		return false, session.Record{}, nil
+	}
+	delete(s.attachments, sessionID)
+	state.attachedTo = ""
+	state.attachedMode = ""
+	s.mu.Unlock()
+	record, ok := s.registry.ClearAttachment(sessionID)
+	if !ok {
+		return false, session.Record{}, fmt.Errorf("unknown session")
+	}
+	return true, record, nil
+}
+
+func (s *Server) broadcastSessionStatus(sessionID string) {
+	record, ok := s.registry.Get(sessionID)
+	if !ok {
+		return
+	}
+	phase := record.Phase
+	if phase == "" {
+		phase = record.State
+	}
+	update := protocol.SessionUpdate{Kind: protocol.UpdateStatus, Phase: phase, Details: map[string]any{"state": record.State}}
+	if record.Attachment != nil {
+		update.Details["attachment"] = record.Attachment
+	}
+	if len(record.PendingPermissions) > 0 {
+		update.Details["pending_permissions"] = record.PendingPermissions
+	}
+	event := protocol.SessionUpdateEvent{Event: protocol.EventSessionUpdate, Update: update}
+	env, err := protocol.NewEnvelope(protocol.MessageEvent, sessionID, record.Runtime.ID, "weave-relay", "", event)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	subs := s.subscribers[sessionID]
+	clients := make([]*connState, 0, len(subs))
+	for client := range subs {
+		clients = append(clients, client)
+	}
+	s.mu.Unlock()
+	for _, client := range clients {
+		_ = client.writeEnvelope(env)
+	}
 }
 
 func (s *Server) applyWrapperEnvelope(state *connState, env protocol.Envelope) {
@@ -513,12 +683,25 @@ func (s *Server) subscribe(state *connState, sessionID string) {
 }
 
 func (s *Server) unregister(state *connState) {
+	var broadcastSessionID string
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if state.role == protocol.RoleWrapper && state.sessionID != "" {
 		if s.wrappers[state.sessionID] == state {
 			delete(s.wrappers, state.sessionID)
 			s.registry.SetDisconnected(state.sessionID, state.runtimeID)
+			if owner := s.attachments[state.sessionID]; owner != nil {
+				delete(s.attachments, state.sessionID)
+				owner.attachedTo = ""
+				owner.attachedMode = ""
+				broadcastSessionID = state.sessionID
+			}
+		}
+	}
+	if state.attachedTo != "" {
+		if s.attachments[state.attachedTo] == state {
+			delete(s.attachments, state.attachedTo)
+			s.registry.ClearAttachment(state.attachedTo)
+			broadcastSessionID = state.attachedTo
 		}
 	}
 	for sessionID := range state.sessions {
@@ -527,6 +710,10 @@ func (s *Server) unregister(state *connState) {
 		if len(subs) == 0 {
 			delete(s.subscribers, sessionID)
 		}
+	}
+	s.mu.Unlock()
+	if broadcastSessionID != "" {
+		s.broadcastSessionStatus(broadcastSessionID)
 	}
 }
 
@@ -577,6 +764,7 @@ func mustAckEnvelope(id, sessionID string, record session.Record, command string
 			"wrapper_connected":        record.WrapperConnected,
 			"state":                    record.State,
 			"phase":                    record.Phase,
+			"attachment":               record.Attachment,
 			"pending_permissions":      record.PendingPermissions,
 			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
 		},

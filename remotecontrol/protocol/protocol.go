@@ -26,6 +26,8 @@ const (
 	CommandRuntimeStop               = "runtime.stop"
 	CommandRegistryListSessions      = "registry.list_sessions"
 	CommandSessionPermissionResponse = "session.permission_response"
+	CommandSessionAttach             = "session.attach"
+	CommandSessionDetach             = "session.detach"
 	CommandSessionPrompt             = "session.prompt"
 	CommandSessionCancel             = "session.cancel"
 
@@ -97,6 +99,15 @@ type PermissionResponseCommand struct {
 	Decision  string `json:"decision"`
 }
 
+type SessionAttachCommand struct {
+	Command string `json:"command"`
+	Mode    string `json:"mode"`
+}
+
+type SessionDetachCommand struct {
+	Command string `json:"command"`
+}
+
 type SessionPromptCommand struct {
 	Command  string `json:"command"`
 	Message  string `json:"message"`
@@ -134,6 +145,11 @@ type RuntimeInfo struct {
 	ID        string `json:"id"`
 	Kind      string `json:"kind"`
 	Transport string `json:"transport"`
+}
+
+type AttachmentInfo struct {
+	ClientID string `json:"client_id"`
+	Mode     string `json:"mode"`
 }
 
 type SessionUpdateEvent struct {

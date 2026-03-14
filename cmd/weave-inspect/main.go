@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|attach|detach|inject|prompt|cancel|allow|deny> [message]")
 	}
 	switch os.Args[1] {
 	case "local":
@@ -30,7 +31,7 @@ func run() error {
 	case "relay":
 		return runRelay(os.Args[2:])
 	default:
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|attach|detach|inject|prompt|cancel|allow|deny> [message]")
 	}
 }
 
@@ -47,7 +48,7 @@ func runLocal(args []string) error {
 	if err != nil {
 		return err
 	}
-	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" {
+	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" || subcmd == "attach" || subcmd == "detach" || subcmd == "inject" {
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	}
 
@@ -71,6 +72,7 @@ func runRelay(args []string) error {
 	sessionID := fs.String("session", "local", "Logical session id")
 	jsonMode := fs.Bool("json", false, "Print raw JSON envelopes")
 	delivery := fs.String("delivery", "", "Prompt delivery mode: default, foreground, interrupt, queue, deliver_when_idle")
+	identity := fs.String("identity", "weave-inspect", "Client identity used for attach/inject authority")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -85,7 +87,7 @@ func runRelay(args []string) error {
 	}
 	defer conn.Close()
 
-	client := newRelayClient(conn, *token)
+	client := newRelayClient(conn, *token, *identity)
 	if err := client.authenticate(*jsonMode); err != nil {
 		return err
 	}
@@ -99,12 +101,22 @@ func runRelay(args []string) error {
 
 func parseSubcommand(args []string) (string, string, error) {
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, prompt, cancel, allow, or deny")
+		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, attach, detach, inject, prompt, cancel, allow, or deny")
 	}
 	subcmd := args[0]
 	switch subcmd {
-	case "init", "sessions", "status", "spawn", "load", "kill-runtime", "cancel":
+	case "init", "sessions", "status", "spawn", "load", "kill-runtime", "detach", "cancel":
 		return subcmd, "", nil
+	case "attach":
+		if len(args) < 2 {
+			return "", "", fmt.Errorf("attach requires a mode: observe or inject")
+		}
+		return subcmd, args[1], nil
+	case "inject":
+		if len(args) < 2 {
+			return "", "", fmt.Errorf("inject requires a message")
+		}
+		return subcmd, strings.Join(args[1:], " "), nil
 	case "allow", "deny":
 		if len(args) < 2 {
 			return "", "", fmt.Errorf("%s requires a request id", subcmd)
@@ -205,7 +217,7 @@ func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonM
 			return err
 		}
 		return printStatus(ack, jsonMode)
-	case "sessions", "spawn", "load", "kill-runtime":
+	case "sessions", "spawn", "load", "kill-runtime", "attach", "detach", "inject":
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
@@ -246,15 +258,16 @@ func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonM
 }
 
 type relayClient struct {
-	conn   *websocket.Conn
-	token  string
-	stream *envelopeStream
-	errCh  chan error
+	conn     *websocket.Conn
+	token    string
+	identity string
+	stream   *envelopeStream
+	errCh    chan error
 }
 
-func newRelayClient(conn *websocket.Conn, token string) *relayClient {
+func newRelayClient(conn *websocket.Conn, token, identity string) *relayClient {
 	events := make(chan protocol.Envelope, 64)
-	c := &relayClient{conn: conn, token: token, stream: newEnvelopeStream(events), errCh: make(chan error, 1)}
+	c := &relayClient{conn: conn, token: token, identity: identity, stream: newEnvelopeStream(events), errCh: make(chan error, 1)}
 	go func() {
 		for {
 			var env protocol.Envelope
@@ -269,7 +282,7 @@ func newRelayClient(conn *websocket.Conn, token string) *relayClient {
 }
 
 func (c *relayClient) authenticate(jsonMode bool) error {
-	env, err := protocol.NewEnvelope(protocol.MessageCommand, "", "", "weave-inspect", "auth-1", protocol.AuthCommand{
+	env, err := protocol.NewEnvelope(protocol.MessageCommand, "", "", c.identity, "auth-1", protocol.AuthCommand{
 		Command: protocol.CommandAuth,
 		Token:   c.token,
 		Role:    protocol.RoleClient,
@@ -368,7 +381,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		}
 		return printStatus(ack, jsonMode)
 	case "kill-runtime":
-		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "kill-runtime-1", protocol.RuntimeStopCommand{Command: protocol.CommandRuntimeStop})
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "kill-runtime-1", protocol.RuntimeStopCommand{Command: protocol.CommandRuntimeStop})
 		if err != nil {
 			return err
 		}
@@ -380,6 +393,64 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 			return err
 		}
 		return printStatus(ack, jsonMode)
+	case "attach":
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: message})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		ack, err := waitForAckEnvelope(c.stream, "attach-1", jsonMode)
+		if err != nil {
+			return err
+		}
+		if err := printStatus(ack, jsonMode); err != nil {
+			return err
+		}
+		return streamUntilInterrupt(c.stream, c.errCh, jsonMode)
+	case "detach":
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "detach-1", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		ack, err := waitForAckEnvelope(c.stream, "detach-1", jsonMode)
+		if err != nil {
+			return err
+		}
+		return printStatus(ack, jsonMode)
+	case "inject":
+		attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "inject"})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(attachEnv); err != nil {
+			return err
+		}
+		if _, err := waitForAckEnvelope(c.stream, "attach-1", jsonMode); err != nil {
+			return err
+		}
+		promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: message, Delivery: delivery})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(promptEnv); err != nil {
+			return err
+		}
+		if _, err := waitForAckEnvelope(c.stream, "prompt-1", jsonMode); err != nil {
+			return err
+		}
+		streamErr := streamUntilComplete(c.stream, c.errCh, jsonMode)
+		detachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "detach-1", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
+		if err == nil {
+			if err := c.conn.WriteJSON(detachEnv); err == nil {
+				_, _ = waitForAckEnvelope(c.stream, "detach-1", jsonMode)
+			}
+		}
+		return streamErr
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
 		if err != nil {
@@ -520,6 +591,10 @@ func printStatus(env protocol.Envelope, jsonMode bool) error {
 	if wrapperConnected, ok := ack.Data["wrapper_connected"].(bool); ok {
 		fmt.Fprintf(os.Stdout, "wrapper_connected=%t\n", wrapperConnected)
 	}
+	if attachment, ok := ack.Data["attachment"].(map[string]any); ok && len(attachment) > 0 {
+		fmt.Fprintf(os.Stdout, "attached_client_id=%s\n", stringValue(attachment["client_id"]))
+		fmt.Fprintf(os.Stdout, "attached_mode=%s\n", stringValue(attachment["mode"]))
+	}
 	if pending, ok := ack.Data["pending_permissions"].([]any); ok {
 		fmt.Fprintf(os.Stdout, "pending_permissions=%d\n", len(pending))
 		for _, item := range pending {
@@ -554,13 +629,21 @@ func printSessions(env protocol.Envelope, jsonMode bool) error {
 		if pending, ok := row["pending_permissions"].([]any); ok {
 			pendingCount = len(pending)
 		}
-		fmt.Fprintf(os.Stdout, "session_id=%s runtime_id=%s state=%s phase=%s wrapper_connected=%v pending_permissions=%d\n",
+		attachmentID := ""
+		attachmentMode := ""
+		if attachment, ok := row["attachment"].(map[string]any); ok {
+			attachmentID = stringValue(attachment["client_id"])
+			attachmentMode = stringValue(attachment["mode"])
+		}
+		fmt.Fprintf(os.Stdout, "session_id=%s runtime_id=%s state=%s phase=%s wrapper_connected=%v pending_permissions=%d attached_client_id=%s attached_mode=%s\n",
 			stringValue(sessionMap["id"]),
 			stringValue(runtimeMap["id"]),
 			stringValue(row["state"]),
 			stringValue(row["phase"]),
 			row["wrapper_connected"],
 			pendingCount,
+			attachmentID,
+			attachmentMode,
 		)
 		if persisted := stringValue(row["persisted_session_handle"]); persisted != "" {
 			fmt.Fprintf(os.Stdout, "  persisted_session_handle=%s\n", persisted)
@@ -639,9 +722,82 @@ func streamUntilComplete(stream *envelopeStream, errCh <-chan error, jsonMode bo
 	}
 }
 
+func streamUntilInterrupt(stream *envelopeStream, errCh <-chan error, jsonMode bool) error {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+	for {
+		if len(stream.backlog) == 0 {
+			select {
+			case err := <-errCh:
+				if err != nil {
+					return err
+				}
+				return nil
+			case <-sigCh:
+				return nil
+			default:
+			}
+		}
+		env, err := stream.next(1 * time.Second)
+		if err != nil {
+			select {
+			case <-sigCh:
+				return nil
+			case err := <-errCh:
+				if err != nil {
+					return err
+				}
+				return nil
+			default:
+				continue
+			}
+		}
+		if jsonMode {
+			_ = protocol.WriteJSONLine(os.Stdout, env)
+			continue
+		}
+		if env.Type != protocol.MessageEvent {
+			continue
+		}
+		var evt protocol.SessionUpdateEvent
+		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
+			continue
+		}
+		switch evt.Update.Kind {
+		case protocol.UpdateMessageDelta:
+			fmt.Fprint(os.Stdout, evt.Update.Delta)
+		case protocol.UpdateMessageComplete:
+			if evt.Update.Message != "" {
+				fmt.Fprintln(os.Stdout)
+			}
+		case protocol.UpdateToolBegin:
+			fmt.Fprintf(os.Stderr, "\n[tool start] %s\n", evt.Update.ToolName)
+		case protocol.UpdateToolEnd:
+			fmt.Fprintf(os.Stderr, "\n[tool end] %s\n", evt.Update.ToolName)
+		case protocol.UpdatePermissionRequest:
+			title := evt.Update.Message
+			if evt.Update.Permission != nil && evt.Update.Permission.Title != "" {
+				title = evt.Update.Permission.Title
+			}
+			fmt.Fprintf(os.Stderr, "\n[permission request] id=%s title=%s\n", evt.Update.RequestID, title)
+		case protocol.UpdatePermissionResolved:
+			fmt.Fprintf(os.Stderr, "\n[permission resolved] id=%s decision=%s\n", evt.Update.RequestID, evt.Update.Decision)
+		case protocol.UpdateStatus:
+			if evt.Update.Phase != "" {
+				fmt.Fprintf(os.Stderr, "\n[status] %s\n", evt.Update.Phase)
+			}
+		case protocol.UpdateError:
+			return errors.New(evt.Update.Message)
+		case protocol.UpdateComplete:
+			fmt.Fprintln(os.Stdout)
+		}
+	}
+}
+
 func shouldInitializeRelay(subcmd string) bool {
 	switch subcmd {
-	case "init", "prompt", "cancel", "allow", "deny":
+	case "init", "attach", "detach", "inject", "prompt", "cancel", "allow", "deny":
 		return true
 	default:
 		return false
