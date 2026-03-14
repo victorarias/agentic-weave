@@ -1,6 +1,6 @@
 # Control Protocol
 
-**Status (2026-03-13):** Tier 0 local protocol, Tier 1 single-session relay routing, and the Tier 2 spawn/load identity skeleton are implemented for `auth`, `initialize`, `registry.list_sessions`, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, `session.prompt`, `session.cancel`, `session.permission_response`, `session.agent_ready`, and normalized `session.update`. Attach/takeover and richer host routing remain future tiers.
+**Status (2026-03-13):** Tier 0 local protocol, Tier 1 single-session relay routing, and the Tier 2 spawn/load identity skeleton are implemented for `auth`, `initialize`, `registry.list_sessions`, `session.status`, `session.spawn`, `runtime.stop`, `session.load`, `session.prompt`, `session.cancel`, `session.permission_response`, `session.agent_ready`, and normalized `session.update`. Initial permission lifecycle normalization (`permission_request`, `permission_resolved`, `status`) is now wired through the wrapper/inspector path. Attach/takeover and richer host routing remain future tiers.
 
 All messages are JSON over WebSocket. Every message has a common envelope.
 

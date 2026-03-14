@@ -125,21 +125,49 @@ type inspectClient interface {
 	execute(subcmd, message, delivery, sessionID string, jsonMode bool) error
 }
 
+type envelopeStream struct {
+	events  <-chan protocol.Envelope
+	backlog []protocol.Envelope
+}
+
+func newEnvelopeStream(events <-chan protocol.Envelope) *envelopeStream {
+	return &envelopeStream{events: events}
+}
+
+func (s *envelopeStream) next(timeout time.Duration) (protocol.Envelope, error) {
+	if len(s.backlog) > 0 {
+		env := s.backlog[0]
+		s.backlog = s.backlog[1:]
+		return env, nil
+	}
+	select {
+	case env := <-s.events:
+		return env, nil
+	case <-time.After(timeout):
+		return protocol.Envelope{}, fmt.Errorf("timed out waiting for envelope")
+	}
+}
+
+func (s *envelopeStream) push(env protocol.Envelope) {
+	s.backlog = append(s.backlog, env)
+}
+
 type localClient struct {
 	conn   net.Conn
-	events chan protocol.Envelope
+	stream *envelopeStream
 	errCh  chan error
 }
 
 func newLocalClient(conn net.Conn) *localClient {
-	c := &localClient{conn: conn, events: make(chan protocol.Envelope, 64), errCh: make(chan error, 1)}
+	events := make(chan protocol.Envelope, 64)
+	c := &localClient{conn: conn, stream: newEnvelopeStream(events), errCh: make(chan error, 1)}
 	go func() {
 		c.errCh <- protocol.ReadJSONL(conn, func(line []byte) error {
 			env, err := protocol.DecodeEnvelope(line)
 			if err != nil {
 				return err
 			}
-			c.events <- env
+			events <- env
 			return nil
 		})
 	}()
@@ -157,7 +185,7 @@ func (c *localClient) initialize(sessionID string, jsonMode bool) error {
 	if err := protocol.WriteJSONLine(c.conn, env); err != nil {
 		return err
 	}
-	return waitForInit(c.events, jsonMode, "init-1")
+	return waitForInit(c.stream, jsonMode, "init-1")
 }
 
 func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonMode bool) error {
@@ -172,7 +200,7 @@ func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := protocol.WriteJSONLine(c.conn, env); err != nil {
 			return err
 		}
-		ack, err := waitForAckEnvelope(c.events, "status-1", jsonMode)
+		ack, err := waitForAckEnvelope(c.stream, "status-1", jsonMode)
 		if err != nil {
 			return err
 		}
@@ -187,7 +215,7 @@ func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := protocol.WriteJSONLine(c.conn, env); err != nil {
 			return err
 		}
-		_, err = waitForAckEnvelope(c.events, "cancel-1", jsonMode)
+		_, err = waitForAckEnvelope(c.stream, "cancel-1", jsonMode)
 		return err
 	case "allow", "deny":
 		decision := subcmd
@@ -198,7 +226,7 @@ func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := protocol.WriteJSONLine(c.conn, env); err != nil {
 			return err
 		}
-		_, err = waitForAckEnvelope(c.events, decision+"-1", jsonMode)
+		_, err = waitForAckEnvelope(c.stream, decision+"-1", jsonMode)
 		return err
 	case "prompt":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: message, Delivery: delivery})
@@ -208,10 +236,10 @@ func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := protocol.WriteJSONLine(c.conn, env); err != nil {
 			return err
 		}
-		if _, err := waitForAckEnvelope(c.events, "prompt-1", jsonMode); err != nil {
+		if _, err := waitForAckEnvelope(c.stream, "prompt-1", jsonMode); err != nil {
 			return err
 		}
-		return streamUntilComplete(c.events, c.errCh, jsonMode)
+		return streamUntilComplete(c.stream, c.errCh, jsonMode)
 	default:
 		return fmt.Errorf("unknown subcommand %q", subcmd)
 	}
@@ -220,12 +248,13 @@ func (c *localClient) execute(subcmd, message, delivery, sessionID string, jsonM
 type relayClient struct {
 	conn   *websocket.Conn
 	token  string
-	events chan protocol.Envelope
+	stream *envelopeStream
 	errCh  chan error
 }
 
 func newRelayClient(conn *websocket.Conn, token string) *relayClient {
-	c := &relayClient{conn: conn, token: token, events: make(chan protocol.Envelope, 64), errCh: make(chan error, 1)}
+	events := make(chan protocol.Envelope, 64)
+	c := &relayClient{conn: conn, token: token, stream: newEnvelopeStream(events), errCh: make(chan error, 1)}
 	go func() {
 		for {
 			var env protocol.Envelope
@@ -233,7 +262,7 @@ func newRelayClient(conn *websocket.Conn, token string) *relayClient {
 				c.errCh <- err
 				return
 			}
-			c.events <- env
+			events <- env
 		}
 	}()
 	return c
@@ -251,7 +280,7 @@ func (c *relayClient) authenticate(jsonMode bool) error {
 	if err := c.conn.WriteJSON(env); err != nil {
 		return err
 	}
-	_, err = waitForAckEnvelope(c.events, "auth-1", jsonMode)
+	_, err = waitForAckEnvelope(c.stream, "auth-1", jsonMode)
 	return err
 }
 
@@ -271,7 +300,7 @@ func (c *relayClient) initialize(sessionID string, jsonMode bool) error {
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		if err := waitForInit(c.events, jsonMode, requestID); err != nil {
+		if err := waitForInit(c.stream, jsonMode, requestID); err != nil {
 			if strings.Contains(err.Error(), "no wrapper connected for session") && time.Now().Before(deadline) {
 				time.Sleep(500 * time.Millisecond)
 				continue
@@ -294,7 +323,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		ack, err := waitForAckEnvelope(c.events, "sessions-1", jsonMode)
+		ack, err := waitForAckEnvelope(c.stream, "sessions-1", jsonMode)
 		if err != nil {
 			return err
 		}
@@ -307,7 +336,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		ack, err := waitForAckEnvelope(c.events, "status-1", jsonMode)
+		ack, err := waitForAckEnvelope(c.stream, "status-1", jsonMode)
 		if err != nil {
 			return err
 		}
@@ -320,7 +349,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		ack, err := waitForAckEnvelope(c.events, "spawn-1", jsonMode)
+		ack, err := waitForAckEnvelope(c.stream, "spawn-1", jsonMode)
 		if err != nil {
 			return err
 		}
@@ -333,7 +362,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		ack, err := waitForAckEnvelope(c.events, "load-1", jsonMode)
+		ack, err := waitForAckEnvelope(c.stream, "load-1", jsonMode)
 		if err != nil {
 			return err
 		}
@@ -346,7 +375,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		ack, err := waitForAckEnvelope(c.events, "kill-runtime-1", jsonMode)
+		ack, err := waitForAckEnvelope(c.stream, "kill-runtime-1", jsonMode)
 		if err != nil {
 			return err
 		}
@@ -359,7 +388,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		_, err = waitForAckEnvelope(c.events, "cancel-1", jsonMode)
+		_, err = waitForAckEnvelope(c.stream, "cancel-1", jsonMode)
 		return err
 	case "allow", "deny":
 		decision := subcmd
@@ -370,7 +399,7 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		_, err = waitForAckEnvelope(c.events, decision+"-1", jsonMode)
+		_, err = waitForAckEnvelope(c.stream, decision+"-1", jsonMode)
 		return err
 	case "prompt":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: message, Delivery: delivery})
@@ -380,71 +409,87 @@ func (c *relayClient) execute(subcmd, message, delivery, sessionID string, jsonM
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		if _, err := waitForAckEnvelope(c.events, "prompt-1", jsonMode); err != nil {
+		if _, err := waitForAckEnvelope(c.stream, "prompt-1", jsonMode); err != nil {
 			return err
 		}
-		return streamUntilComplete(c.events, c.errCh, jsonMode)
+		return streamUntilComplete(c.stream, c.errCh, jsonMode)
 	default:
 		return fmt.Errorf("unknown subcommand %q", subcmd)
 	}
 }
 
-func waitForInit(events <-chan protocol.Envelope, jsonMode bool, requestID string) error {
-	deadline := time.After(10 * time.Second)
+func waitForInit(stream *envelopeStream, jsonMode bool, requestID string) error {
+	deadline := time.Now().Add(10 * time.Second)
 	seenAck := false
 	seenReady := false
+	var skipped []protocol.Envelope
+	defer func() {
+		for i := len(skipped) - 1; i >= 0; i-- {
+			stream.push(skipped[i])
+		}
+	}()
 	for !(seenAck && seenReady) {
-		select {
-		case env := <-events:
-			if jsonMode {
-				_ = protocol.WriteJSONLine(os.Stdout, env)
-			}
-			if env.ID == requestID && env.Type == protocol.MessageError {
-				var payload protocol.ErrorPayload
-				if err := env.DecodePayload(&payload); err != nil {
-					return err
-				}
-				return errors.New(payload.Error)
-			}
-			if env.Type == protocol.MessageAck && env.ID == requestID {
-				seenAck = true
-			}
-			if env.Type == protocol.MessageEvent {
-				var evt protocol.AgentReadyEvent
-				if err := env.DecodePayload(&evt); err == nil && evt.Event == protocol.EventSessionAgentReady {
-					seenReady = true
-				}
-			}
-		case <-deadline:
+		env, err := stream.next(time.Until(deadline))
+		if err != nil {
 			return fmt.Errorf("timed out waiting for initialize")
 		}
+		if jsonMode {
+			_ = protocol.WriteJSONLine(os.Stdout, env)
+		}
+		if env.ID == requestID && env.Type == protocol.MessageError {
+			var payload protocol.ErrorPayload
+			if err := env.DecodePayload(&payload); err != nil {
+				return err
+			}
+			return errors.New(payload.Error)
+		}
+		if env.Type == protocol.MessageAck && env.ID == requestID {
+			seenAck = true
+			continue
+		}
+		if env.Type == protocol.MessageEvent {
+			var evt protocol.AgentReadyEvent
+			if err := env.DecodePayload(&evt); err == nil && evt.Event == protocol.EventSessionAgentReady {
+				seenReady = true
+				continue
+			}
+		}
+		skipped = append(skipped, env)
 	}
 	return nil
 }
 
-func waitForAckEnvelope(events <-chan protocol.Envelope, id string, jsonMode bool) (protocol.Envelope, error) {
-	deadline := time.After(10 * time.Second)
+func waitForAckEnvelope(stream *envelopeStream, id string, jsonMode bool) (protocol.Envelope, error) {
+	deadline := time.Now().Add(10 * time.Second)
+	var skipped []protocol.Envelope
+	defer func() {
+		for i := len(skipped) - 1; i >= 0; i-- {
+			stream.push(skipped[i])
+		}
+	}()
 	for {
-		select {
-		case env := <-events:
-			if jsonMode {
-				_ = protocol.WriteJSONLine(os.Stdout, env)
-			}
-			if env.ID != id {
-				continue
-			}
-			switch env.Type {
-			case protocol.MessageAck:
-				return env, nil
-			case protocol.MessageError:
-				var payload protocol.ErrorPayload
-				if err := env.DecodePayload(&payload); err != nil {
-					return protocol.Envelope{}, err
-				}
-				return protocol.Envelope{}, errors.New(payload.Error)
-			}
-		case <-deadline:
+		env, err := stream.next(time.Until(deadline))
+		if err != nil {
 			return protocol.Envelope{}, fmt.Errorf("timed out waiting for %s", id)
+		}
+		if jsonMode {
+			_ = protocol.WriteJSONLine(os.Stdout, env)
+		}
+		if env.ID != id {
+			skipped = append(skipped, env)
+			continue
+		}
+		switch env.Type {
+		case protocol.MessageAck:
+			return env, nil
+		case protocol.MessageError:
+			var payload protocol.ErrorPayload
+			if err := env.DecodePayload(&payload); err != nil {
+				return protocol.Envelope{}, err
+			}
+			return protocol.Envelope{}, errors.New(payload.Error)
+		default:
+			skipped = append(skipped, env)
 		}
 	}
 }
@@ -511,51 +556,65 @@ func printSessions(env protocol.Envelope, jsonMode bool) error {
 	return nil
 }
 
-func streamUntilComplete(events <-chan protocol.Envelope, errCh <-chan error, jsonMode bool) error {
+func streamUntilComplete(stream *envelopeStream, errCh <-chan error, jsonMode bool) error {
 	for {
-		select {
-		case err := <-errCh:
-			if err != nil {
+		if len(stream.backlog) == 0 {
+			select {
+			case err := <-errCh:
+				if err != nil {
+					return err
+				}
+				return nil
+			default:
+			}
+		}
+		env, err := stream.next(30 * time.Second)
+		if err != nil {
+			select {
+			case err := <-errCh:
+				if err != nil {
+					return err
+				}
+				return nil
+			default:
 				return err
 			}
-			return nil
-		case env := <-events:
-			if jsonMode {
-				_ = protocol.WriteJSONLine(os.Stdout, env)
-				continue
-			}
-			if env.Type != protocol.MessageEvent {
-				continue
-			}
-			var evt protocol.SessionUpdateEvent
-			if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
-				continue
-			}
-			switch evt.Update.Kind {
-			case protocol.UpdateMessageDelta:
-				fmt.Fprint(os.Stdout, evt.Update.Delta)
-			case protocol.UpdateMessageComplete:
-				if evt.Update.Message != "" {
-					fmt.Fprintln(os.Stdout)
-				}
-			case protocol.UpdateToolBegin:
-				fmt.Fprintf(os.Stderr, "\n[tool start] %s\n", evt.Update.ToolName)
-			case protocol.UpdateToolEnd:
-				fmt.Fprintf(os.Stderr, "\n[tool end] %s\n", evt.Update.ToolName)
-			case protocol.UpdatePermissionRequest:
-				fmt.Fprintf(os.Stderr, "\n[permission request] id=%s title=%s\n", evt.Update.RequestID, evt.Update.Message)
-			case protocol.UpdatePermissionResolved:
-				fmt.Fprintf(os.Stderr, "\n[permission resolved] id=%s decision=%s\n", evt.Update.RequestID, evt.Update.Decision)
-			case protocol.UpdateStatus:
-				if evt.Update.Phase != "" {
-					fmt.Fprintf(os.Stderr, "\n[status] %s\n", evt.Update.Phase)
-				}
-			case protocol.UpdateError:
-				return errors.New(evt.Update.Message)
-			case protocol.UpdateComplete:
+		}
+		if jsonMode {
+			_ = protocol.WriteJSONLine(os.Stdout, env)
+			continue
+		}
+		if env.Type != protocol.MessageEvent {
+			continue
+		}
+		var evt protocol.SessionUpdateEvent
+		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
+			continue
+		}
+		switch evt.Update.Kind {
+		case protocol.UpdateMessageDelta:
+			fmt.Fprint(os.Stdout, evt.Update.Delta)
+		case protocol.UpdateMessageComplete:
+			if evt.Update.Message != "" {
 				fmt.Fprintln(os.Stdout)
-				return nil
 			}
+		case protocol.UpdateToolBegin:
+			fmt.Fprintf(os.Stderr, "\n[tool start] %s\n", evt.Update.ToolName)
+		case protocol.UpdateToolEnd:
+			fmt.Fprintf(os.Stderr, "\n[tool end] %s\n", evt.Update.ToolName)
+		case protocol.UpdatePermissionRequest:
+			fmt.Fprintf(os.Stderr, "\n[permission request] id=%s title=%s\n", evt.Update.RequestID, evt.Update.Message)
+		case protocol.UpdatePermissionResolved:
+			fmt.Fprintf(os.Stderr, "\n[permission resolved] id=%s decision=%s\n", evt.Update.RequestID, evt.Update.Decision)
+		case protocol.UpdateStatus:
+			if evt.Update.Phase != "" {
+				fmt.Fprintf(os.Stderr, "\n[status] %s\n", evt.Update.Phase)
+			}
+		case protocol.UpdateError:
+			return errors.New(evt.Update.Message)
+		case protocol.UpdateComplete:
+			fmt.Fprintln(os.Stdout)
+			return nil
 		}
 	}
 }

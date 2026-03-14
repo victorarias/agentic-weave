@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Status (2026-03-13):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 currently has test coverage for explicit delivery mapping and a fake-pi-backed local permission request/response loop.
+**Status (2026-03-13):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 currently has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, and real manual relay smoke coverage for an extension-driven pi confirm dialog resolved by `allow` / `deny`.
 
 ## Three Test Tiers
 

@@ -126,6 +126,74 @@ func TestRelaySessionStatusUsesRegistry(t *testing.T) {
 	}
 }
 
+func TestRelayPermissionFlow(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-perm",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() {
+		_ = wrapper.RunRelay(ctx, relayURL, "secret")
+	}()
+	waitForWrapperRegistration(t, srv, "sess-perm")
+
+	clientConn := dialWS(t, relayURL)
+	defer clientConn.Close()
+	authenticateWS(t, clientConn, protocol.RoleClient, "secret", "")
+
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm", "", "test-client", "init-1", protocol.InitializeCommand{
+		Command:         protocol.CommandInitialize,
+		ProtocolVersion: protocol.Version,
+	})
+	if err != nil {
+		t.Fatalf("new init envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init: %v", err)
+	}
+	awaitWSAck(t, clientConn, "init-1")
+	awaitReadyEvent(t, clientConn)
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm", "", "test-client", "prompt-1", protocol.SessionPromptCommand{
+		Command: protocol.CommandSessionPrompt,
+		Message: "need approval",
+	})
+	if err != nil {
+		t.Fatalf("new prompt envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	awaitWSAck(t, clientConn, "prompt-1")
+	awaitPermissionRequestWS(t, clientConn, "perm-1")
+
+	allowEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm", "", "test-client", "allow-1", protocol.PermissionResponseCommand{
+		Command:   protocol.CommandSessionPermissionResponse,
+		RequestID: "perm-1",
+		Decision:  "allow",
+	})
+	if err != nil {
+		t.Fatalf("new allow envelope: %v", err)
+	}
+	if err := clientConn.WriteJSON(allowEnv); err != nil {
+		t.Fatalf("write allow: %v", err)
+	}
+	awaitWSAck(t, clientConn, "allow-1")
+	awaitPermissionResolvedWS(t, clientConn, "perm-1", "allow")
+	awaitMessageComplete(t, clientConn, "hello world")
+}
+
 func TestRelayListSessions(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -396,6 +464,7 @@ func helperProcessPath(t *testing.T) string {
 
 func runFakePI(scenario string) error {
 	aborted := make(chan struct{})
+	permissionResolved := make(chan bool, 1)
 	return protocol.ReadJSONL(os.Stdin, func(line []byte) error {
 		var cmd map[string]any
 		if err := json.Unmarshal(line, &cmd); err != nil {
@@ -415,6 +484,15 @@ func runFakePI(scenario string) error {
 					_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "agent_end", "messages": []any{}})
 					return
 				}
+				if scenario == "permission" {
+					_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "extension_ui_request", "id": "perm-1", "method": "confirm", "title": "Allow file write?", "message": "Need approval"})
+					allowed := <-permissionResolved
+					if !allowed {
+						_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "message_update", "assistantMessageEvent": map[string]any{"type": "error", "reason": "permission denied"}, "message": map[string]any{"role": "assistant"}})
+						_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "agent_end", "messages": []any{}})
+						return
+					}
+				}
 				time.Sleep(20 * time.Millisecond)
 				_ = protocol.WriteJSONLine(os.Stdout, map[string]any{"type": "message_update", "assistantMessageEvent": map[string]any{"type": "text_delta", "delta": "hello"}, "message": map[string]any{"role": "assistant"}})
 				time.Sleep(20 * time.Millisecond)
@@ -426,6 +504,12 @@ func runFakePI(scenario string) error {
 		case "abort":
 			closeOnce(aborted)
 			return protocol.WriteJSONLine(os.Stdout, map[string]any{"id": cmd["id"], "type": "response", "command": "abort", "success": true})
+		case "extension_ui_response":
+			if cmd["id"] == "perm-1" {
+				confirmed, _ := cmd["confirmed"].(bool)
+				permissionResolved <- confirmed
+			}
+			return nil
 		default:
 			return protocol.WriteJSONLine(os.Stdout, map[string]any{"id": cmd["id"], "type": "response", "command": cmd["type"], "success": false, "error": "unknown command"})
 		}
@@ -527,6 +611,50 @@ func nestedString(data map[string]any, key, nested string) string {
 func stringValue(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+func awaitPermissionRequestWS(t *testing.T, conn *websocket.Conn, requestID string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	for {
+		var env protocol.Envelope
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read permission request: %v", err)
+		}
+		if env.Type != protocol.MessageEvent {
+			continue
+		}
+		var evt protocol.SessionUpdateEvent
+		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
+			continue
+		}
+		if evt.Update.Kind == protocol.UpdatePermissionRequest && evt.Update.RequestID == requestID {
+			return
+		}
+	}
+}
+
+func awaitPermissionResolvedWS(t *testing.T, conn *websocket.Conn, requestID, decision string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	for {
+		var env protocol.Envelope
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read permission resolved: %v", err)
+		}
+		if env.Type != protocol.MessageEvent {
+			continue
+		}
+		var evt protocol.SessionUpdateEvent
+		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventSessionUpdate {
+			continue
+		}
+		if evt.Update.Kind == protocol.UpdatePermissionResolved && evt.Update.RequestID == requestID && evt.Update.Decision == decision {
+			return
+		}
+	}
 }
 
 func awaitReadyEvent(t *testing.T, conn *websocket.Conn) {

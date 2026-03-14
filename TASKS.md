@@ -224,6 +224,8 @@ This file tracks current work items and progress.
     - [x] inspector `--delivery` flag for prompt commands
     - [x] tests for delivery mapping
     - [x] initial permission response seam (`session.permission_response`, `allow` / `deny`)
+    - [x] fake-pi-backed local and relay permission lifecycle tests
+    - [x] real manual relay permission smoke test with a pi extension confirm dialog
     - [ ] richer permission mediation lifecycle
 
 ---
@@ -259,6 +261,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-13 23:04: Added relay-level permission lifecycle coverage and manual real-pi validation: relay tests now cover permission request/response flow, `weave-inspect` now buffers early events so permission requests are not lost before prompt ack, and I manually ran a real relay flow with a temporary pi extension confirm dialog that produced both `PERMISSION_ALLOWED` and `PERMISSION_DENIED` through `allow` / `deny`.
 - 2026-03-13 22:50: Extended the Tier 3 seam with initial permission mediation support: wrapper now normalizes pi `extension_ui_request` confirm dialogs into `permission_request`, accepts `session.permission_response`, `weave-inspect` supports `allow` / `deny`, and fake-pi-backed tests cover a local permission request/response loop.
 - 2026-03-13 22:39: Started Tier 3 delivery semantics: added explicit prompt delivery aliases (`foreground`, `interrupt`, `queue`, `deliver_when_idle`) in the wrapper/runtime mapping, added `weave-inspect --delivery ... prompt`, and added delivery mapping tests.
 - 2026-03-13 22:30: Added a Tier 2 hardening pass: relay `registry.list_sessions`, `weave-inspect relay sessions`, explicit running/stopped state in session records, a graceful-stop attempt before kill fallback, relay tests for session listing, and a manual smoke run showing session listing before and after runtime stop.
