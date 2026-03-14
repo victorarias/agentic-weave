@@ -612,13 +612,11 @@ func (c *relayClient) interactiveTakeover(sessionID string, jsonMode bool) error
 		defer restore()
 	}
 
-	inputCh := make(chan []byte, 32)
+	inputCh := make(chan takeoverInputEvent, 64)
 	errorCh := make(chan error, 1)
-	go readStdinChunks(os.Stdin, inputCh, errorCh)
+	go readTakeoverInput(os.Stdin, inputCh, errorCh)
 
 	requestSeq := 0
-	atLineStart := true
-	pendingTilde := false
 	for {
 		if len(c.stream.backlog) == 0 {
 			select {
@@ -632,11 +630,34 @@ func (c *relayClient) interactiveTakeover(sessionID string, jsonMode bool) error
 					return err
 				}
 				return nil
-			case chunk, ok := <-inputCh:
+			case evt, ok := <-inputCh:
 				if !ok {
 					return nil
 				}
-				forward, disconnect := processTakeoverInput(chunk, &atLineStart, &pendingTilde)
+				if evt.disconnect {
+					fmt.Fprintln(os.Stderr, "\n[takeover] disconnect requested")
+					return nil
+				}
+				forward := append([]byte(nil), evt.data...)
+				disconnect := false
+				for {
+					select {
+					case nextEvt, ok := <-inputCh:
+						if !ok {
+							ok = false
+							disconnect = false
+							goto flushForward
+						}
+						if nextEvt.disconnect {
+							disconnect = true
+							goto flushForward
+						}
+						forward = append(forward, nextEvt.data...)
+					default:
+						goto flushForward
+					}
+				}
+			flushForward:
 				if len(forward) > 0 {
 					requestSeq++
 					if err := c.sendPTYInput(sessionID, forward, fmt.Sprintf("pty-input-live-%d", requestSeq), jsonMode); err != nil {
@@ -724,14 +745,41 @@ func makeRawTerminal(file *os.File) (func(), error) {
 	}, nil
 }
 
-func readStdinChunks(r io.Reader, out chan<- []byte, errCh chan<- error) {
+type takeoverInputEvent struct {
+	data       []byte
+	disconnect bool
+}
+
+func readTakeoverInput(r io.Reader, out chan<- takeoverInputEvent, errCh chan<- error) {
 	defer close(out)
-	buf := make([]byte, 1024)
+	buf := make([]byte, 1)
+	atLineStart := true
+	pendingTilde := false
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			chunk := append([]byte(nil), buf[:n]...)
-			out <- chunk
+			b := buf[0]
+			if pendingTilde {
+				pendingTilde = false
+				if b == '.' {
+					out <- takeoverInputEvent{disconnect: true}
+					continue
+				}
+				out <- takeoverInputEvent{data: []byte{'~', b}}
+				atLineStart = b == '\r' || b == '\n'
+				continue
+			}
+			if b == 0x1d {
+				out <- takeoverInputEvent{disconnect: true}
+				continue
+			}
+			if atLineStart && b == '~' {
+				pendingTilde = true
+				atLineStart = false
+				continue
+			}
+			out <- takeoverInputEvent{data: []byte{b}}
+			atLineStart = b == '\r' || b == '\n'
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -741,35 +789,6 @@ func readStdinChunks(r io.Reader, out chan<- []byte, errCh chan<- error) {
 			return
 		}
 	}
-}
-
-func processTakeoverInput(chunk []byte, atLineStart, pendingTilde *bool) ([]byte, bool) {
-	if len(chunk) == 0 {
-		return nil, false
-	}
-	forward := make([]byte, 0, len(chunk))
-	for _, b := range chunk {
-		if *pendingTilde {
-			if b == '.' {
-				*pendingTilde = false
-				*atLineStart = false
-				return forward, true
-			}
-			forward = append(forward, '~')
-			*pendingTilde = false
-		}
-		if b == 0x1d {
-			return forward, true
-		}
-		if *atLineStart && b == '~' {
-			*pendingTilde = true
-			*atLineStart = false
-			continue
-		}
-		forward = append(forward, b)
-		*atLineStart = b == '\r' || b == '\n'
-	}
-	return forward, false
 }
 
 func waitForInit(stream *envelopeStream, jsonMode bool, requestID string) error {
