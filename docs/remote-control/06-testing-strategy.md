@@ -263,6 +263,8 @@ To improve reattach rendering, takeover now also performs a resize-bump-and-rest
 
 For takeover lifecycle, relay tests now also cover automatic return to RPC when a session was auto-upgraded from RPC into PTY for takeover and the human later releases or disconnects.
 
+For day-to-day operator ergonomics, `weave-inspect relay` now remembers the last successful relay context per repository in the local user cache. In practice that means the first command may still be fully specified, but later follow-ups can usually omit `--relay`, `--token`, `--session`, and `--identity`.
+
 ---
 
 ## Tier 3: Real LLM (Integration)

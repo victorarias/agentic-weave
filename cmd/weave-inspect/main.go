@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -72,13 +75,13 @@ func runLocal(args []string) error {
 
 func runRelay(args []string) error {
 	fs := flag.NewFlagSet("weave-inspect relay", flag.ContinueOnError)
-	relayURL := fs.String("relay", "ws://localhost:8080/ws", "Relay websocket URL")
+	relayURL := fs.String("relay", "", "Relay websocket URL")
 	token := fs.String("token", "", "Shared bearer token")
-	sessionID := fs.String("session", "local", "Logical session id")
+	sessionID := fs.String("session", "", "Logical session id")
 	jsonMode := fs.Bool("json", false, "Print raw JSON envelopes")
 	delivery := fs.String("delivery", "", "Prompt delivery mode: default, foreground, interrupt, queue, deliver_when_idle")
 	transport := fs.String("transport", "", "Spawn/load transport: rpc or pty")
-	identity := fs.String("identity", "weave-inspect", "Client identity used for attach/inject/takeover authority")
+	identity := fs.String("identity", "", "Client identity used for attach/inject/takeover authority")
 	debugKeysFile := fs.String("debug-keys-file", "", "Append takeover stdin bytes to this file for debugging")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -88,22 +91,106 @@ func runRelay(args []string) error {
 		return err
 	}
 
-	conn, _, err := websocket.DefaultDialer.Dial(*relayURL, nil)
+	saved, _ := loadRelayContext()
+	resolved := resolveRelayContext(saved, relayContext{
+		RelayURL:      *relayURL,
+		Token:         *token,
+		SessionID:     *sessionID,
+		Identity:      *identity,
+		DebugKeysFile: *debugKeysFile,
+	})
+
+	conn, _, err := websocket.DefaultDialer.Dial(resolved.RelayURL, nil)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	client := newRelayClient(conn, *token, *identity, *debugKeysFile)
+	client := newRelayClient(conn, resolved.Token, resolved.Identity, resolved.DebugKeysFile)
 	if err := client.authenticate(*jsonMode); err != nil {
 		return err
 	}
 	if shouldInitializeRelay(subcmd) {
-		if err := client.initialize(*sessionID, *jsonMode); err != nil {
+		if err := client.initialize(resolved.SessionID, *jsonMode); err != nil {
 			return err
 		}
 	}
-	return client.execute(subcmd, message, *delivery, *transport, *sessionID, *jsonMode)
+	if err := client.execute(subcmd, message, *delivery, *transport, resolved.SessionID, *jsonMode); err != nil {
+		return err
+	}
+	_ = saveRelayContext(resolved)
+	return nil
+}
+
+type relayContext struct {
+	RelayURL      string `json:"relay_url,omitempty"`
+	Token         string `json:"token,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
+	Identity      string `json:"identity,omitempty"`
+	DebugKeysFile string `json:"debug_keys_file,omitempty"`
+}
+
+func relayContextPath() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(cwd))
+	return filepath.Join(cacheDir, "agentic-weave", "weave-inspect", fmt.Sprintf("%x.json", sum[:8])), nil
+}
+
+func loadRelayContext() (relayContext, error) {
+	path, err := relayContextPath()
+	if err != nil {
+		return relayContext{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return relayContext{}, err
+	}
+	var ctx relayContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		return relayContext{}, err
+	}
+	return ctx, nil
+}
+
+func saveRelayContext(ctx relayContext) error {
+	path, err := relayContextPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(ctx, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func resolveRelayContext(saved, override relayContext) relayContext {
+	return relayContext{
+		RelayURL:      firstNonEmpty(override.RelayURL, os.Getenv("WEAVE_RELAY_URL"), saved.RelayURL, "ws://localhost:8080/ws"),
+		Token:         firstNonEmpty(override.Token, os.Getenv("WEAVE_TOKEN"), saved.Token),
+		SessionID:     firstNonEmpty(override.SessionID, os.Getenv("WEAVE_SESSION"), saved.SessionID, "local"),
+		Identity:      firstNonEmpty(override.Identity, os.Getenv("WEAVE_IDENTITY"), saved.Identity, "weave-inspect"),
+		DebugKeysFile: firstNonEmpty(override.DebugKeysFile, os.Getenv("WEAVE_DEBUG_KEYS_FILE"), saved.DebugKeysFile),
+	}
 }
 
 func parseSubcommand(args []string) (string, string, error) {
