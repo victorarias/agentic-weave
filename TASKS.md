@@ -257,6 +257,8 @@ This file tracks current work items and progress.
     - [x] relay tests and scripted smoke for PTY I/O (`scripts/remotecontrol-pty-smoke.sh`, `testdata/pty/echo.py`)
     - [x] real interactive pi takeover smoke via `--pty-bin pi` (`scripts/remotecontrol-real-pi-pty-smoke.sh`)
     - [x] make relay-managed spawn/load choose real interactive pi PTY runtime when requested via transport selection
+    - [x] add explicit runtime transport replacement (`runtime.replace` / `weave-inspect relay switch-transport <rpc|pty>`)
+    - [x] add best-UX takeover commands (`weave-inspect relay takeover` / `release`) and auto-upgrade takeover to PTY when a persisted session can be resumed
 
 ---
 
@@ -291,6 +293,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-14 17:45: Added a first-class runtime-switch primitive and best-UX takeover path: new `runtime.replace` / `weave-inspect relay switch-transport <rpc|pty>`, new `weave-inspect relay takeover` / `release` aliases, relay now auto-upgrades `session.attach takeover` to PTY when a persisted session handle exists, tests cover transport replacement and auto-upgrade takeover, and I manually validated `spawn (rpc) -> takeover (auto-switch to pty) -> pty-input /session -> release -> switch-transport rpc`.
 - 2026-03-14 17:27: Finished the next Tier 5 integration step: `session.spawn` / `session.load` now accept transport selection (`rpc` or `pty`), relay-managed launcher can start real interactive pi PTY runtimes automatically, and I manually validated `spawn --transport pty -> attach takeover -> pty-input /session -> runtime.stop -> load --transport pty -> reattach -> pty-resize` end-to-end.
 - 2026-03-14 15:46: Validated the takeover PTY path against a real interactive pi process: added `scripts/remotecontrol-real-pi-pty-smoke.sh`, launched wrapper PTY mode with `--pty-bin pi --pty-arg=--no-session`, verified the wrapper actually spawned a `pi` child, drove `/session` through `pty-input`, and confirmed `pty-resize` surfaced through `session.status`.
 - 2026-03-14 15:33: Added the first PTY byte-transport slice for takeover: wrapper now supports a PTY-backed runtime mode, protocol/relay/inspector support `pty.output`, `pty.input`, and `pty.resize`, relay routes PTY output only to the attached takeover human, tests cover takeover PTY I/O, and a scripted smoke flow now exercises the path via `scripts/remotecontrol-pty-smoke.sh` and `testdata/pty/echo.py`.

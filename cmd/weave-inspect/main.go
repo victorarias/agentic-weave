@@ -25,7 +25,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|watch|attach|detach|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|switch-transport|kill-runtime|watch|attach|takeover|detach|release|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
 	}
 	switch os.Args[1] {
 	case "local":
@@ -33,7 +33,7 @@ func run() error {
 	case "relay":
 		return runRelay(os.Args[2:])
 	default:
-		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|kill-runtime|watch|attach|detach|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
+		return fmt.Errorf("usage: weave-inspect <local|relay> [flags] <init|sessions|status|spawn|load|switch-transport|kill-runtime|watch|attach|takeover|detach|release|inject|pty-input|pty-resize|prompt|cancel|allow|deny> [message]")
 	}
 }
 
@@ -50,7 +50,7 @@ func runLocal(args []string) error {
 	if err != nil {
 		return err
 	}
-	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "kill-runtime" || subcmd == "watch" || subcmd == "attach" || subcmd == "detach" || subcmd == "inject" || subcmd == "pty-input" || subcmd == "pty-resize" {
+	if subcmd == "sessions" || subcmd == "spawn" || subcmd == "load" || subcmd == "switch-transport" || subcmd == "kill-runtime" || subcmd == "watch" || subcmd == "attach" || subcmd == "takeover" || subcmd == "detach" || subcmd == "release" || subcmd == "inject" || subcmd == "pty-input" || subcmd == "pty-resize" {
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	}
 
@@ -104,12 +104,17 @@ func runRelay(args []string) error {
 
 func parseSubcommand(args []string) (string, string, error) {
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, kill-runtime, watch, attach, detach, inject, pty-input, pty-resize, prompt, cancel, allow, or deny")
+		return "", "", fmt.Errorf("missing subcommand: init, sessions, status, spawn, load, switch-transport, kill-runtime, watch, attach, takeover, detach, release, inject, pty-input, pty-resize, prompt, cancel, allow, or deny")
 	}
 	subcmd := args[0]
 	switch subcmd {
-	case "init", "sessions", "status", "spawn", "load", "kill-runtime", "watch", "detach", "cancel":
+	case "init", "sessions", "status", "spawn", "load", "kill-runtime", "watch", "takeover", "detach", "release", "cancel":
 		return subcmd, "", nil
+	case "switch-transport":
+		if len(args) < 2 {
+			return "", "", fmt.Errorf("switch-transport requires a transport: rpc or pty")
+		}
+		return subcmd, args[1], nil
 	case "attach":
 		if len(args) < 2 {
 			return "", "", fmt.Errorf("attach requires a mode: observe, inject, or takeover")
@@ -225,7 +230,7 @@ func (c *localClient) execute(subcmd, message, delivery, transport, sessionID st
 			return err
 		}
 		return printStatus(ack, jsonMode)
-	case "sessions", "spawn", "load", "kill-runtime", "attach", "detach", "inject", "pty-input", "pty-resize":
+	case "sessions", "spawn", "load", "switch-transport", "kill-runtime", "attach", "takeover", "detach", "release", "inject", "pty-input", "pty-resize":
 		return fmt.Errorf("%s is only supported in relay mode", subcmd)
 	case "cancel":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", "weave-inspect", "cancel-1", protocol.SessionCancelCommand{Command: protocol.CommandSessionCancel})
@@ -390,6 +395,23 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 			return err
 		}
 		return printStatus(ack, jsonMode)
+	case "switch-transport":
+		targetTransport := message
+		if targetTransport == "" {
+			targetTransport = transport
+		}
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "switch-transport-1", protocol.RuntimeReplaceCommand{Command: protocol.CommandRuntimeReplace, Transport: targetTransport})
+		if err != nil {
+			return err
+		}
+		if err := c.conn.WriteJSON(env); err != nil {
+			return err
+		}
+		ack, err := waitForAckEnvelope(c.stream, "switch-transport-1", jsonMode)
+		if err != nil {
+			return err
+		}
+		return printStatus(ack, jsonMode)
 	case "kill-runtime":
 		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "kill-runtime-1", protocol.RuntimeStopCommand{Command: protocol.CommandRuntimeStop})
 		if err != nil {
@@ -403,15 +425,21 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 			return err
 		}
 		return printStatus(ack, jsonMode)
-	case "attach":
-		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: message})
+	case "attach", "takeover":
+		mode := message
+		requestID := "attach-1"
+		if subcmd == "takeover" {
+			mode = "takeover"
+			requestID = "takeover-1"
+		}
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, requestID, protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: mode})
 		if err != nil {
 			return err
 		}
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		ack, err := waitForAckEnvelope(c.stream, "attach-1", jsonMode)
+		ack, err := waitForAckEnvelope(c.stream, requestID, jsonMode)
 		if err != nil {
 			return err
 		}
@@ -419,15 +447,19 @@ func (c *relayClient) execute(subcmd, message, delivery, transport, sessionID st
 			return err
 		}
 		return streamUntilInterrupt(c.stream, c.errCh, jsonMode)
-	case "detach":
-		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "detach-1", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
+	case "detach", "release":
+		requestID := "detach-1"
+		if subcmd == "release" {
+			requestID = "release-1"
+		}
+		env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, requestID, protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
 		if err != nil {
 			return err
 		}
 		if err := c.conn.WriteJSON(env); err != nil {
 			return err
 		}
-		ack, err := waitForAckEnvelope(c.stream, "detach-1", jsonMode)
+		ack, err := waitForAckEnvelope(c.stream, requestID, jsonMode)
 		if err != nil {
 			return err
 		}
@@ -914,7 +946,7 @@ func printUpdate(update protocol.SessionUpdate) (bool, error) {
 
 func shouldInitializeRelay(subcmd string) bool {
 	switch subcmd {
-	case "init", "watch", "attach", "detach", "inject", "pty-input", "pty-resize", "prompt", "cancel", "allow", "deny":
+	case "init", "watch", "inject", "pty-input", "pty-resize", "prompt", "cancel", "allow", "deny":
 		return true
 	default:
 		return false

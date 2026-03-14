@@ -272,6 +272,9 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 	case protocol.CommandRuntimeStop:
 		s.handleRuntimeStop(state, env)
 		return
+	case protocol.CommandRuntimeReplace:
+		s.handleRuntimeReplace(state, env)
+		return
 	case protocol.CommandSessionPermissionResponse:
 		s.handlePermissionResponse(state, env)
 		return
@@ -519,6 +522,24 @@ func (s *Server) handleRuntimeStop(state *connState, env protocol.Envelope) {
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandRuntimeStop))
 }
 
+func (s *Server) handleRuntimeReplace(state *connState, env protocol.Envelope) {
+	var cmd protocol.RuntimeReplaceCommand
+	if err := env.DecodePayload(&cmd); err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	if env.SessionID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for runtime.replace")
+		return
+	}
+	record, err := s.replaceRuntimeTransport(env.SessionID, cmd.Transport)
+	if err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandRuntimeReplace))
+}
+
 func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 	var cmd protocol.SessionAttachCommand
 	if err := env.DecodePayload(&cmd); err != nil {
@@ -537,9 +558,16 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "attach requires client identity")
 		return
 	}
-	if _, ok := s.registry.Get(env.SessionID); !ok {
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok {
 		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
 		return
+	}
+	if cmd.Mode == "takeover" {
+		if _, err := s.ensureTakeoverRuntime(env.SessionID, record); err != nil {
+			_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+			return
+		}
 	}
 
 	var previousSessionID string
@@ -584,7 +612,7 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		s.registry.ClearAttachment(previousSessionID)
 	}
 	s.subscribe(state, env.SessionID)
-	record, _ := s.registry.SetAttachment(env.SessionID, protocol.AttachmentInfo{ClientID: state.identity, Mode: cmd.Mode})
+	record, _ = s.registry.SetAttachment(env.SessionID, protocol.AttachmentInfo{ClientID: state.identity, Mode: cmd.Mode})
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionAttach))
 	if previousSessionID != "" {
 		s.broadcastSessionStatus(previousSessionID, map[string]any{"attachment_action": "detached", "attachment_client_id": state.identity})
@@ -1010,6 +1038,62 @@ func (s *Server) waitForDisconnected(sessionID string) (session.Record, error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return session.Record{}, fmt.Errorf("timed out waiting for runtime to stop for session %s", sessionID)
+}
+
+func (s *Server) ensureTakeoverRuntime(sessionID string, record session.Record) (session.Record, error) {
+	if record.WrapperConnected && record.Runtime.Transport == runtime.PiPTY().Transport {
+		return record, nil
+	}
+	if strings.TrimSpace(record.PersistedSessionHandle) == "" {
+		return record, nil
+	}
+	return s.replaceRuntimeTransport(sessionID, runtime.PiPTY().Transport)
+}
+
+func (s *Server) replaceRuntimeTransport(sessionID, transport string) (session.Record, error) {
+	record, ok := s.registry.Get(sessionID)
+	if !ok {
+		return session.Record{}, fmt.Errorf("unknown session")
+	}
+	descriptor, err := runtimeDescriptorForTransport(transport)
+	if err != nil {
+		return session.Record{}, err
+	}
+	if record.WrapperConnected && record.Runtime.Transport == descriptor.Transport {
+		return record, nil
+	}
+	persistedHandle := record.PersistedSessionHandle
+	if persistedHandle == "" {
+		return session.Record{}, fmt.Errorf("session has no persisted session handle; cannot replace runtime")
+	}
+	persistedHandle, err = resolveSessionHandle(s.cfg.SessionDir, sessionID, persistedHandle)
+	if err != nil {
+		return session.Record{}, err
+	}
+	if record.WrapperConnected {
+		if err := s.launcher.Stop(sessionID); err != nil {
+			return session.Record{}, fmt.Errorf("failed to stop runtime: %v", err)
+		}
+		if _, err := s.waitForDisconnected(sessionID); err != nil {
+			return session.Record{}, err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(persistedHandle), 0o755); err != nil {
+		return session.Record{}, err
+	}
+	s.registry.Ensure(sessionID, persistedHandle)
+	if err := s.launcher.Spawn(context.Background(), LaunchRequest{
+		SessionID:              sessionID,
+		PersistedSessionHandle: persistedHandle,
+		RelayURL:               s.relayURL(),
+		Token:                  s.cfg.Token,
+		PiBin:                  s.cfg.PiBin,
+		PTYBin:                 s.cfg.PTYBin,
+		RuntimeDescriptor:      descriptor,
+	}); err != nil {
+		return session.Record{}, errors.New(normalizeSpawnError(err))
+	}
+	return s.waitForConnected(sessionID)
 }
 
 func (s *Server) relayURL() string {

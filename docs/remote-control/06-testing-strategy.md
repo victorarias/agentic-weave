@@ -239,6 +239,20 @@ weave-inspect relay --session <id> --transport pty load
 
 That confirms `session.spawn` / `session.load` can now choose the real interactive PTY-backed pi runtime instead of always defaulting to RPC.
 
+### Manual best-UX takeover validation
+
+I also manually validated the more ergonomic takeover flow:
+
+```bash
+weave-inspect relay --session <id> spawn                 # defaults to rpc
+weave-inspect relay --session <id> takeover              # auto-upgrades to pty when resumable
+weave-inspect relay --session <id> pty-input $'/session\r'
+weave-inspect relay --session <id> release
+weave-inspect relay --session <id> switch-transport rpc
+```
+
+That confirms the explicit runtime-switch primitive works and that human takeover can now be driven by intent (`takeover`) rather than by manually choosing transport first.
+
 ---
 
 ## Tier 3: Real LLM (Integration)

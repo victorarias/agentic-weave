@@ -25,6 +25,7 @@ const (
 	CommandSessionSpawn              = "session.spawn"
 	CommandSessionLoad               = "session.load"
 	CommandRuntimeStop               = "runtime.stop"
+	CommandRuntimeReplace            = "runtime.replace"
 	CommandRegistryListSessions      = "registry.list_sessions"
 	CommandSessionPermissionResponse = "session.permission_response"
 	CommandSessionAttach             = "session.attach"
@@ -96,6 +97,11 @@ type SessionLoadCommand struct {
 
 type RuntimeStopCommand struct {
 	Command string `json:"command"`
+}
+
+type RuntimeReplaceCommand struct {
+	Command   string `json:"command"`
+	Transport string `json:"transport,omitempty"`
 }
 
 type ListSessionsCommand struct {
