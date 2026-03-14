@@ -132,11 +132,6 @@ func parseSubcommand(args []string) (string, string, error) {
 	}
 }
 
-type inspectClient interface {
-	initialize(sessionID string, jsonMode bool) error
-	execute(subcmd, message, delivery, sessionID string, jsonMode bool) error
-}
-
 type envelopeStream struct {
 	events  <-chan protocol.Envelope
 	backlog []protocol.Envelope
