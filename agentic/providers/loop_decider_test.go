@@ -122,14 +122,51 @@ func TestStreamingLoopDecider_OnDecisionIncludesUsageAndStep(t *testing.T) {
 	var meta DecisionMeta
 	decider.OnDecision(func(m DecisionMeta) { meta = m })
 
-	if _, err := decider.Decide(context.Background(), loop.Input{History: []message.AgentMessage{{Role: message.RoleUser, Content: "hi"}}}); err != nil {
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 2, History: []message.AgentMessage{{Role: message.RoleUser, Content: "hi"}}}); err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
 
-	if meta.Step != 1 {
-		t.Fatalf("expected step 1, got %d", meta.Step)
+	if meta.Step != 3 {
+		t.Fatalf("expected step 3 from loop input turn, got %d", meta.Step)
 	}
 	if meta.Usage == nil || meta.Usage.Input != 10 || meta.Usage.Output != 4 {
 		t.Fatalf("unexpected usage: %#v", meta.Usage)
+	}
+}
+
+func TestCollectDecision_NormalizesAlreadyNormalizedStopReasons(t *testing.T) {
+	ch := make(chan StreamEvent, 1)
+	ch <- DoneEvent{StopReason: "tool"}
+	close(ch)
+
+	decision, err := CollectDecision(context.Background(), ch, nil)
+	if err != nil {
+		t.Fatalf("CollectDecision returned error: %v", err)
+	}
+	if decision.StopReason != usage.StopReasonTool {
+		t.Fatalf("expected tool stop reason, got %v", decision.StopReason)
+	}
+}
+
+func TestStreamingLoopDecider_RetriesUnexpectedStreamTerminationWithoutOutput(t *testing.T) {
+	calls := 0
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		calls++
+		ch := make(chan StreamEvent, 1)
+		if calls == 1 {
+			close(ch)
+			return ch, nil
+		}
+		ch <- DoneEvent{StopReason: "end_turn"}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	if _, err := decider.Decide(context.Background(), loop.Input{History: []message.AgentMessage{{Role: message.RoleUser, Content: "hi"}}}); err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected retry after unexpected stream termination, got %d attempts", calls)
 	}
 }

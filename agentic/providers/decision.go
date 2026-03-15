@@ -102,9 +102,9 @@ func normalizeStopReason(reason string) usage.StopReason {
 	switch strings.ToLower(strings.TrimSpace(reason)) {
 	case "max_tokens", "length":
 		return usage.StopReasonMaxTokens
-	case "tool_use", "tool_calls":
+	case "tool_use", "tool_calls", "tool":
 		return usage.StopReasonTool
-	case "error":
+	case "error", "abort":
 		return usage.StopReasonError
 	case "", "end_turn", "stop":
 		return usage.StopReasonStop

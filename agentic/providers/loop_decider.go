@@ -26,10 +26,9 @@ type DecisionMeta struct {
 // Decide() call, so this adapter intentionally leaves Input.UserMessage empty to
 // avoid duplicating the latest user turn in providers that accept both fields.
 type StreamingLoopDecider struct {
-	streamer     Streamer
-	onDelta      func(string)
-	onDecision   func(DecisionMeta)
-	decisionStep int
+	streamer   Streamer
+	onDelta    func(string)
+	onDecision func(DecisionMeta)
 }
 
 // NewStreamingLoopDecider creates a loop decider backed by a provider Streamer.
@@ -71,9 +70,8 @@ func (d *StreamingLoopDecider) Decide(ctx context.Context, in loop.Input) (loop.
 			return loop.Decision{}, err
 		}
 
-		d.decisionStep++
 		if d.onDecision != nil {
-			d.onDecision(DecisionMeta{Reply: decision.Reply, ToolCalls: decision.ToolCalls, Usage: decision.Usage, Step: d.decisionStep})
+			d.onDecision(DecisionMeta{Reply: decision.Reply, ToolCalls: decision.ToolCalls, Usage: decision.Usage, Step: in.Turn + 1})
 		}
 		return loop.Decision{
 			Reply:      decision.Reply,
@@ -153,6 +151,9 @@ func isTransientLLMError(err error) bool {
 		"upstream timeout",
 		"gateway timeout",
 		"connection reset",
+		"unexpected eof",
+		"eof",
+		"stream ended without done event",
 		"http 429",
 		"http 502",
 		"http 503",
