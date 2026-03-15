@@ -1,6 +1,6 @@
 # V1 Architecture and Phased Plan
 
-**Status (2026-03-14):** Tier 0, Tier 1, the first Tier 2 spawn/load identity skeleton, Tier 3 delivery/permission semantics, and an initial Tier 4 human observe/inject slice are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes), `cmd/weave-inspect` (local + relay modes plus relay `sessions` / `spawn` / `load` / `kill-runtime` / `status` / `watch` / `attach` / `detach` / one-shot `inject`, explicit prompt delivery flags, and `allow` / `deny` for permission responses), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test works end-to-end, the confirm-style permission lifecycle is hardened, and humans can now attach in `observe` or `inject` mode with relay-enforced single-controller semantics, same-identity observe→inject escalation across reconnects, and inject-mode permission authority. Real validation now uses committed smoke scripts for both permission and observe/watch/inject flows.
+**Status (2026-03-14):** Tier 0, Tier 1, the first Tier 2 spawn/load identity skeleton, Tier 3 delivery/permission semantics, Tier 4 human observe/inject, and initial Tier 5 takeover + PTY groundwork are complete and validated. Implemented pieces now include `cmd/weave-wrapper` (local + relay modes, plus an initial PTY-backed runtime mode), `cmd/weave-inspect` (local + relay modes plus relay `sessions` / `spawn` / `load` / `kill-runtime` / `status` / `watch` / `attach` / `detach` / one-shot `inject` / `pty-input` / `pty-resize`, explicit prompt delivery flags, and `allow` / `deny` for permission responses), `cmd/weave-relay`, `remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`, `remotecontrol/runtime`, and `remotecontrol/session`. A real relay-managed pi resume smoke test works end-to-end, the confirm-style permission lifecycle is hardened, humans can attach in `observe`, `inject`, or initial `takeover` mode with relay-enforced single-controller semantics, takeover queues orchestrator prompts until detach/de-escalation while exposing queued-count status, and PTY byte transport is now validated both against a scripted helper runtime and against a real interactive `pi` process launched through wrapper PTY mode. Real validation now uses committed smoke scripts for permission, observe/watch/inject, takeover-queue, scripted PTY-byte transport, and real interactive pi takeover flows.
 
 ## Architecture Overview
 
@@ -297,6 +297,8 @@ Deliverables:
 
 **Goal**: add raw terminal control only after structured control is already stable.
 
+**Status (2026-03-14):** in progress. The takeover control-plane groundwork is in place (`session.attach` accepts `takeover`, takeover holds permission authority, relay queues orchestrator prompts while takeover is active, and queued prompts flush on detach/de-escalation), and the PTY path is now working against both a scripted PTY-backed runtime and a real interactive `pi` process launched via wrapper PTY mode: relay forwards `pty.output` only to the attached takeover human and accepts `pty.input` / `pty.resize` from that human, while `weave-inspect relay takeover` now upgrades resumable relay-managed sessions to PTY as needed, auto-resizes the PTY from the local terminal, and forwards live stdin bytes in raw mode so control keys and navigation chords reach pi naturally. `runtime.replace` can switch a resumable session between runtime transports under a stable `session_id`, takeover now fails clearly for stopped sessions instead of looking half-attached, and sessions that were auto-upgraded from RPC for takeover now automatically return to RPC when takeover ends. Operator ergonomics also improved: `weave-inspect relay` remembers the last successful relay/session context per repo, and the operator TUI is now Bubble Tea-based so selection flows and subprocess handoff (`prompt`, `takeover`) do not contend for stdin. The remaining gap is full screen snapshot/replay on reattach; current reattach UX relies on forced redraw via resize.
+
 Deliverables:
 1. PTY output forwarding to attached human
 2. `pty.input`
@@ -304,7 +306,11 @@ Deliverables:
 4. takeover / de-escalation flow
 5. queued orchestrator behavior during takeover
 
-**Smoke test:** human escalates to takeover, drives the TUI, de-escalates, orchestrator resumes.
+**Current smoke tests:**
+- attach in `takeover`, send an orchestrator prompt and observe it being acknowledged as queued, then detach and observe the queued prompt flush back to the runtime
+- attach in `takeover` against the scripted PTY helper, send `pty-input`, observe `pty-output`, and send `pty-resize`
+
+**Full smoke test (target):** human escalates to takeover, drives the real interactive pi TUI, de-escalates, orchestrator resumes.
 
 ### Tier 6 — Remote Hosts + Failure Recovery
 

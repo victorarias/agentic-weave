@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -360,6 +362,116 @@ func TestRelayHumanInjectVisibleToOrchestrator(t *testing.T) {
 	awaitMessageComplete(t, orch, "hello world")
 }
 
+func TestRelayTakeoverQueuesOrchestratorPromptsUntilDetach(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-takeover",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-takeover")
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	orchInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "orch-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new orch init: %v", err)
+	}
+	if err := orch.WriteJSON(orchInit); err != nil {
+		t.Fatalf("write orch init: %v", err)
+	}
+	awaitWSAck(t, orch, "init-1")
+	awaitReadyEvent(t, orch)
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	humanInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "human-1", "init-2", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new human init: %v", err)
+	}
+	if err := human.WriteJSON(humanInit); err != nil {
+		t.Fatalf("write human init: %v", err)
+	}
+	awaitWSAck(t, human, "init-2")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	attachAck := awaitWSAckEnvelope(t, human, "attach-1")
+	attachPayload := decodeAckPayload(t, attachAck)
+	attachment, _ := attachPayload.Data["attachment"].(map[string]any)
+	if attachment["client_id"] != "human-1" || attachment["mode"] != "takeover" {
+		t.Fatalf("unexpected takeover attachment payload: %#v", attachPayload.Data)
+	}
+
+	promptEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "orch-1", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "say hello"})
+	if err != nil {
+		t.Fatalf("new prompt env: %v", err)
+	}
+	if err := orch.WriteJSON(promptEnv); err != nil {
+		t.Fatalf("write prompt env: %v", err)
+	}
+	promptAck := awaitWSAckEnvelope(t, orch, "prompt-1")
+	promptPayload := decodeAckPayload(t, promptAck)
+	if queued, _ := promptPayload.Data["queued"].(bool); !queued {
+		t.Fatalf("expected prompt to be queued during takeover: %#v", promptPayload.Data)
+	}
+	if queuedCount, _ := promptPayload.Data["queued_prompts"].(float64); int(queuedCount) != 1 {
+		t.Fatalf("expected queued prompt count to be 1: %#v", promptPayload.Data)
+	}
+
+	statusEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "orch-1", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new status env: %v", err)
+	}
+	if err := orch.WriteJSON(statusEnv); err != nil {
+		t.Fatalf("write status env: %v", err)
+	}
+	statusPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, orch, "status-1"))
+	if queuedCount, _ := statusPayload.Data["queued_prompts"].(float64); int(queuedCount) != 1 {
+		t.Fatalf("expected status to report queued prompt: %#v", statusPayload.Data)
+	}
+
+	detachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "human-1", "detach-1", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
+	if err != nil {
+		t.Fatalf("new detach env: %v", err)
+	}
+	if err := human.WriteJSON(detachEnv); err != nil {
+		t.Fatalf("write detach env: %v", err)
+	}
+	awaitWSAck(t, human, "detach-1")
+	awaitMessageComplete(t, orch, "hello world")
+
+	statusEnv2, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-takeover", "", "orch-1", "status-2", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new second status env: %v", err)
+	}
+	if err := orch.WriteJSON(statusEnv2); err != nil {
+		t.Fatalf("write second status env: %v", err)
+	}
+	statusPayload2 := decodeAckPayload(t, awaitWSAckEnvelope(t, orch, "status-2"))
+	if queuedCount, _ := statusPayload2.Data["queued_prompts"].(float64); int(queuedCount) != 0 {
+		t.Fatalf("expected queued prompts to flush after detach: %#v", statusPayload2.Data)
+	}
+}
+
 func TestRelayPermissionFlow(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -502,6 +614,215 @@ func TestRelayPermissionAuthorityHeldByAttachedHuman(t *testing.T) {
 	awaitWSError(t, orch, "allow-1", "permission authority is held by attached human")
 
 	humanAllow, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-authority", "", "human-1", "allow-2", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
+	if err != nil {
+		t.Fatalf("new human allow env: %v", err)
+	}
+	if err := human.WriteJSON(humanAllow); err != nil {
+		t.Fatalf("write human allow env: %v", err)
+	}
+	awaitWSAck(t, human, "allow-2")
+	awaitPermissionResolvedWS(t, orch, "perm-1", "allow")
+}
+
+func TestRelayTakeoverPTYInputVisibleToAttachedHuman(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:      "sess-pty",
+		PTYBin:         helperProcessPath(t),
+		PTYArgs:        []string{"-test.run=TestFakePTYProcess", "--"},
+		Env:            map[string]string{"WEAVE_FAKE_PTY": "1"},
+		StartupTimeout: 5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-pty")
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new init env: %v", err)
+	}
+	if err := human.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init env: %v", err)
+	}
+	awaitWSAck(t, human, "init-1")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+
+	inputEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "pty-1", protocol.PTYInputCommand{Command: protocol.CommandPTYInput, Data: "aGVsbG8NCg=="})
+	if err != nil {
+		t.Fatalf("new pty input env: %v", err)
+	}
+	if err := human.WriteJSON(inputEnv); err != nil {
+		t.Fatalf("write pty input env: %v", err)
+	}
+	awaitWSAck(t, human, "pty-1")
+	awaitPTYOutputContainsWS(t, human, "hello")
+
+	resizeEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "resize-1", protocol.PTYResizeCommand{Command: protocol.CommandPTYResize, Rows: 30, Cols: 90})
+	if err != nil {
+		t.Fatalf("new pty resize env: %v", err)
+	}
+	if err := human.WriteJSON(resizeEnv); err != nil {
+		t.Fatalf("write pty resize env: %v", err)
+	}
+	awaitWSAck(t, human, "resize-1")
+
+	statusEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty", "", "human-1", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+	if err != nil {
+		t.Fatalf("new status env: %v", err)
+	}
+	if err := human.WriteJSON(statusEnv); err != nil {
+		t.Fatalf("write status env: %v", err)
+	}
+	statusPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, human, "status-1"))
+	if gotRows, _ := statusPayload.Data["pty_rows"].(float64); int(gotRows) != 30 {
+		t.Fatalf("expected status to report pty_rows=30: %#v", statusPayload.Data)
+	}
+	if gotCols, _ := statusPayload.Data["pty_cols"].(float64); int(gotCols) != 90 {
+		t.Fatalf("expected status to report pty_cols=90: %#v", statusPayload.Data)
+	}
+}
+
+func TestRelayRejectsPTYInputWithoutTakeover(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:      "sess-pty-observe",
+		PTYBin:         helperProcessPath(t),
+		PTYArgs:        []string{"-test.run=TestFakePTYProcess", "--"},
+		Env:            map[string]string{"WEAVE_FAKE_PTY": "1"},
+		StartupTimeout: 5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-pty-observe")
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-observe", "", "human-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new init env: %v", err)
+	}
+	if err := human.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init env: %v", err)
+	}
+	awaitWSAck(t, human, "init-1")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-observe", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "observe"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+
+	inputEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-observe", "", "human-1", "pty-1", protocol.PTYInputCommand{Command: protocol.CommandPTYInput, Data: "aGVsbG8NCg=="})
+	if err != nil {
+		t.Fatalf("new pty input env: %v", err)
+	}
+	if err := human.WriteJSON(inputEnv); err != nil {
+		t.Fatalf("write pty input env: %v", err)
+	}
+	awaitWSError(t, human, "pty-1", "pty authority is held by attached human in takeover")
+}
+
+func TestRelayTakeoverAlsoHoldsPermissionAuthority(t *testing.T) {
+	srv := NewServer(Config{Token: "secret"})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper := local.NewWrapper(local.Config{
+		SessionID:       "sess-perm-takeover",
+		PiBin:           helperProcessPath(t),
+		PiArgs:          []string{"-test.run=TestFakePIProcess", "--"},
+		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "permission"},
+		NoDefaultPiArgs: true,
+		StartupTimeout:  5 * time.Second,
+	})
+	go func() { _ = wrapper.RunRelay(ctx, relayURL, "secret") }()
+	waitForWrapperRegistration(t, srv, "sess-perm-takeover")
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	orchInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "orch-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new orch init: %v", err)
+	}
+	if err := orch.WriteJSON(orchInit); err != nil {
+		t.Fatalf("write orch init: %v", err)
+	}
+	awaitWSAck(t, orch, "init-1")
+	awaitReadyEvent(t, orch)
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	humanInit, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "human-1", "init-2", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new human init: %v", err)
+	}
+	if err := human.WriteJSON(humanInit); err != nil {
+		t.Fatalf("write human init: %v", err)
+	}
+	awaitWSAck(t, human, "init-2")
+	awaitReadyEvent(t, human)
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new attach env: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write attach env: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+
+	humanPrompt, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "human-1", "prompt-1", protocol.SessionPromptCommand{Command: protocol.CommandSessionPrompt, Message: "need approval"})
+	if err != nil {
+		t.Fatalf("new human prompt env: %v", err)
+	}
+	if err := human.WriteJSON(humanPrompt); err != nil {
+		t.Fatalf("write human prompt env: %v", err)
+	}
+	awaitWSAck(t, human, "prompt-1")
+	awaitPermissionRequestWS(t, orch, "perm-1")
+
+	allowEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "orch-1", "allow-1", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
+	if err != nil {
+		t.Fatalf("new allow env: %v", err)
+	}
+	if err := orch.WriteJSON(allowEnv); err != nil {
+		t.Fatalf("write allow env: %v", err)
+	}
+	awaitWSError(t, orch, "allow-1", "permission authority is held by attached human")
+
+	humanAllow, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-perm-takeover", "", "human-1", "allow-2", protocol.PermissionResponseCommand{Command: protocol.CommandSessionPermissionResponse, RequestID: "perm-1", Decision: "allow"})
 	if err != nil {
 		t.Fatalf("new human allow env: %v", err)
 	}
@@ -1038,6 +1359,278 @@ func TestRelayRejectsSpawnAndLoadPathTraversal(t *testing.T) {
 	awaitWSError(t, conn, "load-1", "session_path must stay within "+tempDir)
 }
 
+func TestRelaySpawnAndLoadPTYTransport(t *testing.T) {
+	tempDir := t.TempDir()
+	launcher := newFakeLauncher(t)
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir, PublicURL: "ws://127.0.0.1:0/ws", Launcher: launcher})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+	srv.cfg.PublicURL = relayURL
+
+	conn := dialWS(t, relayURL)
+	defer conn.Close()
+	authenticateWS(t, conn, protocol.RoleClient, "secret", "")
+
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-spawn", "", "test-client", "spawn-1", protocol.SessionSpawnCommand{
+		Command:   protocol.CommandSessionSpawn,
+		Transport: "pty",
+	})
+	if err != nil {
+		t.Fatalf("new pty spawn envelope: %v", err)
+	}
+	if err := conn.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write pty spawn: %v", err)
+	}
+	spawnPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, conn, "spawn-1"))
+	if nestedString(spawnPayload.Data, "runtime", "transport") != "pty" {
+		t.Fatalf("expected pty runtime transport after spawn: %#v", spawnPayload.Data)
+	}
+
+	stopEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-spawn", "", "test-client", "stop-1", protocol.RuntimeStopCommand{Command: protocol.CommandRuntimeStop})
+	if err != nil {
+		t.Fatalf("new stop envelope: %v", err)
+	}
+	if err := conn.WriteJSON(stopEnv); err != nil {
+		t.Fatalf("write stop: %v", err)
+	}
+	awaitWSAck(t, conn, "stop-1")
+
+	loadEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-pty-spawn", "", "test-client", "load-1", protocol.SessionLoadCommand{
+		Command:   protocol.CommandSessionLoad,
+		Transport: "pty",
+	})
+	if err != nil {
+		t.Fatalf("new pty load envelope: %v", err)
+	}
+	if err := conn.WriteJSON(loadEnv); err != nil {
+		t.Fatalf("write pty load: %v", err)
+	}
+	loadPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, conn, "load-1"))
+	if nestedString(loadPayload.Data, "runtime", "transport") != "pty" {
+		t.Fatalf("expected pty runtime transport after load: %#v", loadPayload.Data)
+	}
+}
+
+func TestRelayRuntimeReplaceSwitchesTransport(t *testing.T) {
+	tempDir := t.TempDir()
+	launcher := newFakeLauncher(t)
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir, PublicURL: "ws://127.0.0.1:0/ws", Launcher: launcher})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+	srv.cfg.PublicURL = relayURL
+
+	conn := dialWS(t, relayURL)
+	defer conn.Close()
+	authenticateWS(t, conn, protocol.RoleClient, "secret", "")
+
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-replace", "", "test-client", "spawn-1", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn})
+	if err != nil {
+		t.Fatalf("new spawn envelope: %v", err)
+	}
+	if err := conn.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write spawn: %v", err)
+	}
+	spawnPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, conn, "spawn-1"))
+	firstRuntimeID := nestedString(spawnPayload.Data, "runtime", "id")
+	if nestedString(spawnPayload.Data, "runtime", "transport") != "rpc" {
+		t.Fatalf("expected rpc runtime transport after spawn: %#v", spawnPayload.Data)
+	}
+
+	replaceEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-replace", "", "test-client", "replace-1", protocol.RuntimeReplaceCommand{Command: protocol.CommandRuntimeReplace, Transport: "pty"})
+	if err != nil {
+		t.Fatalf("new replace envelope: %v", err)
+	}
+	if err := conn.WriteJSON(replaceEnv); err != nil {
+		t.Fatalf("write replace: %v", err)
+	}
+	replacePayload := decodeAckPayload(t, awaitWSAckEnvelope(t, conn, "replace-1"))
+	if nestedString(replacePayload.Data, "runtime", "transport") != "pty" {
+		t.Fatalf("expected pty runtime transport after replace: %#v", replacePayload.Data)
+	}
+	if secondRuntimeID := nestedString(replacePayload.Data, "runtime", "id"); secondRuntimeID == "" || secondRuntimeID == firstRuntimeID {
+		t.Fatalf("expected new runtime id after replace: first=%s payload=%#v", firstRuntimeID, replacePayload.Data)
+	}
+}
+
+func TestRelayTakeoverAutoUpgradesRPCSession(t *testing.T) {
+	tempDir := t.TempDir()
+	launcher := newFakeLauncher(t)
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir, PublicURL: "ws://127.0.0.1:0/ws", Launcher: launcher})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+	srv.cfg.PublicURL = relayURL
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-auto-takeover", "", "orch-1", "spawn-1", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn})
+	if err != nil {
+		t.Fatalf("new spawn envelope: %v", err)
+	}
+	if err := orch.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write spawn: %v", err)
+	}
+	spawnPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, orch, "spawn-1"))
+	firstRuntimeID := nestedString(spawnPayload.Data, "runtime", "id")
+	if nestedString(spawnPayload.Data, "runtime", "transport") != "rpc" {
+		t.Fatalf("expected rpc runtime transport after spawn: %#v", spawnPayload.Data)
+	}
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-auto-takeover", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new takeover attach envelope: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write takeover attach: %v", err)
+	}
+	attachPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, human, "attach-1"))
+	if nestedString(attachPayload.Data, "runtime", "transport") != "pty" {
+		t.Fatalf("expected pty runtime transport after takeover attach: %#v", attachPayload.Data)
+	}
+	if secondRuntimeID := nestedString(attachPayload.Data, "runtime", "id"); secondRuntimeID == "" || secondRuntimeID == firstRuntimeID {
+		t.Fatalf("expected new runtime id after takeover upgrade: first=%s payload=%#v", firstRuntimeID, attachPayload.Data)
+	}
+	attachment, _ := attachPayload.Data["attachment"].(map[string]any)
+	if attachment["client_id"] != "human-1" || attachment["mode"] != "takeover" {
+		t.Fatalf("unexpected attachment payload after takeover: %#v", attachPayload.Data)
+	}
+	if attachment["return_transport"] != "rpc" {
+		t.Fatalf("expected takeover attachment to remember rpc return transport: %#v", attachPayload.Data)
+	}
+
+	initEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-auto-takeover", "", "human-1", "init-1", protocol.InitializeCommand{Command: protocol.CommandInitialize, ProtocolVersion: protocol.Version})
+	if err != nil {
+		t.Fatalf("new init envelope: %v", err)
+	}
+	if err := human.WriteJSON(initEnv); err != nil {
+		t.Fatalf("write init: %v", err)
+	}
+	awaitWSAck(t, human, "init-1")
+	awaitReadyEvent(t, human)
+
+	ptyInputEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-auto-takeover", "", "human-1", "pty-input-1", protocol.PTYInputCommand{Command: protocol.CommandPTYInput, Data: base64.StdEncoding.EncodeToString([]byte("hello"))})
+	if err != nil {
+		t.Fatalf("new pty input envelope: %v", err)
+	}
+	if err := human.WriteJSON(ptyInputEnv); err != nil {
+		t.Fatalf("write pty input: %v", err)
+	}
+	awaitWSAck(t, human, "pty-input-1")
+	awaitPTYOutputContainsWS(t, human, "hello")
+
+	detachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-auto-takeover", "", "human-1", "detach-1", protocol.SessionDetachCommand{Command: protocol.CommandSessionDetach})
+	if err != nil {
+		t.Fatalf("new detach envelope: %v", err)
+	}
+	if err := human.WriteJSON(detachEnv); err != nil {
+		t.Fatalf("write detach: %v", err)
+	}
+	detachPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, human, "detach-1"))
+	if nestedString(detachPayload.Data, "runtime", "transport") != "rpc" {
+		t.Fatalf("expected rpc runtime transport after detach auto-restore: %#v", detachPayload.Data)
+	}
+}
+
+func TestRelayTakeoverDisconnectAutoRestoresRPC(t *testing.T) {
+	tempDir := t.TempDir()
+	launcher := newFakeLauncher(t)
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir, PublicURL: "ws://127.0.0.1:0/ws", Launcher: launcher})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+	srv.cfg.PublicURL = relayURL
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-disconnect-restore", "", "orch-1", "spawn-1", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn})
+	if err != nil {
+		t.Fatalf("new spawn envelope: %v", err)
+	}
+	if err := orch.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write spawn: %v", err)
+	}
+	awaitWSAck(t, orch, "spawn-1")
+
+	human := dialWS(t, relayURL)
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-disconnect-restore", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new takeover attach envelope: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write takeover attach: %v", err)
+	}
+	awaitWSAck(t, human, "attach-1")
+	_ = human.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		statusEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-disconnect-restore", "", "orch-1", "status-1", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
+		if err != nil {
+			t.Fatalf("new status envelope: %v", err)
+		}
+		if err := orch.WriteJSON(statusEnv); err != nil {
+			t.Fatalf("write status: %v", err)
+		}
+		statusPayload := decodeAckPayload(t, awaitWSAckEnvelope(t, orch, "status-1"))
+		if nestedString(statusPayload.Data, "runtime", "transport") == "rpc" {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected disconnect to auto-restore rpc transport")
+}
+
+func TestRelayRejectsTakeoverOfStoppedSession(t *testing.T) {
+	tempDir := t.TempDir()
+	launcher := newFakeLauncher(t)
+	srv := NewServer(Config{Token: "secret", SessionDir: tempDir, PublicURL: "ws://127.0.0.1:0/ws", Launcher: launcher})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	relayURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/ws"
+	srv.cfg.PublicURL = relayURL
+
+	orch := dialWS(t, relayURL)
+	defer orch.Close()
+	authenticateWSAs(t, orch, protocol.RoleClient, "secret", "", "orch-1")
+	spawnEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-stopped-takeover", "", "orch-1", "spawn-1", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn})
+	if err != nil {
+		t.Fatalf("new spawn envelope: %v", err)
+	}
+	if err := orch.WriteJSON(spawnEnv); err != nil {
+		t.Fatalf("write spawn: %v", err)
+	}
+	awaitWSAck(t, orch, "spawn-1")
+
+	stopEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-stopped-takeover", "", "orch-1", "stop-1", protocol.RuntimeStopCommand{Command: protocol.CommandRuntimeStop})
+	if err != nil {
+		t.Fatalf("new stop envelope: %v", err)
+	}
+	if err := orch.WriteJSON(stopEnv); err != nil {
+		t.Fatalf("write stop: %v", err)
+	}
+	awaitWSAck(t, orch, "stop-1")
+
+	human := dialWS(t, relayURL)
+	defer human.Close()
+	authenticateWSAs(t, human, protocol.RoleClient, "secret", "", "human-1")
+	attachEnv, err := protocol.NewEnvelope(protocol.MessageCommand, "sess-stopped-takeover", "", "human-1", "attach-1", protocol.SessionAttachCommand{Command: protocol.CommandSessionAttach, Mode: "takeover"})
+	if err != nil {
+		t.Fatalf("new takeover attach envelope: %v", err)
+	}
+	if err := human.WriteJSON(attachEnv); err != nil {
+		t.Fatalf("write takeover attach: %v", err)
+	}
+	awaitWSError(t, human, "attach-1", "cannot take over stopped session; load or spawn first")
+}
+
 func TestRelayDuplicateWrapperAuthDoesNotAuthenticateConnection(t *testing.T) {
 	srv := NewServer(Config{Token: "secret"})
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -1115,7 +1708,8 @@ func TestRelayRejectsInvalidToken(t *testing.T) {
 }
 
 type fakeLaunchState struct {
-	cancel context.CancelFunc
+	cancel    context.CancelFunc
+	transport string
 }
 
 type fakeLauncher struct {
@@ -1135,7 +1729,7 @@ func (l *fakeLauncher) Spawn(_ context.Context, req LaunchRequest) error {
 		return errRuntimeAlreadyManaged
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	state := &fakeLaunchState{cancel: cancel}
+	state := &fakeLaunchState{cancel: cancel, transport: req.RuntimeDescriptor.Transport}
 	l.states[req.SessionID] = state
 	l.mu.Unlock()
 
@@ -1150,14 +1744,21 @@ func (l *fakeLauncher) Spawn(_ context.Context, req LaunchRequest) error {
 		}
 	}
 
-	wrapper := local.NewWrapper(local.Config{
-		SessionID:       req.SessionID,
-		PiBin:           helperProcessPath(l.t),
-		PiArgs:          []string{"-test.run=TestFakePIProcess", "--", "--session=" + req.PersistedSessionHandle},
-		Env:             map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"},
-		NoDefaultPiArgs: true,
-		StartupTimeout:  5 * time.Second,
-	})
+	config := local.Config{
+		SessionID:      req.SessionID,
+		StartupTimeout: 5 * time.Second,
+	}
+	if req.RuntimeDescriptor.Transport == "pty" {
+		config.PTYBin = helperProcessPath(l.t)
+		config.PTYArgs = []string{"-test.run=TestFakePTYProcess", "--"}
+		config.Env = map[string]string{"WEAVE_FAKE_PTY": "1"}
+	} else {
+		config.PiBin = helperProcessPath(l.t)
+		config.PiArgs = []string{"-test.run=TestFakePIProcess", "--", "--session=" + req.PersistedSessionHandle}
+		config.Env = map[string]string{"WEAVE_FAKE_PI": "1", "WEAVE_FAKE_PI_SCENARIO": "stream"}
+		config.NoDefaultPiArgs = true
+	}
+	wrapper := local.NewWrapper(config)
 	go func() {
 		_ = wrapper.RunRelay(ctx, req.RelayURL, req.Token)
 		l.mu.Lock()
@@ -1205,6 +1806,14 @@ func TestFakePIProcess(t *testing.T) {
 	if err := runFakePI(scenario); err != nil {
 		os.Exit(1)
 	}
+	os.Exit(0)
+}
+
+func TestFakePTYProcess(t *testing.T) {
+	if os.Getenv("WEAVE_FAKE_PTY") != "1" {
+		return
+	}
+	_, _ = io.Copy(os.Stdout, os.Stdin)
 	os.Exit(0)
 }
 
@@ -1414,6 +2023,32 @@ func awaitPermissionRequestWS(t *testing.T, conn *websocket.Conn, requestID stri
 			continue
 		}
 		if evt.Update.Kind == protocol.UpdatePermissionRequest && evt.Update.RequestID == requestID {
+			return
+		}
+	}
+}
+
+func awaitPTYOutputContainsWS(t *testing.T, conn *websocket.Conn, want string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	for {
+		var env protocol.Envelope
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("read pty output: %v", err)
+		}
+		if env.Type != protocol.MessageEvent {
+			continue
+		}
+		var evt protocol.PTYOutputEvent
+		if err := env.DecodePayload(&evt); err != nil || evt.Event != protocol.EventPTYOutput {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(evt.Data)
+		if err != nil {
+			t.Fatalf("decode pty output: %v", err)
+		}
+		if strings.Contains(string(data), want) {
 			return
 		}
 	}

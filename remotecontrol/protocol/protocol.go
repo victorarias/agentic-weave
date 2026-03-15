@@ -25,18 +25,22 @@ const (
 	CommandSessionSpawn              = "session.spawn"
 	CommandSessionLoad               = "session.load"
 	CommandRuntimeStop               = "runtime.stop"
+	CommandRuntimeReplace            = "runtime.replace"
 	CommandRegistryListSessions      = "registry.list_sessions"
 	CommandSessionPermissionResponse = "session.permission_response"
 	CommandSessionAttach             = "session.attach"
 	CommandSessionDetach             = "session.detach"
 	CommandSessionPrompt             = "session.prompt"
 	CommandSessionCancel             = "session.cancel"
+	CommandPTYInput                  = "pty.input"
+	CommandPTYResize                 = "pty.resize"
 
 	RoleWrapper = "wrapper"
 	RoleClient  = "client"
 
 	EventSessionAgentReady = "session.agent_ready"
 	EventSessionUpdate     = "session.update"
+	EventPTYOutput         = "pty.output"
 
 	UpdateLifecycle          = "lifecycle"
 	UpdateMessageDelta       = "message_delta"
@@ -63,9 +67,10 @@ type Envelope struct {
 }
 
 type AuthCommand struct {
-	Command string `json:"command"`
-	Token   string `json:"token"`
-	Role    string `json:"role"`
+	Command   string `json:"command"`
+	Token     string `json:"token"`
+	Role      string `json:"role"`
+	Transport string `json:"transport,omitempty"`
 }
 
 type InitializeCommand struct {
@@ -81,15 +86,22 @@ type SessionStatusCommand struct {
 type SessionSpawnCommand struct {
 	Command     string `json:"command"`
 	SessionPath string `json:"session_path,omitempty"`
+	Transport   string `json:"transport,omitempty"`
 }
 
 type SessionLoadCommand struct {
 	Command     string `json:"command"`
 	SessionPath string `json:"session_path,omitempty"`
+	Transport   string `json:"transport,omitempty"`
 }
 
 type RuntimeStopCommand struct {
 	Command string `json:"command"`
+}
+
+type RuntimeReplaceCommand struct {
+	Command   string `json:"command"`
+	Transport string `json:"transport,omitempty"`
 }
 
 type ListSessionsCommand struct {
@@ -119,6 +131,17 @@ type SessionPromptCommand struct {
 
 type SessionCancelCommand struct {
 	Command string `json:"command"`
+}
+
+type PTYInputCommand struct {
+	Command string `json:"command"`
+	Data    string `json:"data"`
+}
+
+type PTYResizeCommand struct {
+	Command string `json:"command"`
+	Rows    int    `json:"rows"`
+	Cols    int    `json:"cols"`
 }
 
 type AckPayload struct {
@@ -151,13 +174,19 @@ type RuntimeInfo struct {
 }
 
 type AttachmentInfo struct {
-	ClientID string `json:"client_id"`
-	Mode     string `json:"mode"`
+	ClientID        string `json:"client_id"`
+	Mode            string `json:"mode"`
+	ReturnTransport string `json:"return_transport,omitempty"`
 }
 
 type SessionUpdateEvent struct {
 	Event  string        `json:"event"`
 	Update SessionUpdate `json:"update"`
+}
+
+type PTYOutputEvent struct {
+	Event string `json:"event"`
+	Data  string `json:"data"`
 }
 
 type PermissionRequest struct {

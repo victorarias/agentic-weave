@@ -16,6 +16,9 @@ type Record struct {
 	State                  string                       `json:"state,omitempty"`
 	Phase                  string                       `json:"phase,omitempty"`
 	Attachment             *protocol.AttachmentInfo     `json:"attachment,omitempty"`
+	QueuedPrompts          int                          `json:"queued_prompts,omitempty"`
+	PTYRows                int                          `json:"pty_rows,omitempty"`
+	PTYCols                int                          `json:"pty_cols,omitempty"`
 	PendingPermissions     []protocol.PermissionRequest `json:"pending_permissions,omitempty"`
 	UpdatedAt              time.Time                    `json:"updated_at"`
 }
@@ -55,6 +58,7 @@ func (r *Registry) SetConnected(sessionID string, runtime protocol.RuntimeInfo, 
 	record.WrapperConnected = true
 	record.Phase = "running"
 	record.PendingPermissions = nil
+	record.QueuedPrompts = 0
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = cloneRecord(record)
@@ -75,6 +79,9 @@ func (r *Registry) SetDisconnected(sessionID, runtimeID string) (Record, bool) {
 	record.Phase = ""
 	record.Attachment = nil
 	record.PendingPermissions = nil
+	record.QueuedPrompts = 0
+	record.PTYRows = 0
+	record.PTYCols = 0
 	record.State = deriveState(record.WrapperConnected, record.Phase, len(record.PendingPermissions))
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = cloneRecord(record)
@@ -161,7 +168,41 @@ func (r *Registry) SetAttachment(sessionID string, attachment protocol.Attachmen
 	if !ok {
 		return Record{}, false
 	}
-	record.Attachment = &protocol.AttachmentInfo{ClientID: attachment.ClientID, Mode: attachment.Mode}
+	record.Attachment = &protocol.AttachmentInfo{ClientID: attachment.ClientID, Mode: attachment.Mode, ReturnTransport: attachment.ReturnTransport}
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
+}
+
+func (r *Registry) SetQueuedPrompts(sessionID string, queued int) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return Record{}, false
+	}
+	if queued < 0 {
+		queued = 0
+	}
+	record.QueuedPrompts = queued
+	record.UpdatedAt = time.Now().UTC()
+	r.records[sessionID] = cloneRecord(record)
+	return cloneRecord(record), true
+}
+
+func (r *Registry) SetPTYSize(sessionID string, rows, cols int) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[sessionID]
+	if !ok {
+		return Record{}, false
+	}
+	if rows > 0 {
+		record.PTYRows = rows
+	}
+	if cols > 0 {
+		record.PTYCols = cols
+	}
 	record.UpdatedAt = time.Now().UTC()
 	r.records[sessionID] = cloneRecord(record)
 	return cloneRecord(record), true
@@ -231,7 +272,7 @@ func deriveState(connected bool, phase string, pendingCount int) string {
 func cloneRecord(record Record) Record {
 	cloned := record
 	if record.Attachment != nil {
-		cloned.Attachment = &protocol.AttachmentInfo{ClientID: record.Attachment.ClientID, Mode: record.Attachment.Mode}
+		cloned.Attachment = &protocol.AttachmentInfo{ClientID: record.Attachment.ClientID, Mode: record.Attachment.Mode, ReturnTransport: record.Attachment.ReturnTransport}
 	}
 	if len(record.PendingPermissions) > 0 {
 		cloned.PendingPermissions = make([]protocol.PermissionRequest, len(record.PendingPermissions))

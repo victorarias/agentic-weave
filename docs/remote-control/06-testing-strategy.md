@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Status (2026-03-14):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and reproducible real relay smoke coverage via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`. Tier 4 now adds relay tests for observe conflict, same-identity observe→inject mode escalation, inject visibility, permission authority while attached, and a real observe/watch/inject smoke script at `scripts/remotecontrol-attach-smoke.sh`.
+**Status (2026-03-14):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and reproducible real relay smoke coverage via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`. Tier 4 adds relay tests for observe conflict, same-identity observe→inject mode escalation, inject visibility, permission authority while attached, and a real observe/watch/inject smoke script at `scripts/remotecontrol-attach-smoke.sh`. Tier 5 now adds relay tests for takeover queueing, takeover-held permission authority, initial PTY output/input/resize forwarding via a scripted helper runtime, plus smoke scripts at `scripts/remotecontrol-takeover-queue-smoke.sh`, `scripts/remotecontrol-pty-smoke.sh`, and `scripts/remotecontrol-real-pi-pty-smoke.sh`.
 
 ## Three Test Tiers
 
@@ -177,6 +177,101 @@ What it verifies:
 2. a human client can `session.attach` in `observe` mode and appear in `session.status`
 3. the same human identity can reconnect and escalate from `observe` to `inject`
 4. the watch stream sees both the injected output and the explicit `mode_changed` attachment status event
+
+### Real takeover queue smoke
+
+Initial Tier 5 control-plane behavior is reproducible with:
+
+```bash
+./scripts/remotecontrol-takeover-queue-smoke.sh
+```
+
+What it verifies:
+
+1. a human client can `session.attach` in `takeover` mode
+2. orchestrator prompts are acknowledged as queued instead of being sent to the runtime immediately
+3. `session.status` reports the queued prompt count while takeover is active
+4. detaching the takeover human flushes the queued prompt back to the runtime
+
+### Scripted PTY byte-transport smoke
+
+The first PTY transport slice is reproducible with:
+
+```bash
+./scripts/remotecontrol-pty-smoke.sh
+```
+
+What it verifies:
+
+1. a PTY-backed wrapper runtime can connect through the relay
+2. a human in `takeover` mode receives raw `pty.output`
+3. the same human identity can send `pty-input`
+4. `pty-resize` is accepted while takeover is active
+
+This uses the tracked echo helper at `testdata/pty/echo.py`.
+
+### Real interactive pi takeover smoke
+
+The same PTY path is also reproducible against a real interactive `pi` process with:
+
+```bash
+./scripts/remotecontrol-real-pi-pty-smoke.sh
+```
+
+What it verifies:
+
+1. wrapper PTY mode can launch a real `pi` child process
+2. a human in `takeover` mode can attach to that live interactive `pi` runtime
+3. `pty-input` can drive a real TUI command (`/session` + Enter)
+4. `pty-resize` updates are reflected in `session.status`
+
+### Manual relay-managed PTY spawn/load validation
+
+I also manually validated the new transport-selection path with relay-managed launch:
+
+```bash
+weave-inspect relay --session <id> --transport pty spawn
+weave-inspect relay --session <id> attach takeover
+weave-inspect relay --session <id> pty-input $'/session\r'
+weave-inspect relay --session <id> kill-runtime
+weave-inspect relay --session <id> --transport pty load
+```
+
+That confirms `session.spawn` / `session.load` can now choose the real interactive PTY-backed pi runtime instead of always defaulting to RPC.
+
+### Manual best-UX takeover validation
+
+I also manually validated the more ergonomic takeover flow:
+
+```bash
+weave-inspect relay --session <id> spawn                 # defaults to rpc
+weave-inspect relay --session <id> takeover              # auto-upgrades to pty when resumable
+weave-inspect relay --session <id> pty-input $'/session\r'
+weave-inspect relay --session <id> release
+weave-inspect relay --session <id> switch-transport rpc
+```
+
+That confirms the explicit runtime-switch primitive works and that human takeover can now be driven by intent (`takeover`) rather than by manually choosing transport first.
+
+I also validated the reattach blank-screen fix by running takeover with a local terminal size available (or `LINES` / `COLUMNS` fallback) and confirming the session immediately recorded non-zero `pty_rows` / `pty_cols` without needing a second manual `pty-resize` command.
+
+Finally, I validated live stdin passthrough by piping `/session\r` plus the local disconnect escape (`Ctrl-]`, `\x1d`) into `weave-inspect relay takeover`, then confirming the PTY stream showed `/session` and the session status recorded the auto-established PTY size. The client also supports a second local detach escape, `~.` at line start, for terminals where `Ctrl-]` is awkward.
+
+On Zellij/modern terminal setups, I also confirmed that `Ctrl-]` may arrive as the extended CSI-u sequence `ESC [ 93 ; 5 u` instead of raw `0x1d`; takeover now treats that CSI-u form as the same local disconnect escape.
+
+To improve reattach rendering, takeover now also performs a resize-bump-and-restore after applying the real terminal size. This is a pragmatic redraw trigger for TUIs that only repaint fully when they receive a resize event.
+
+For takeover lifecycle, relay tests now also cover automatic return to RPC when a session was auto-upgraded from RPC into PTY for takeover and the human later releases or disconnects.
+
+For day-to-day operator ergonomics, `weave-inspect relay` now remembers the last successful relay context per repository in the local user cache. In practice that means the first command may still be fully specified, but later follow-ups can usually omit `--relay`, `--token`, `--session`, and `--identity`.
+
+There is also now a thin operator TUI:
+
+```bash
+weave-inspect relay tui
+```
+
+It uses the saved relay context, lists sessions, and supports simple keyboard-driven actions such as spawning a new session, selecting one, taking over, releasing, prompting, loading, and stopping runtimes. It is implemented with Bubble Tea so the UI can hand terminal control to child commands and then resume cleanly, which avoids the stdin contention bugs that a hand-rolled raw-input loop hit.
 
 ---
 

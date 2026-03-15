@@ -25,6 +25,10 @@ type Config struct {
 	SessionID       string
 	PiBin           string
 	PiArgs          []string
+	PTYBin          string
+	PTYArgs         []string
+	PTYRows         int
+	PTYCols         int
 	Env             map[string]string
 	StartupTimeout  time.Duration
 	NoDefaultPiArgs bool
@@ -46,6 +50,11 @@ type Wrapper struct {
 	piInMu sync.Mutex
 	piIn   io.WriteCloser
 
+	ptyMu   sync.Mutex
+	ptyFile *os.File
+	ptyRows int
+	ptyCols int
+
 	pendingMu sync.Mutex
 	pending   map[string]chan piResponse
 
@@ -60,6 +69,9 @@ type Wrapper struct {
 
 func NewWrapper(cfg Config) *Wrapper {
 	descriptor := runtime.PiRPC()
+	if cfg.PTYBin != "" {
+		descriptor = runtime.PiPTY()
+	}
 	if cfg.SocketPath == "" {
 		cfg.SocketPath = filepath.Join(os.TempDir(), "weave-local.sock")
 	}
@@ -67,7 +79,16 @@ func NewWrapper(cfg Config) *Wrapper {
 		cfg.SessionID = "local"
 	}
 	if cfg.PiBin == "" {
-		cfg.PiBin = descriptor.Command
+		cfg.PiBin = runtime.PiRPC().Command
+	}
+	if cfg.PTYBin == "" && descriptor.Transport == "pty" {
+		cfg.PTYBin = descriptor.Command
+	}
+	if cfg.PTYRows <= 0 {
+		cfg.PTYRows = 40
+	}
+	if cfg.PTYCols <= 0 {
+		cfg.PTYCols = 120
 	}
 	if cfg.StartupTimeout <= 0 {
 		cfg.StartupTimeout = descriptor.StartupTimeout
@@ -180,9 +201,10 @@ func (w *Wrapper) RunRelay(ctx context.Context, relayURL, token string) error {
 
 func (w *Wrapper) authRelay(conn *websocket.Conn, token string) error {
 	env, err := protocol.NewEnvelope(protocol.MessageCommand, w.cfg.SessionID, w.runtimeID, "weave-wrapper", "auth-wrapper", protocol.AuthCommand{
-		Command: protocol.CommandAuth,
-		Token:   token,
-		Role:    protocol.RoleWrapper,
+		Command:   protocol.CommandAuth,
+		Token:     token,
+		Role:      protocol.RoleWrapper,
+		Transport: w.descriptor.Transport,
 	})
 	if err != nil {
 		return err
@@ -288,7 +310,7 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 			ProtocolVersion: protocol.Version,
 			Capabilities:    capabilities,
 			Session:         protocol.SessionInfo{ID: w.cfg.SessionID},
-			Runtime:         protocol.RuntimeInfo{ID: w.runtimeID, Kind: "pi", Transport: w.descriptor.Transport},
+			Runtime:         protocol.RuntimeInfo{ID: w.runtimeID, Kind: w.descriptor.Kind, Transport: w.descriptor.Transport},
 		}
 		return w.sendEvent(p, ready)
 
@@ -298,9 +320,9 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 			return nil
 		}
 		status := w.statusSnapshot()
-		return w.sendAck(p, env.ID, protocol.CommandSessionStatus, map[string]any{
+		data := map[string]any{
 			"session":                  protocol.SessionInfo{ID: w.cfg.SessionID},
-			"runtime":                  protocol.RuntimeInfo{ID: w.runtimeID, Kind: "pi", Transport: w.descriptor.Transport},
+			"runtime":                  protocol.RuntimeInfo{ID: w.runtimeID, Kind: w.descriptor.Kind, Transport: w.descriptor.Transport},
 			"persisted_session_handle": stringValue(w.bootstrapState["sessionFile"]),
 			"state":                    status["state"],
 			"phase":                    status["phase"],
@@ -313,10 +335,21 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 				"resume_strategy":     w.descriptor.ResumeStrategy,
 				"supports_permission": w.descriptor.SupportsPermission,
 			},
-		})
+		}
+		if rows, ok := status["pty_rows"]; ok {
+			data["pty_rows"] = rows
+		}
+		if cols, ok := status["pty_cols"]; ok {
+			data["pty_cols"] = cols
+		}
+		return w.sendAck(p, env.ID, protocol.CommandSessionStatus, data)
 	case protocol.CommandSessionPermissionResponse:
 		if !p.initialized() {
 			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.permission_response"))
+			return nil
+		}
+		if w.descriptor.Transport != "rpc" {
+			_ = w.sendError(p, env.ID, errors.New("session.permission_response is only available for rpc transport"))
 			return nil
 		}
 		var resp protocol.PermissionResponseCommand
@@ -337,6 +370,10 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 	case protocol.CommandSessionPrompt:
 		if !p.initialized() {
 			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.prompt"))
+			return nil
+		}
+		if w.descriptor.Transport != "rpc" {
+			_ = w.sendError(p, env.ID, errors.New("session.prompt is only available for rpc transport"))
 			return nil
 		}
 		var prompt protocol.SessionPromptCommand
@@ -366,6 +403,10 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before session.cancel"))
 			return nil
 		}
+		if w.descriptor.Transport != "rpc" {
+			_ = w.sendError(p, env.ID, errors.New("session.cancel is only available for rpc transport"))
+			return nil
+		}
 		resp, err := w.sendPICommand(ctx, map[string]any{"id": "cancel-" + env.ID, "type": "abort"})
 		if err != nil {
 			_ = w.sendError(p, env.ID, err)
@@ -376,6 +417,44 @@ func (w *Wrapper) handleCommand(ctx context.Context, p peer, env protocol.Envelo
 			return nil
 		}
 		return w.sendAck(p, env.ID, protocol.CommandSessionCancel, nil)
+	case protocol.CommandPTYInput:
+		if !p.initialized() {
+			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before pty.input"))
+			return nil
+		}
+		if w.descriptor.Transport != "pty" {
+			_ = w.sendError(p, env.ID, errors.New("pty.input is only available for pty transport"))
+			return nil
+		}
+		var cmd protocol.PTYInputCommand
+		if err := env.DecodePayload(&cmd); err != nil {
+			_ = w.sendError(p, env.ID, err)
+			return nil
+		}
+		if err := w.writePTYInput(cmd.Data); err != nil {
+			_ = w.sendError(p, env.ID, err)
+			return nil
+		}
+		return w.sendAck(p, env.ID, protocol.CommandPTYInput, nil)
+	case protocol.CommandPTYResize:
+		if !p.initialized() {
+			_ = w.sendError(p, env.ID, errors.New("initialize must be sent before pty.resize"))
+			return nil
+		}
+		if w.descriptor.Transport != "pty" {
+			_ = w.sendError(p, env.ID, errors.New("pty.resize is only available for pty transport"))
+			return nil
+		}
+		var cmd protocol.PTYResizeCommand
+		if err := env.DecodePayload(&cmd); err != nil {
+			_ = w.sendError(p, env.ID, err)
+			return nil
+		}
+		if err := w.resizePTY(cmd.Rows, cmd.Cols); err != nil {
+			_ = w.sendError(p, env.ID, err)
+			return nil
+		}
+		return w.sendAck(p, env.ID, protocol.CommandPTYResize, nil)
 	default:
 		_ = w.sendError(p, env.ID, fmt.Errorf("unknown command %q", meta.Command))
 		return nil
@@ -503,11 +582,18 @@ func (w *Wrapper) statusSnapshot() map[string]any {
 	if len(pending) > 0 || phase == "waiting_permission" {
 		state = "waiting_permission"
 	}
-	return map[string]any{
+	snapshot := map[string]any{
 		"state":               state,
 		"phase":               phase,
 		"pending_permissions": pending,
 	}
+	if w.descriptor.Transport == "pty" {
+		w.ptyMu.Lock()
+		snapshot["pty_rows"] = w.ptyRows
+		snapshot["pty_cols"] = w.ptyCols
+		w.ptyMu.Unlock()
+	}
+	return snapshot
 }
 
 func containsArg(args []string, name string) bool {

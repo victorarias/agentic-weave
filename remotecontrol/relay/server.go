@@ -26,6 +26,7 @@ type Config struct {
 	PublicURL      string
 	WrapperBin     string
 	PiBin          string
+	PTYBin         string
 	StartupTimeout time.Duration
 	Launcher       Launcher
 }
@@ -34,12 +35,13 @@ type Server struct {
 	cfg      Config
 	upgrader websocket.Upgrader
 
-	mu          sync.Mutex
-	wrappers    map[string]*connState
-	attachments map[string]*connState
-	subscribers map[string]map[*connState]struct{}
-	registry    *session.Registry
-	launcher    Launcher
+	mu             sync.Mutex
+	wrappers       map[string]*connState
+	attachments    map[string]*connState
+	pendingPrompts map[string][]protocol.Envelope
+	subscribers    map[string]map[*connState]struct{}
+	registry       *session.Registry
+	launcher       Launcher
 }
 
 type connState struct {
@@ -70,6 +72,9 @@ func NewServer(cfg Config) *Server {
 	if cfg.PiBin == "" {
 		cfg.PiBin = runtime.PiRPC().Command
 	}
+	if cfg.PTYBin == "" {
+		cfg.PTYBin = runtime.PiPTY().Command
+	}
 	if cfg.StartupTimeout <= 0 {
 		cfg.StartupTimeout = 20 * time.Second
 	}
@@ -82,11 +87,12 @@ func NewServer(cfg Config) *Server {
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
-		wrappers:    make(map[string]*connState),
-		attachments: make(map[string]*connState),
-		subscribers: make(map[string]map[*connState]struct{}),
-		registry:    session.NewRegistry(),
-		launcher:    launcher,
+		wrappers:       make(map[string]*connState),
+		attachments:    make(map[string]*connState),
+		pendingPrompts: make(map[string][]protocol.Envelope),
+		subscribers:    make(map[string]map[*connState]struct{}),
+		registry:       session.NewRegistry(),
+		launcher:       launcher,
 	}
 }
 
@@ -173,6 +179,16 @@ func (s *Server) handleAuth(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "invalid auth role")
 		return
 	}
+	transport := strings.TrimSpace(cmd.Transport)
+	if cmd.Role == protocol.RoleWrapper {
+		if transport == "" {
+			transport = runtime.PiRPC().Transport
+		}
+		if transport != runtime.PiRPC().Transport && transport != runtime.PiPTY().Transport {
+			_ = s.sendError(state, env.ID, env.SessionID, fmt.Sprintf("invalid wrapper transport %q", cmd.Transport))
+			return
+		}
+	}
 	if cmd.Role == protocol.RoleWrapper && env.SessionID == "" {
 		_ = s.sendError(state, env.ID, env.SessionID, "wrapper auth requires session_id")
 		return
@@ -195,7 +211,7 @@ func (s *Server) handleAuth(state *connState, env protocol.Envelope) {
 			return
 		}
 		s.wrappers[env.SessionID] = state
-		s.registry.SetConnected(env.SessionID, protocol.RuntimeInfo{ID: env.RuntimeID, Kind: "pi", Transport: runtime.PiRPC().Transport}, "")
+		s.registry.SetConnected(env.SessionID, protocol.RuntimeInfo{ID: env.RuntimeID, Kind: "pi", Transport: transport}, "")
 	}
 	s.mu.Unlock()
 
@@ -256,6 +272,9 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 	case protocol.CommandRuntimeStop:
 		s.handleRuntimeStop(state, env)
 		return
+	case protocol.CommandRuntimeReplace:
+		s.handleRuntimeReplace(state, env)
+		return
 	case protocol.CommandSessionPermissionResponse:
 		s.handlePermissionResponse(state, env)
 		return
@@ -264,6 +283,12 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 		return
 	case protocol.CommandSessionDetach:
 		s.handleSessionDetach(state, env)
+		return
+	case protocol.CommandPTYInput:
+		s.handlePTYInput(state, env)
+		return
+	case protocol.CommandPTYResize:
+		s.handlePTYResize(state, env)
 		return
 	}
 
@@ -275,6 +300,12 @@ func (s *Server) handleClientEnvelope(state *connState, env protocol.Envelope) {
 		s.subscribe(state, env.SessionID)
 	}
 	if meta.Command == protocol.CommandSessionPrompt {
+		if queued, err := s.tryQueuePrompt(state, env); err != nil {
+			_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+			return
+		} else if queued {
+			return
+		}
 		if !s.canPrompt(state, env.SessionID) {
 			_ = s.sendError(state, env.ID, env.SessionID, "attached client in observe mode cannot send prompts")
 			return
@@ -315,6 +346,10 @@ func (s *Server) handleWrapperEnvelope(state *connState, env protocol.Envelope) 
 	}
 	s.mu.Unlock()
 
+	if isPTYOutputEnvelope(env) {
+		s.forwardPTYOutput(sessionID, env)
+		return
+	}
 	s.applyWrapperEnvelope(state, env)
 	for _, client := range clients {
 		_ = client.writeEnvelope(env)
@@ -333,6 +368,9 @@ func (s *Server) handleListSessions(state *connState, env protocol.Envelope) {
 			"state":                    record.State,
 			"phase":                    record.Phase,
 			"attachment":               record.Attachment,
+			"queued_prompts":           record.QueuedPrompts,
+			"pty_rows":                 record.PTYRows,
+			"pty_cols":                 record.PTYCols,
 			"pending_permissions":      record.PendingPermissions,
 			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
 		})
@@ -366,6 +404,11 @@ func (s *Server) handleSessionSpawn(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 		return
 	}
+	descriptor, err := runtimeDescriptorForTransport(cmd.Transport)
+	if err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
 	if env.SessionID == "" {
 		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.spawn")
 		return
@@ -390,7 +433,8 @@ func (s *Server) handleSessionSpawn(state *connState, env protocol.Envelope) {
 		RelayURL:               s.relayURL(),
 		Token:                  s.cfg.Token,
 		PiBin:                  s.cfg.PiBin,
-		RuntimeDescriptor:      runtime.PiRPC(),
+		PTYBin:                 s.cfg.PTYBin,
+		RuntimeDescriptor:      descriptor,
 	}); err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, normalizeSpawnError(err))
 		return
@@ -406,6 +450,11 @@ func (s *Server) handleSessionSpawn(state *connState, env protocol.Envelope) {
 func (s *Server) handleSessionLoad(state *connState, env protocol.Envelope) {
 	var cmd protocol.SessionLoadCommand
 	if err := env.DecodePayload(&cmd); err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	descriptor, err := runtimeDescriptorForTransport(cmd.Transport)
+	if err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 		return
 	}
@@ -442,7 +491,8 @@ func (s *Server) handleSessionLoad(state *connState, env protocol.Envelope) {
 		RelayURL:               s.relayURL(),
 		Token:                  s.cfg.Token,
 		PiBin:                  s.cfg.PiBin,
-		RuntimeDescriptor:      runtime.PiRPC(),
+		PTYBin:                 s.cfg.PTYBin,
+		RuntimeDescriptor:      descriptor,
 	}); err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, normalizeSpawnError(err))
 		return
@@ -472,6 +522,24 @@ func (s *Server) handleRuntimeStop(state *connState, env protocol.Envelope) {
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandRuntimeStop))
 }
 
+func (s *Server) handleRuntimeReplace(state *connState, env protocol.Envelope) {
+	var cmd protocol.RuntimeReplaceCommand
+	if err := env.DecodePayload(&cmd); err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	if env.SessionID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for runtime.replace")
+		return
+	}
+	record, err := s.replaceRuntimeTransport(env.SessionID, cmd.Transport)
+	if err != nil {
+		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+		return
+	}
+	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandRuntimeReplace))
+}
+
 func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 	var cmd protocol.SessionAttachCommand
 	if err := env.DecodePayload(&cmd); err != nil {
@@ -482,7 +550,7 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.attach")
 		return
 	}
-	if cmd.Mode != "observe" && cmd.Mode != "inject" {
+	if cmd.Mode != "observe" && cmd.Mode != "inject" && cmd.Mode != "takeover" {
 		_ = s.sendError(state, env.ID, env.SessionID, fmt.Sprintf("unsupported attach mode %q", cmd.Mode))
 		return
 	}
@@ -490,18 +558,50 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "attach requires client identity")
 		return
 	}
-	if _, ok := s.registry.Get(env.SessionID); !ok {
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok {
 		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
 		return
 	}
+	existingReturnTransport := ""
+	if record.Attachment != nil {
+		existingReturnTransport = record.Attachment.ReturnTransport
+	}
+	returnTransport := ""
+	if cmd.Mode == "takeover" {
+		// Check attachment ownership BEFORE restarting the runtime
+		// (ensureTakeoverRuntime triggers wrapper unregister which clears the attachment)
+		if record.Attachment != nil && record.Attachment.ClientID != "" && record.Attachment.ClientID != state.identity {
+			_ = s.sendError(state, env.ID, env.SessionID, "another controller is already attached")
+			return
+		}
+		if !record.WrapperConnected {
+			_ = s.sendError(state, env.ID, env.SessionID, "cannot take over stopped session; load or spawn first")
+			return
+		}
+		var err error
+		record, returnTransport, err = s.ensureTakeoverRuntime(env.SessionID, record)
+		if err != nil {
+			_ = s.sendError(state, env.ID, env.SessionID, err.Error())
+			return
+		}
+	}
 
 	var previousSessionID string
+	previousSessionMode := ""
+	previousReturnTransport := ""
 	previousMode := ""
 	action := "attached"
 	s.mu.Lock()
 	attachedSessionID, attachedOwner := s.findAttachmentByIdentityLocked(state.identity)
 	if attachedSessionID != "" && attachedSessionID != env.SessionID {
 		previousSessionID = attachedSessionID
+		if attachedOwner != nil {
+			previousSessionMode = attachedOwner.attachedMode
+		}
+		if previousRecord, ok := s.registry.Get(attachedSessionID); ok && previousRecord.Attachment != nil {
+			previousReturnTransport = previousRecord.Attachment.ReturnTransport
+		}
 		delete(s.attachments, attachedSessionID)
 		if attachedOwner != nil {
 			attachedOwner.attachedTo = ""
@@ -533,16 +633,26 @@ func (s *Server) handleSessionAttach(state *connState, env protocol.Envelope) {
 		s.registry.ClearAttachment(previousSessionID)
 	}
 	s.subscribe(state, env.SessionID)
-	record, _ := s.registry.SetAttachment(env.SessionID, protocol.AttachmentInfo{ClientID: state.identity, Mode: cmd.Mode})
+	record, _ = s.registry.SetAttachment(env.SessionID, protocol.AttachmentInfo{ClientID: state.identity, Mode: cmd.Mode, ReturnTransport: returnTransport})
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionAttach))
 	if previousSessionID != "" {
 		s.broadcastSessionStatus(previousSessionID, map[string]any{"attachment_action": "detached", "attachment_client_id": state.identity})
+		if previousSessionMode == "takeover" {
+			if _, err := s.restorePostTakeoverTransport(previousSessionID, previousReturnTransport); err == nil {
+				s.flushQueuedPrompts(previousSessionID)
+			}
+		}
 	}
 	details := map[string]any{"attachment_action": action}
 	if previousMode != "" {
 		details["previous_mode"] = previousMode
 	}
 	s.broadcastSessionStatus(env.SessionID, details)
+	if previousMode == "takeover" && cmd.Mode != "takeover" {
+		if _, err := s.restorePostTakeoverTransport(env.SessionID, existingReturnTransport); err == nil {
+			s.flushQueuedPrompts(env.SessionID)
+		}
+	}
 }
 
 func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
@@ -550,7 +660,7 @@ func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
 		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for session.detach")
 		return
 	}
-	cleared, record, err := s.detachIfOwner(state, env.SessionID)
+	cleared, previousAttachment, record, err := s.detachIfOwner(state, env.SessionID)
 	if err != nil {
 		_ = s.sendError(state, env.ID, env.SessionID, err.Error())
 		return
@@ -558,6 +668,12 @@ func (s *Server) handleSessionDetach(state *connState, env protocol.Envelope) {
 	if !cleared {
 		_ = s.sendError(state, env.ID, env.SessionID, "client is not attached to session")
 		return
+	}
+	if previousAttachment != nil && previousAttachment.Mode == "takeover" {
+		if restored, restoreErr := s.restorePostTakeoverTransport(env.SessionID, previousAttachment.ReturnTransport); restoreErr == nil {
+			record = restored
+			defer s.flushQueuedPrompts(env.SessionID)
+		}
 	}
 	_ = state.writeEnvelope(mustAckEnvelope(env.ID, env.SessionID, record, protocol.CommandSessionDetach))
 	s.broadcastSessionStatus(env.SessionID, map[string]any{"attachment_action": "detached", "attachment_client_id": state.identity})
@@ -600,6 +716,62 @@ func (s *Server) handlePermissionResponse(state *connState, env protocol.Envelop
 	_ = wrapper.writeEnvelope(env)
 }
 
+func (s *Server) handlePTYInput(state *connState, env protocol.Envelope) {
+	if env.SessionID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for pty.input")
+		return
+	}
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok {
+		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
+		return
+	}
+	if !record.WrapperConnected {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	if !s.canUsePTY(state, record) {
+		_ = s.sendError(state, env.ID, env.SessionID, "pty authority is held by attached human in takeover")
+		return
+	}
+	s.mu.Lock()
+	wrapper := s.wrappers[env.SessionID]
+	s.mu.Unlock()
+	if wrapper == nil {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	_ = wrapper.writeEnvelope(env)
+}
+
+func (s *Server) handlePTYResize(state *connState, env protocol.Envelope) {
+	if env.SessionID == "" {
+		_ = s.sendError(state, env.ID, env.SessionID, "session_id is required for pty.resize")
+		return
+	}
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok {
+		_ = s.sendError(state, env.ID, env.SessionID, "unknown session")
+		return
+	}
+	if !record.WrapperConnected {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	if !s.canUsePTY(state, record) {
+		_ = s.sendError(state, env.ID, env.SessionID, "pty authority is held by attached human in takeover")
+		return
+	}
+	s.mu.Lock()
+	wrapper := s.wrappers[env.SessionID]
+	s.mu.Unlock()
+	if wrapper == nil {
+		_ = s.sendError(state, env.ID, env.SessionID, "no wrapper connected for session")
+		return
+	}
+	_ = wrapper.writeEnvelope(env)
+}
+
 func sameAttachmentOwner(owner, candidate *connState) bool {
 	if owner == nil || candidate == nil {
 		return false
@@ -622,6 +794,72 @@ func (s *Server) findAttachmentByIdentityLocked(identity string) (string, *connS
 	return "", nil
 }
 
+func isPTYOutputEnvelope(env protocol.Envelope) bool {
+	if env.Type != protocol.MessageEvent {
+		return false
+	}
+	var meta struct {
+		Event string `json:"event"`
+	}
+	if err := env.DecodePayload(&meta); err != nil {
+		return false
+	}
+	return meta.Event == protocol.EventPTYOutput
+}
+
+func (s *Server) forwardPTYOutput(sessionID string, env protocol.Envelope) {
+	s.mu.Lock()
+	owner := s.attachments[sessionID]
+	s.mu.Unlock()
+	if owner == nil || owner.attachedMode != "takeover" {
+		return
+	}
+	_ = owner.writeEnvelope(env)
+}
+
+func (s *Server) tryQueuePrompt(state *connState, env protocol.Envelope) (bool, error) {
+	record, ok := s.registry.Get(env.SessionID)
+	if !ok || record.Attachment == nil || record.Attachment.Mode != "takeover" {
+		return false, nil
+	}
+	if record.Attachment.ClientID == state.identity {
+		return false, nil
+	}
+
+	s.mu.Lock()
+	s.pendingPrompts[env.SessionID] = append(s.pendingPrompts[env.SessionID], env)
+	queued := len(s.pendingPrompts[env.SessionID])
+	s.mu.Unlock()
+	record, _ = s.registry.SetQueuedPrompts(env.SessionID, queued)
+	if err := state.writeEnvelope(mustAckEnvelopeWithData(env.ID, env.SessionID, protocol.CommandSessionPrompt, map[string]any{
+		"queued":         true,
+		"queued_prompts": queued,
+		"reason":         "takeover",
+	})); err != nil {
+		return true, err
+	}
+	s.broadcastSessionStatus(env.SessionID, map[string]any{"takeover_queue_action": "enqueued", "queued_prompts": record.QueuedPrompts})
+	return true, nil
+}
+
+func (s *Server) flushQueuedPrompts(sessionID string) {
+	s.mu.Lock()
+	queue := append([]protocol.Envelope(nil), s.pendingPrompts[sessionID]...)
+	wrapper := s.wrappers[sessionID]
+	if wrapper != nil {
+		delete(s.pendingPrompts, sessionID)
+	}
+	s.mu.Unlock()
+	if wrapper == nil || len(queue) == 0 {
+		return
+	}
+	s.registry.SetQueuedPrompts(sessionID, 0)
+	for _, env := range queue {
+		_ = wrapper.writeEnvelope(env)
+	}
+	s.broadcastSessionStatus(sessionID, map[string]any{"takeover_queue_action": "flushed", "queued_prompts": 0})
+}
+
 func (s *Server) canPrompt(state *connState, sessionID string) bool {
 	record, ok := s.registry.Get(sessionID)
 	if !ok || record.Attachment == nil {
@@ -637,18 +875,32 @@ func (s *Server) canRespondToPermission(state *connState, record session.Record)
 	if record.Attachment == nil {
 		return true
 	}
-	if record.Attachment.Mode != "inject" {
+	if record.Attachment.Mode != "inject" && record.Attachment.Mode != "takeover" {
 		return true
 	}
 	return record.Attachment.ClientID == state.identity
 }
 
-func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, session.Record, error) {
+func (s *Server) canUsePTY(state *connState, record session.Record) bool {
+	if record.Attachment == nil {
+		return false
+	}
+	if record.Attachment.Mode != "takeover" {
+		return false
+	}
+	return record.Attachment.ClientID == state.identity
+}
+
+func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, *protocol.AttachmentInfo, session.Record, error) {
 	s.mu.Lock()
 	owner := s.attachments[sessionID]
 	if !sameAttachmentOwner(owner, state) {
 		s.mu.Unlock()
-		return false, session.Record{}, nil
+		return false, nil, session.Record{}, nil
+	}
+	var previousAttachment *protocol.AttachmentInfo
+	if record, ok := s.registry.Get(sessionID); ok && record.Attachment != nil {
+		previousAttachment = &protocol.AttachmentInfo{ClientID: record.Attachment.ClientID, Mode: record.Attachment.Mode, ReturnTransport: record.Attachment.ReturnTransport}
 	}
 	delete(s.attachments, sessionID)
 	if owner != nil {
@@ -660,9 +912,9 @@ func (s *Server) detachIfOwner(state *connState, sessionID string) (bool, sessio
 	s.mu.Unlock()
 	record, ok := s.registry.ClearAttachment(sessionID)
 	if !ok {
-		return false, session.Record{}, fmt.Errorf("unknown session")
+		return false, previousAttachment, session.Record{}, fmt.Errorf("unknown session")
 	}
-	return true, record, nil
+	return true, previousAttachment, record, nil
 }
 
 func (s *Server) broadcastSessionStatus(sessionID string, extraDetails map[string]any) {
@@ -674,7 +926,7 @@ func (s *Server) broadcastSessionStatus(sessionID string, extraDetails map[strin
 	if phase == "" {
 		phase = record.State
 	}
-	details := map[string]any{"state": record.State}
+	details := map[string]any{"state": record.State, "queued_prompts": record.QueuedPrompts, "pty_rows": record.PTYRows, "pty_cols": record.PTYCols}
 	for key, value := range extraDetails {
 		details[key] = value
 	}
@@ -738,6 +990,11 @@ func (s *Server) applyWrapperEnvelope(state *connState, env protocol.Envelope) {
 		s.registry.ResolvePermission(env.SessionID, state.runtimeID, evt.Update.RequestID)
 	case protocol.UpdateStatus:
 		s.registry.SetPhase(env.SessionID, state.runtimeID, evt.Update.Phase)
+		rows, hasRows := intValue(evt.Update.Details["pty_rows"])
+		cols, hasCols := intValue(evt.Update.Details["pty_cols"])
+		if hasRows || hasCols {
+			s.registry.SetPTYSize(env.SessionID, rows, cols)
+		}
 	}
 }
 
@@ -753,10 +1010,12 @@ func (s *Server) subscribe(state *connState, sessionID string) {
 
 func (s *Server) unregister(state *connState) {
 	var broadcastSessionID string
+	var detachedAttachment *protocol.AttachmentInfo
 	s.mu.Lock()
 	if state.role == protocol.RoleWrapper && state.sessionID != "" {
 		if s.wrappers[state.sessionID] == state {
 			delete(s.wrappers, state.sessionID)
+			delete(s.pendingPrompts, state.sessionID)
 			s.registry.SetDisconnected(state.sessionID, state.runtimeID)
 			if owner := s.attachments[state.sessionID]; owner != nil {
 				delete(s.attachments, state.sessionID)
@@ -768,6 +1027,9 @@ func (s *Server) unregister(state *connState) {
 	}
 	if state.attachedTo != "" {
 		if s.attachments[state.attachedTo] == state {
+			if record, ok := s.registry.Get(state.attachedTo); ok && record.Attachment != nil {
+				detachedAttachment = &protocol.AttachmentInfo{ClientID: record.Attachment.ClientID, Mode: record.Attachment.Mode, ReturnTransport: record.Attachment.ReturnTransport}
+			}
 			delete(s.attachments, state.attachedTo)
 			s.registry.ClearAttachment(state.attachedTo)
 			broadcastSessionID = state.attachedTo
@@ -781,6 +1043,11 @@ func (s *Server) unregister(state *connState) {
 		}
 	}
 	s.mu.Unlock()
+	if detachedAttachment != nil && detachedAttachment.Mode == "takeover" {
+		if _, err := s.restorePostTakeoverTransport(state.attachedTo, detachedAttachment.ReturnTransport); err == nil {
+			s.flushQueuedPrompts(state.attachedTo)
+		}
+	}
 	if broadcastSessionID != "" {
 		s.broadcastSessionStatus(broadcastSessionID, map[string]any{"attachment_action": "detached"})
 	}
@@ -810,6 +1077,100 @@ func (s *Server) waitForDisconnected(sessionID string) (session.Record, error) {
 	return session.Record{}, fmt.Errorf("timed out waiting for runtime to stop for session %s", sessionID)
 }
 
+func (s *Server) ensureTakeoverRuntime(sessionID string, record session.Record) (session.Record, string, error) {
+	if record.WrapperConnected && record.Runtime.Transport == runtime.PiPTY().Transport {
+		return record, "", nil
+	}
+	if strings.TrimSpace(record.PersistedSessionHandle) == "" {
+		return record, "", nil
+	}
+	restoredFrom := record.Runtime.Transport
+	updated, err := s.replaceRuntimeTransport(sessionID, runtime.PiPTY().Transport)
+	if err != nil {
+		return session.Record{}, "", err
+	}
+	if restoredFrom == runtime.PiPTY().Transport {
+		restoredFrom = ""
+	}
+	return updated, restoredFrom, nil
+}
+
+func (s *Server) restorePostTakeoverTransport(sessionID, transport string) (session.Record, error) {
+	if strings.TrimSpace(transport) == "" {
+		record, ok := s.registry.Get(sessionID)
+		if !ok {
+			return session.Record{}, fmt.Errorf("unknown session")
+		}
+		return record, nil
+	}
+	return s.replaceRuntimeTransport(sessionID, transport)
+}
+
+func (s *Server) replaceRuntimeTransport(sessionID, transport string) (session.Record, error) {
+	record, ok := s.registry.Get(sessionID)
+	if !ok {
+		return session.Record{}, fmt.Errorf("unknown session")
+	}
+	descriptor, err := runtimeDescriptorForTransport(transport)
+	if err != nil {
+		return session.Record{}, err
+	}
+	if record.WrapperConnected && record.Runtime.Transport == descriptor.Transport {
+		return record, nil
+	}
+	persistedHandle := record.PersistedSessionHandle
+	if persistedHandle == "" {
+		return session.Record{}, fmt.Errorf("session has no persisted session handle; cannot replace runtime")
+	}
+	persistedHandle, err = resolveSessionHandle(s.cfg.SessionDir, sessionID, persistedHandle)
+	if err != nil {
+		return session.Record{}, err
+	}
+
+	// Preserve pending prompts across transport replacement to prevent data loss
+	var savedPrompts []protocol.Envelope
+	if record.WrapperConnected {
+		s.mu.Lock()
+		if prompts, exists := s.pendingPrompts[sessionID]; exists {
+			savedPrompts = append([]protocol.Envelope(nil), prompts...)
+		}
+		s.mu.Unlock()
+	}
+
+	if record.WrapperConnected {
+		if err := s.launcher.Stop(sessionID); err != nil {
+			return session.Record{}, fmt.Errorf("failed to stop runtime: %v", err)
+		}
+		if _, err := s.waitForDisconnected(sessionID); err != nil {
+			return session.Record{}, err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(persistedHandle), 0o755); err != nil {
+		return session.Record{}, err
+	}
+	s.registry.Ensure(sessionID, persistedHandle)
+	if err := s.launcher.Spawn(context.Background(), LaunchRequest{
+		SessionID:              sessionID,
+		PersistedSessionHandle: persistedHandle,
+		RelayURL:               s.relayURL(),
+		Token:                  s.cfg.Token,
+		PiBin:                  s.cfg.PiBin,
+		PTYBin:                 s.cfg.PTYBin,
+		RuntimeDescriptor:      descriptor,
+	}); err != nil {
+		return session.Record{}, errors.New(normalizeSpawnError(err))
+	}
+
+	// Restore saved prompts to the new wrapper after it connects
+	if len(savedPrompts) > 0 {
+		s.mu.Lock()
+		s.pendingPrompts[sessionID] = append(s.pendingPrompts[sessionID], savedPrompts...)
+		s.mu.Unlock()
+	}
+
+	return s.waitForConnected(sessionID)
+}
+
 func (s *Server) relayURL() string {
 	if s.cfg.PublicURL != "" {
 		return s.cfg.PublicURL
@@ -820,6 +1181,17 @@ func (s *Server) relayURL() string {
 	}
 	addr = strings.Replace(addr, "0.0.0.0:", "127.0.0.1:", 1)
 	return "ws://" + addr + "/ws"
+}
+
+func runtimeDescriptorForTransport(transport string) (runtime.Descriptor, error) {
+	switch strings.TrimSpace(transport) {
+	case "", "rpc":
+		return runtime.PiRPC(), nil
+	case "pty":
+		return runtime.PiPTY(), nil
+	default:
+		return runtime.Descriptor{}, fmt.Errorf("unsupported transport %q", transport)
+	}
 }
 
 func resolveSessionHandle(sessionDir, sessionID, requested string) (string, error) {
@@ -866,21 +1238,44 @@ func pathWithinBase(baseDir, target string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }
 
+func intValue(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
 func mustAckEnvelope(id, sessionID string, record session.Record, command string) protocol.Envelope {
-	env, err := protocol.NewEnvelope(protocol.MessageAck, sessionID, record.Runtime.ID, "weave-relay", id, protocol.AckPayload{
+	data := map[string]any{
+		"session":                  record.Session,
+		"runtime":                  record.Runtime,
+		"persisted_session_handle": record.PersistedSessionHandle,
+		"wrapper_connected":        record.WrapperConnected,
+		"state":                    record.State,
+		"phase":                    record.Phase,
+		"attachment":               record.Attachment,
+		"queued_prompts":           record.QueuedPrompts,
+		"pty_rows":                 record.PTYRows,
+		"pty_cols":                 record.PTYCols,
+		"pending_permissions":      record.PendingPermissions,
+		"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
+	}
+	env := mustAckEnvelopeWithData(id, sessionID, command, data)
+	env.RuntimeID = record.Runtime.ID
+	return env
+}
+
+func mustAckEnvelopeWithData(id, sessionID, command string, data map[string]any) protocol.Envelope {
+	env, err := protocol.NewEnvelope(protocol.MessageAck, sessionID, "", "weave-relay", id, protocol.AckPayload{
 		Command: command,
 		Success: true,
-		Data: map[string]any{
-			"session":                  record.Session,
-			"runtime":                  record.Runtime,
-			"persisted_session_handle": record.PersistedSessionHandle,
-			"wrapper_connected":        record.WrapperConnected,
-			"state":                    record.State,
-			"phase":                    record.Phase,
-			"attachment":               record.Attachment,
-			"pending_permissions":      record.PendingPermissions,
-			"updated_at":               record.UpdatedAt.Format(time.RFC3339Nano),
-		},
+		Data:    data,
 	})
 	if err != nil {
 		panic(err)
