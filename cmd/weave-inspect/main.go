@@ -747,25 +747,6 @@ func (c *relayClient) listSessionsData() ([]sessionSummary, error) {
 	return out, nil
 }
 
-func (c *relayClient) statusData(sessionID string) (sessionSummary, error) {
-	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "status-tui", protocol.SessionStatusCommand{Command: protocol.CommandSessionStatus})
-	if err != nil {
-		return sessionSummary{}, err
-	}
-	if err := c.conn.WriteJSON(env); err != nil {
-		return sessionSummary{}, err
-	}
-	ack, err := waitForAckEnvelope(c.stream, "status-tui", false)
-	if err != nil {
-		return sessionSummary{}, err
-	}
-	var payload protocol.AckPayload
-	if err := ack.DecodePayload(&payload); err != nil {
-		return sessionSummary{}, err
-	}
-	return parseSessionSummaryData(payload.Data), nil
-}
-
 func (c *relayClient) spawnData(sessionID, transport string) (sessionSummary, error) {
 	env, err := protocol.NewEnvelope(protocol.MessageCommand, sessionID, "", c.identity, "spawn-tui", protocol.SessionSpawnCommand{Command: protocol.CommandSessionSpawn, Transport: transport})
 	if err != nil {
