@@ -7,6 +7,9 @@
 *.test
 *.out
 
+# Local test artifacts
+.artifacts/
+
 # IDE
 .idea/
 .vscode/

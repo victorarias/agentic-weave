@@ -1,0 +1,8 @@
+{
+  "name": "takeover-disconnect",
+  "description": "Verify that known Ctrl-] encodings disconnect an interactive takeover session and return control to the caller.",
+  "fixtures": [
+    "testdata/terminal/encodings/ctrl-right-bracket.json"
+  ],
+  "modes": ["direct", "tui", "tmux"]
+}

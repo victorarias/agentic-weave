@@ -262,6 +262,7 @@ This file tracks current work items and progress.
     - [x] make takeover a true interactive PTY bridge with raw stdin key passthrough (control keys like Ctrl-P, arrows, etc.)
     - [x] automatically return takeover-upgraded sessions to RPC when takeover ends (release or disconnect)
     - [x] add a thin operator TUI for listing/selecting/spawning/takeover without retyping full relay flags
+    - [x] add an initial terminal lab (`internal/ptytest`, `terminaltests`, `testdata/terminal`, `scripts/terminal-lab.sh`) for turning PTY bugs into repeatable fixtures
 
 ---
 
@@ -287,6 +288,8 @@ This file tracks current work items and progress.
 - New: `internal/remote` (protocol types, ws client/server)
 - New: `internal/historytree` (DAG model)
 - New: `internal/checkpoint` (optional git checkpoint hook)
+- New: `internal/ptytest` (real PTY driver + transcript artifacts)
+- New: `terminaltests` (named terminal regression scenarios)
 - Updated: `internal/storage/jsonl` (tree events + replay)
 - Updated: `internal/supervisor` (queue merge policy)
 - Updated: `docs/coding-agent/03-jsonl-storage-schema.md`
@@ -296,6 +299,7 @@ This file tracks current work items and progress.
 - Updated: `docs/coding-agent/08-tui-spec.md`
 
 ## Progress Log
+- 2026-03-15 11:25: Landed the first terminal lab slice in one pass: added `internal/ptytest` as a reusable real-PTY harness with artifact capture, added `terminaltests/` with named direct/tmux/Bubble Tea takeover-disconnect scenarios, checked in data-driven `Ctrl-]` fixtures under `testdata/terminal/`, added `scripts/terminal-lab.sh`, documented the lab in `docs/remote-control/09-terminal-lab.md`, and manually ran `WEAVE_TERMINAL_TESTS=1 go test -v ./terminaltests` successfully against real relay/wrapper/pi flows.
 - 2026-03-15 10:30: Debugged another real `Ctrl-]` failure from the user’s terminal logs: the key was still arriving as split CSI-u bytes, but takeover was flushing a lone leading `ESC` too early. I fixed the parser to buffer a bare `ESC` as a potential control-sequence prefix, added regression tests for split CSI-u and split modifyOtherKeys forms, and documented the PTY-input gotcha in `AGENTS.md` so future agents do not casually regress raw-terminal handling.
 - 2026-03-15 00:01: Manually re-tested the Bubble Tea TUI over a real PTY, including `spawn -> prompt -> return -> quit`; after that I widened takeover disconnect detection again so `Ctrl-]` now recognizes raw `0x1d`, CSI-u (`ESC [ 93 ; 5 u`), and xterm modifyOtherKeys (`ESC [ 27 ; 5 ; 93 ~`) forms.
 - 2026-03-14 23:44: Replaced the broken raw-stdin operator TUI with a Bubble Tea-based `weave-inspect relay tui`, so interactive actions no longer fight over stdin with child commands like `takeover` and `prompt`; I self-tested it over a real PTY by spawning a relay, driving `n`, `p`, and `q`, and verifying the TUI spawned a session, sent a prompt, and exited cleanly.

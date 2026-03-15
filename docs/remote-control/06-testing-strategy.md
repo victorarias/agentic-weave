@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Status (2026-03-14):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and reproducible real relay smoke coverage via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`. Tier 4 adds relay tests for observe conflict, same-identity observe→inject mode escalation, inject visibility, permission authority while attached, and a real observe/watch/inject smoke script at `scripts/remotecontrol-attach-smoke.sh`. Tier 5 now adds relay tests for takeover queueing, takeover-held permission authority, initial PTY output/input/resize forwarding via a scripted helper runtime, plus smoke scripts at `scripts/remotecontrol-takeover-queue-smoke.sh`, `scripts/remotecontrol-pty-smoke.sh`, and `scripts/remotecontrol-real-pi-pty-smoke.sh`.
+**Status (2026-03-15):** Tier 0 and Tier 1 coverage exist in Go tests (`remotecontrol/protocol`, `remotecontrol/local`, `remotecontrol/relay`) and have been smoke-tested against a real local pi process both directly and through the relay for init/prompt, with cancel validated in the local path. Tier 2 now also has relay tests and manual smoke coverage for `session.spawn`, `runtime.stop`, `session.load`, `session.status`, and `registry.list_sessions` against real pi session persistence. Tier 3 has test coverage for explicit delivery mapping, fake-pi-backed local and relay permission request/response loops, richer confirm-style permission lifecycle cases (status visibility plus stale/duplicate response rejection), and reproducible real relay smoke coverage via `testdata/pi/permission_fixture.ts` and `scripts/remotecontrol-permission-smoke.sh`. Tier 4 adds relay tests for observe conflict, same-identity observe→inject mode escalation, inject visibility, permission authority while attached, and a real observe/watch/inject smoke script at `scripts/remotecontrol-attach-smoke.sh`. Tier 5 now adds relay tests for takeover queueing, takeover-held permission authority, initial PTY output/input/resize forwarding via a scripted helper runtime, plus smoke scripts at `scripts/remotecontrol-takeover-queue-smoke.sh`, `scripts/remotecontrol-pty-smoke.sh`, and `scripts/remotecontrol-real-pi-pty-smoke.sh`. There is also now an initial terminal lab: `internal/ptytest` for real PTY automation, named scenario tests in `terminaltests/`, data-driven key fixtures under `testdata/terminal/`, and a runner script at `scripts/terminal-lab.sh` for turning real terminal bugs into repeatable regressions.
 
 ## Three Test Tiers
 
@@ -272,6 +272,25 @@ weave-inspect relay tui
 ```
 
 It uses the saved relay context, lists sessions, and supports simple keyboard-driven actions such as spawning a new session, selecting one, taking over, releasing, prompting, loading, and stopping runtimes. It is implemented with Bubble Tea so the UI can hand terminal control to child commands and then resume cleanly, which avoids the stdin contention bugs that a hand-rolled raw-input loop hit.
+
+## Terminal Lab
+
+To keep PTY regressions from coming back, the repository now also has a terminal-focused regression suite:
+
+```bash
+scripts/terminal-lab.sh quick
+scripts/terminal-lab.sh scenario TestTakeoverDisconnectEncodings/tmux/csi-u
+```
+
+Key pieces:
+
+- `internal/ptytest` — reusable real-PTY driver with ANSI stripping and artifact capture
+- `terminaltests/` — named end-to-end terminal scenarios
+- `testdata/terminal/encodings/ctrl-right-bracket.json` — captured disconnect encodings
+- `testdata/terminal/scenarios/takeover-disconnect.json` — scenario manifest
+- `.artifacts/terminaltests/` — default output directory for logs, PTY transcripts, and metadata
+
+The current suite covers the `Ctrl-]` takeover-disconnect family in direct takeover, Bubble Tea TUI takeover, and tmux-wrapped takeover flows, with the escape bytes sent split byte-by-byte so split-read bugs remain reproducible.
 
 ---
 
