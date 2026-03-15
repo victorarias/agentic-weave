@@ -1389,8 +1389,8 @@ type takeoverInputEvent struct {
 
 var ctrlRightBracketSequences = [][]byte{
 	{0x1d},                               // raw Ctrl-]
-	{0x1b, '[', '9', '3', ';', '5', 'u'}, // CSI-u
-	{0x1b, '[', '2', '7', ';', '5', ';', '9', '3', '~'}, // xterm modifyOtherKeys
+	{0x1b, '[', '9', '3', ';', '5', 'u'}, // CSI-u common form
+	{0x1b, '[', '2', '7', ';', '5', ';', '9', '3', '~'}, // xterm modifyOtherKeys common form
 }
 
 func logTakeoverByte(w io.Writer, b byte, note string) {
@@ -1435,6 +1435,23 @@ func matchesDisconnectSequence(data []byte) (string, bool) {
 			}
 		}
 	}
+	if len(data) >= 4 && data[0] == 0x1b && data[1] == '[' {
+		body := string(data[2:])
+		if strings.HasSuffix(body, "u") {
+			trimmed := strings.TrimSuffix(body, "u")
+			parts := strings.FieldsFunc(trimmed, func(r rune) bool { return r == ';' || r == ':' })
+			if len(parts) >= 2 && parts[0] == "93" && parts[1] == "5" {
+				return "ctrl-right-bracket-csiu-disconnect", true
+			}
+		}
+		if strings.HasSuffix(body, "~") {
+			trimmed := strings.TrimSuffix(body, "~")
+			parts := strings.FieldsFunc(trimmed, func(r rune) bool { return r == ';' || r == ':' })
+			if len(parts) >= 3 && parts[0] == "27" && parts[1] == "5" && parts[2] == "93" {
+				return "ctrl-right-bracket-modifyotherkeys-disconnect", true
+			}
+		}
+	}
 	return "", false
 }
 
@@ -1442,6 +1459,22 @@ func hasDisconnectPrefix(data []byte) bool {
 	for _, seq := range ctrlRightBracketSequences {
 		if len(data) > 1 && isPrefixBytes(data, seq) {
 			return true
+		}
+	}
+	if len(data) >= 2 && data[0] == 0x1b && data[1] == '[' {
+		body := string(data[2:])
+		if body == "" {
+			return true
+		}
+		for _, prefix := range []string{"9", "93", "93;", "93;5", "93;5:", "2", "27", "27;", "27;5", "27;5;", "27;5;9", "27;5;93", "27;5;93:"} {
+			if strings.HasPrefix(prefix, body) || strings.HasPrefix(body, prefix) {
+				for _, ch := range body {
+					if (ch < '0' || ch > '9') && ch != ';' && ch != ':' && ch != 'u' && ch != '~' {
+						return false
+					}
+				}
+				return true
+			}
 		}
 	}
 	return false
