@@ -25,6 +25,7 @@ The sum is 42.
 - `docs/07-vertex-provider.md` — Vertex Gemini provider
 - `docs/08-anthropic-provider.md` — Anthropic Claude provider
 - `docs/09-hodor-pr-review.md` — advisory PR reviews with Hodor on Vertex AI Gemini 3 Flash Preview
+- `docs/10-provider-helpers.md` — provider-neutral loop decider, decision collection, and compactor helpers
 
 ## Examples
 - `examples/basic` — streaming agent loop

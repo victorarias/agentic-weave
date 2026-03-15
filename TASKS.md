@@ -2,6 +2,14 @@
 
 This file tracks current work items and progress.
 
+## Active Initiative: Provider-neutral streaming helpers for downstream apps (branch family: feat/provider-neutral-chat-*)
+
+### Family: provider-neutral-chat
+- [x] Add provider-neutral decision collection, loop decider, and compactor helpers to `agentic/providers`
+  - Description: Let downstream apps consume `providers.Streamer` without re-implementing stream collection, retry logic, and budget compaction glue.
+  - Progress log:
+    - 2026-03-15 16:40 UTC — added generic `providers.Decide` / `CollectDecision`, `NewStreamingLoopDecider`, `NewStreamingCompactor`, tests, and docs.
+
 ## Archived Plan: POC Families (first set, archived 2026-02-20)
 
 ### Family: tui-rendering (branch family: feat/poc-tui-*)
