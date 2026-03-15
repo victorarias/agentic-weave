@@ -1456,6 +1456,9 @@ func matchesDisconnectSequence(data []byte) (string, bool) {
 }
 
 func hasDisconnectPrefix(data []byte) bool {
+	if len(data) == 1 && data[0] == 0x1b {
+		return true
+	}
 	for _, seq := range ctrlRightBracketSequences {
 		if len(data) > 1 && isPrefixBytes(data, seq) {
 			return true
