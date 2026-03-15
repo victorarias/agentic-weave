@@ -11,3 +11,4 @@ Start here:
 - `07-vertex-provider.md`
 - `08-anthropic-provider.md`
 - `09-hodor-pr-review.md`
+- `10-provider-helpers.md`
