@@ -83,6 +83,7 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 	}
 
 	applyPromptCaching(&req, c.cacheMode, c.cacheTTL)
+	requestJSON := emitBeforeProviderRequest(ctx, input.Hook, c.model, req, "messages.stream")
 
 	if input.MaxTokens > 0 {
 		req.MaxTokens = int64(input.MaxTokens)
@@ -182,6 +183,7 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 		}
 
 		if err := stream.Err(); err != nil {
+			emitProviderError(ctx, input.Hook, c.model, "messages.stream", requestJSON, err)
 			events <- ErrorEvent{Err: fmt.Errorf("anthropic stream: %w", err)}
 			return
 		}
@@ -189,6 +191,10 @@ func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, e
 		if stopReason == "" {
 			stopReason = "end_turn"
 		}
+		emitAfterProviderResponse(ctx, input.Hook, c.model, "messages.stream", requestJSON, stopReason, usageValue, map[string]any{
+			"stop_reason": stopReason,
+			"usage":       usageValue,
+		})
 		events <- DoneEvent{StopReason: stopReason, Usage: usageValue}
 	}()
 

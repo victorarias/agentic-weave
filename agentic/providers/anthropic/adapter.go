@@ -27,6 +27,7 @@ func (a *StreamerAdapter) Stream(ctx context.Context, input providers.Input) (<-
 		MaxTokens:        input.MaxTokens,
 		Temperature:      input.Temperature,
 		OutputJSONSchema: input.OutputJSONSchema,
+		Hook:             input.Hook,
 	}
 
 	anthropicEvents, err := a.Client.Stream(ctx, anthropicInput)
