@@ -244,6 +244,25 @@ func TestApplyPromptCaching_Explicit_1hTTL(t *testing.T) {
 	}
 }
 
+func TestApplyPromptCaching_Disabled_OmitsCacheControl(t *testing.T) {
+	req := anthropic.MessageNewParams{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: 1024,
+		System:    []anthropic.TextBlockParam{{Text: "system prompt"}},
+		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("hi"))},
+	}
+
+	applyPromptCaching(&req, CacheModeDisabled, "")
+
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"cache_control"`) {
+		t.Errorf("expected no cache_control when caching disabled, got: %s", raw)
+	}
+}
+
 func TestApplyPromptCaching_DefaultTTL_OmitsField(t *testing.T) {
 	req := anthropic.MessageNewParams{
 		Model:     "claude-sonnet-4-20250514",
@@ -274,6 +293,8 @@ func TestParseCacheTTL(t *testing.T) {
 		{"1h", anthropic.CacheControlEphemeralTTLTTL1h},
 		{"1H", anthropic.CacheControlEphemeralTTLTTL1h},
 		{" 1h ", anthropic.CacheControlEphemeralTTLTTL1h},
+		{"off", ""},
+		{"OFF", ""},
 		{"invalid", ""},
 	}
 
