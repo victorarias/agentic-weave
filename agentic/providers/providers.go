@@ -5,6 +5,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/victorarias/agentic-weave/agentic"
@@ -30,6 +31,44 @@ type Input struct {
 	//   - OpenAI: sent as "metadata" on chat completions (up to 16 pairs)
 	//   - Anthropic: not yet supported by the API; field is accepted but ignored
 	Labels map[string]string
+
+	// Hook receives provider-boundary events. Providers may attach the exact
+	// provider-specific request JSON after they finish materializing it.
+	Hook ProviderHook
+}
+
+// ProviderHook receives provider-boundary request/response events.
+type ProviderHook interface {
+	BeforeProviderRequest(ctx context.Context, event ProviderRequestEvent)
+	AfterProviderResponse(ctx context.Context, event ProviderResponseEvent)
+	OnProviderError(ctx context.Context, event ProviderErrorEvent)
+}
+
+// ProviderRequestEvent describes the fully materialized provider request.
+type ProviderRequestEvent struct {
+	Provider    string
+	Model       string
+	Operation   string
+	RequestJSON []byte
+}
+
+// ProviderResponseEvent describes a completed provider response.
+type ProviderResponseEvent struct {
+	Provider     string
+	Model        string
+	Operation    string
+	ResponseJSON []byte
+	StopReason   string
+	Usage        *usage.Usage
+}
+
+// ProviderErrorEvent describes a provider request/response failure.
+type ProviderErrorEvent struct {
+	Provider    string
+	Model       string
+	Operation   string
+	RequestJSON []byte
+	Err         error
 }
 
 // StreamEvent is emitted by Streamer.Stream.

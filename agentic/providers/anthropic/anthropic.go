@@ -15,6 +15,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/message"
+	providerspkg "github.com/victorarias/agentic-weave/agentic/providers"
 	"github.com/victorarias/agentic-weave/agentic/usage"
 	"github.com/victorarias/agentic-weave/capabilities"
 )
@@ -33,6 +34,7 @@ type Input struct {
 	ThinkingMode     string
 	ThinkingEffort   string
 	ThinkingBgt      int
+	Hook             providerspkg.ProviderHook
 }
 
 // ToolChoice controls Anthropic tool selection behavior.
@@ -245,6 +247,7 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 	}
 
 	applyPromptCaching(&req, c.cacheMode, c.cacheTTL)
+	requestJSON := emitBeforeProviderRequest(ctx, input.Hook, c.model, req, "messages.create")
 
 	if input.MaxTokens > 0 {
 		req.MaxTokens = int64(input.MaxTokens)
@@ -262,6 +265,7 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 
 	msg, err := c.client.Messages.New(ctx, req)
 	if err != nil {
+		emitProviderError(ctx, input.Hook, c.model, "messages.create", requestJSON, err)
 		return Decision{}, fmt.Errorf("anthropic: %w", err)
 	}
 
@@ -273,6 +277,8 @@ func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 		int(msg.Usage.CacheReadInputTokens),
 		int(msg.Usage.CacheCreationInputTokens),
 	)
+
+	emitAfterProviderResponse(ctx, input.Hook, c.model, "messages.create", requestJSON, string(msg.StopReason), &usageValue, msg)
 
 	return Decision{
 		Reply:      reply,
