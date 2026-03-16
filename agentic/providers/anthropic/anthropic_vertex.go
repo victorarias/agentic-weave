@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/vertex"
@@ -61,6 +62,11 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 	vertexOpt := vertex.WithGoogleAuth(ctx, location, project)
 	sdkClient := sdk.NewClient(vertexOpt)
 
+	cacheMode := CacheModeExplicit
+	if strings.EqualFold(strings.TrimSpace(cfg.CacheTTL), "off") {
+		cacheMode = CacheModeDisabled
+	}
+
 	return &Client{
 		client:         sdkClient,
 		model:          model,
@@ -69,7 +75,7 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 		thinkingMode:   thinkingMode,
 		thinkingEffort: thinkingEffort,
 		thinkingBgt:    thinkingBgt,
-		cacheMode:      CacheModeExplicit,
+		cacheMode:      cacheMode,
 		cacheTTL:       parseCacheTTL(cfg.CacheTTL),
 	}, nil
 }
