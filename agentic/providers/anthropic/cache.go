@@ -33,6 +33,8 @@ func applyPromptCaching(req *anthropic.MessageNewParams, mode CacheMode, ttl ant
 		req.CacheControl = newCacheControl(ttl)
 	case CacheModeExplicit:
 		applyExplicitCacheBreakpoints(req, ttl)
+	case CacheModeDisabled:
+		return
 	}
 }
 

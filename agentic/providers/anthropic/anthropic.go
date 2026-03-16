@@ -101,6 +101,9 @@ const (
 	//
 	// Supported on all platforms including Vertex AI and Bedrock.
 	CacheModeExplicit
+
+	// CacheModeDisabled disables Anthropic prompt caching entirely.
+	CacheModeDisabled
 )
 
 // Client calls the Anthropic Messages API.
@@ -159,6 +162,11 @@ func New(cfg Config) (*Client, error) {
 
 	client := anthropic.NewClient(opts...)
 
+	cacheMode := CacheModeAutomatic
+	if strings.EqualFold(strings.TrimSpace(cfg.CacheTTL), "off") {
+		cacheMode = CacheModeDisabled
+	}
+
 	return &Client{
 		client:         client,
 		model:          model,
@@ -167,7 +175,7 @@ func New(cfg Config) (*Client, error) {
 		thinkingMode:   thinkingMode,
 		thinkingEffort: thinkingEffort,
 		thinkingBgt:    thinkingBgt,
-		cacheMode:      CacheModeAutomatic,
+		cacheMode:      cacheMode,
 		cacheTTL:       parseCacheTTL(cfg.CacheTTL),
 	}, nil
 }
