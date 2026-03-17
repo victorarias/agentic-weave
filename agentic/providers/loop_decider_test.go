@@ -85,6 +85,38 @@ func TestStreamingLoopDecider_RetriesTransientErrorWithoutOutput(t *testing.T) {
 	}
 }
 
+func TestStreamingLoopDecider_RetriesAnthropicInternalServerErrorWithoutOutput(t *testing.T) {
+	calls := 0
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		calls++
+		ch := make(chan StreamEvent, 2)
+		if calls == 1 {
+			ch <- ErrorEvent{Err: errors.New(`anthropic stream: received error while streaming: {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"},"request_id":"req_test"}`)}
+			close(ch)
+			return ch, nil
+		}
+		ch <- TextDeltaEvent{Delta: "Retry ok"}
+		ch <- DoneEvent{StopReason: "end_turn", Usage: nil}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	decision, err := decider.Decide(context.Background(), loop.Input{
+		SystemPrompt: "You are helpful.",
+		History:      []message.AgentMessage{{Role: message.RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 attempts, got %d", calls)
+	}
+	if decision.Reply != "Retry ok" {
+		t.Fatalf("unexpected reply: %q", decision.Reply)
+	}
+}
+
 func TestStreamingLoopDecider_DoesNotRetryAfterOutputStarted(t *testing.T) {
 	calls := 0
 	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
