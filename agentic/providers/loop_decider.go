@@ -142,6 +142,9 @@ func isTransientLLMError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "anthropic stream") && strings.Contains(msg, "api_error") && strings.Contains(msg, "internal server error") {
+		return true
+	}
 	transientNeedles := []string{
 		"overloaded_error",
 		"rate_limit_error",
