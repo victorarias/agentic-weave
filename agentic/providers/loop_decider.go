@@ -143,6 +143,7 @@ func isTransientLLMError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	transientNeedles := []string{
+		"api_error",
 		"overloaded_error",
 		"rate_limit_error",
 		"rate limit",
