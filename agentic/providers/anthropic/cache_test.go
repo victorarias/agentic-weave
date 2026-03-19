@@ -179,10 +179,54 @@ func TestApplyPromptCaching_Explicit_EmptyMessages(t *testing.T) {
 	applyPromptCaching(&req, CacheModeExplicit, "")
 }
 
+func TestApplyPromptCaching_ExplicitStablePrefixWithAutomatic(t *testing.T) {
+	req := anthropic.MessageNewParams{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: 1024,
+		System:    []anthropic.TextBlockParam{{Text: "system"}},
+		Tools: []anthropic.ToolUnionParam{
+			{OfTool: &anthropic.ToolParam{Name: "search", Description: anthropic.String("search")}},
+		},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock("stable user")),
+			anthropic.NewAssistantMessage(anthropic.NewTextBlock("stable assistant")),
+			anthropic.NewUserMessage(anthropic.NewTextBlock("transient final user")),
+		},
+	}
+
+	applyPromptCaching(&req, CacheModeExplicitStablePrefixWithAutomatic, "")
+
+	if req.CacheControl.Type != "ephemeral" {
+		t.Fatalf("expected top-level automatic cache_control, got %q", req.CacheControl.Type)
+	}
+	if req.System[0].CacheControl.Type != "ephemeral" {
+		t.Fatalf("expected cache_control on system block, got %q", req.System[0].CacheControl.Type)
+	}
+	if req.Tools[0].OfTool.CacheControl.Type != "ephemeral" {
+		t.Fatalf("expected cache_control on last tool, got %q", req.Tools[0].OfTool.CacheControl.Type)
+	}
+
+	penultimate := req.Messages[len(req.Messages)-2]
+	penultimateLast := penultimate.Content[len(penultimate.Content)-1]
+	if penultimateLast.OfText == nil || penultimateLast.OfText.CacheControl.Type != "ephemeral" {
+		t.Fatalf("expected cache_control on penultimate message block")
+	}
+
+	finalMsg := req.Messages[len(req.Messages)-1]
+	finalLast := finalMsg.Content[len(finalMsg.Content)-1]
+	if finalLast.OfText == nil {
+		t.Fatalf("expected final block to be text")
+	}
+	if finalLast.OfText.CacheControl.Type != "" {
+		t.Fatalf("expected no explicit cache_control on final message block, got %q", finalLast.OfText.CacheControl.Type)
+	}
+}
+
 func TestApplyPromptCaching_NilRequest(t *testing.T) {
 	// Should not panic.
 	applyPromptCaching(nil, CacheModeAutomatic, "")
 	applyPromptCaching(nil, CacheModeExplicit, "")
+	applyPromptCaching(nil, CacheModeExplicitStablePrefixWithAutomatic, "")
 }
 
 func TestCacheModeDefault_IsAutomatic(t *testing.T) {
@@ -302,6 +346,31 @@ func TestParseCacheTTL(t *testing.T) {
 		got := parseCacheTTL(tt.input)
 		if got != tt.want {
 			t.Errorf("parseCacheTTL(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestParseCacheMode(t *testing.T) {
+	tests := []struct {
+		input string
+		want  CacheMode
+	}{
+		{"", CacheModeAutomatic},
+		{"auto", CacheModeAutomatic},
+		{"automatic", CacheModeAutomatic},
+		{"explicit", CacheModeExplicit},
+		{"hybrid", CacheModeExplicitStablePrefixWithAutomatic},
+		{"explicit_stable_prefix_with_automatic", CacheModeExplicitStablePrefixWithAutomatic},
+		{"explicit-stable-prefix-with-automatic", CacheModeExplicitStablePrefixWithAutomatic},
+		{"disabled", CacheModeDisabled},
+		{"off", CacheModeDisabled},
+		{"invalid", CacheModeAutomatic},
+	}
+
+	for _, tt := range tests {
+		got := parseCacheMode(tt.input)
+		if got != tt.want {
+			t.Errorf("parseCacheMode(%q) = %d, want %d", tt.input, got, tt.want)
 		}
 	}
 }

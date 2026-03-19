@@ -2,13 +2,15 @@
 
 This file tracks current work items and progress.
 
-## Active Initiative: Provider-neutral streaming helpers for downstream apps (branch family: feat/provider-neutral-chat-*)
+## Active Initiative: Heartbeat cache breakpoints (branch family: fix-heartbeat-cache-*)
 
-### Family: provider-neutral-chat
-- [x] Add provider-neutral decision collection, loop decider, and compactor helpers to `agentic/providers`
-  - Description: Let downstream apps consume `providers.Streamer` without re-implementing stream collection, retry logic, and budget compaction glue.
+### Family: heartbeat-cache
+- [ ] PR: hybrid heartbeat cache mode (explicit stable-prefix + automatic)
+  - Description: add a cache mode that keeps a stable explicit breakpoint before transient final-message content while still using automatic caching for the moving tail.
   - Progress log:
-    - 2026-03-15 16:40 UTC — added generic `providers.Decide` / `CollectDecision`, `NewStreamingLoopDecider`, `NewStreamingCompactor`, tests, and docs.
+    - [x] 2026-03-19 22:28 UTC — started investigation and implementation branch
+    - [x] 2026-03-19 22:36 UTC — implemented hybrid cache mode, tests, and docs
+    - [ ] 2026-03-19 22:28 UTC — add tests/docs, open PR, watch CI, merge
 
 ## Archived Plan: POC Families (first set, archived 2026-02-20)
 

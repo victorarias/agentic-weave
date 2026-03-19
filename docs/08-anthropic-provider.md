@@ -13,6 +13,8 @@ This provider calls the Anthropic Messages API via the official Go SDK.
 - `ANTHROPIC_BASE_URL` (optional, default: Anthropic SDK default)
 - `ANTHROPIC_MAX_TOKENS` (optional)
 - `ANTHROPIC_TEMPERATURE` (optional)
+- `ANTHROPIC_CACHE_TTL` (optional; `5m` or `1h`)
+- `ANTHROPIC_CACHE_MODE` (optional; `automatic`, `explicit`, `hybrid`, or `disabled`)
 
 ## Usage
 
@@ -84,3 +86,12 @@ compactor := anthropic.NewStreamingCompactor(
 
 Use this when wiring `budget.Manager` so compaction can reuse the same Anthropic
 streaming client while still keeping a purpose-specific compaction prompt.
+
+## Prompt Caching
+
+Anthropic prompt caching supports multiple modes via `Config.CacheMode` or `ANTHROPIC_CACHE_MODE`:
+
+- `CacheModeAutomatic`: top-level automatic caching that advances to the last cacheable block.
+- `CacheModeExplicit`: explicit block-level cache control on the last system block, last tool, and last block in the final message.
+- `CacheModeExplicitStablePrefixWithAutomatic` (`hybrid`): explicit stable-prefix breakpoints on the last system block, last tool, and last block in the penultimate message, plus top-level automatic caching for the moving tail. This is useful when the final message is transient but you still want an explicit fallback breakpoint before it.
+- `CacheModeDisabled` (`disabled`/`off`): disable prompt caching entirely.

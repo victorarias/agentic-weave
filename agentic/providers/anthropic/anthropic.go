@@ -80,6 +80,10 @@ type Config struct {
 	// longer, which reduces misses for conversations with longer
 	// inter-turn gaps.
 	CacheTTL string
+
+	// CacheMode controls how prompt caching is applied.
+	// Defaults to CacheModeAutomatic.
+	CacheMode CacheMode
 }
 
 // CacheMode controls how prompt caching breakpoints are applied.
@@ -101,6 +105,12 @@ const (
 	//
 	// Supported on all platforms including Vertex AI and Bedrock.
 	CacheModeExplicit
+
+	// CacheModeExplicitStablePrefixWithAutomatic combines explicit
+	// stable-prefix breakpoints with top-level automatic caching. Use this when
+	// the final message is expected to change every request, but you still want
+	// to cache the stable prefix before it.
+	CacheModeExplicitStablePrefixWithAutomatic
 
 	// CacheModeDisabled disables Anthropic prompt caching entirely.
 	CacheModeDisabled
@@ -162,7 +172,10 @@ func New(cfg Config) (*Client, error) {
 
 	client := anthropic.NewClient(opts...)
 
-	cacheMode := CacheModeAutomatic
+	cacheMode := cfg.CacheMode
+	if cacheMode < CacheModeAutomatic || cacheMode > CacheModeDisabled {
+		cacheMode = CacheModeAutomatic
+	}
 	if strings.EqualFold(strings.TrimSpace(cfg.CacheTTL), "off") {
 		cacheMode = CacheModeDisabled
 	}
@@ -220,6 +233,7 @@ func NewFromEnv() (*Client, error) {
 		ThinkingEffort: thinkingEffort,
 		ThinkingBgt:    thinkingBgt,
 		CacheTTL:       envTrimmed("ANTHROPIC_CACHE_TTL"),
+		CacheMode:      parseCacheMode(envTrimmed("ANTHROPIC_CACHE_MODE")),
 	})
 }
 
@@ -628,6 +642,21 @@ func parseCacheTTL(raw string) anthropic.CacheControlEphemeralTTL {
 	default:
 		// Empty → omitzero → API default (5m).
 		return ""
+	}
+}
+
+func parseCacheMode(raw string) CacheMode {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto", "automatic":
+		return CacheModeAutomatic
+	case "explicit":
+		return CacheModeExplicit
+	case "hybrid", "explicit_stable_prefix_with_automatic", "explicit-stable-prefix-with-automatic":
+		return CacheModeExplicitStablePrefixWithAutomatic
+	case "none", "off", "disabled":
+		return CacheModeDisabled
+	default:
+		return CacheModeAutomatic
 	}
 }
 
