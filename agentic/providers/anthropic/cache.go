@@ -33,6 +33,9 @@ func applyPromptCaching(req *anthropic.MessageNewParams, mode CacheMode, ttl ant
 		req.CacheControl = newCacheControl(ttl)
 	case CacheModeExplicit:
 		applyExplicitCacheBreakpoints(req, ttl)
+	case CacheModeExplicitStablePrefixWithAutomatic:
+		applyExplicitStablePrefixBreakpoints(req, ttl)
+		req.CacheControl = newCacheControl(ttl)
 	case CacheModeDisabled:
 		return
 	}
@@ -74,6 +77,48 @@ func applyExplicitCacheBreakpoints(req *anthropic.MessageNewParams, ttl anthropi
 			case last.OfToolResult != nil:
 				last.OfToolResult.CacheControl = cc
 			}
+		}
+	}
+}
+
+// applyExplicitStablePrefixBreakpoints marks up to 3 cache breakpoints on the
+// stable prefix before the final message:
+//
+//  1. Last system prompt block
+//  2. Last tool definition
+//  3. Last content block in the penultimate message
+//
+// This intentionally leaves the final message uncached so callers can combine
+// it with top-level automatic caching without anchoring the only reusable
+// breakpoint on transient final-message content.
+func applyExplicitStablePrefixBreakpoints(req *anthropic.MessageNewParams, ttl anthropic.CacheControlEphemeralTTL) {
+	cc := newCacheControl(ttl)
+
+	if n := len(req.System); n > 0 {
+		req.System[n-1].CacheControl = cc
+	}
+
+	if n := len(req.Tools); n > 0 {
+		last := req.Tools[n-1]
+		if last.OfTool != nil {
+			last.OfTool.CacheControl = cc
+			req.Tools[n-1] = last
+		}
+	}
+
+	if len(req.Messages) < 2 {
+		return
+	}
+	blocks := req.Messages[len(req.Messages)-2].Content
+	if nb := len(blocks); nb > 0 {
+		last := &blocks[nb-1]
+		switch {
+		case last.OfText != nil:
+			last.OfText.CacheControl = cc
+		case last.OfToolUse != nil:
+			last.OfToolUse.CacheControl = cc
+		case last.OfToolResult != nil:
+			last.OfToolResult.CacheControl = cc
 		}
 	}
 }

@@ -24,6 +24,10 @@ type VertexConfig struct {
 	// CacheTTL sets the time-to-live for prompt cache breakpoints.
 	// Valid values: "" (default 5m), "5m", "1h".
 	CacheTTL string
+
+	// CacheMode controls how prompt caching is applied.
+	// Defaults to CacheModeExplicit for Vertex unless overridden.
+	CacheMode CacheMode
 }
 
 // NewVertex constructs an Anthropic client that uses Vertex AI as the backend.
@@ -61,6 +65,15 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 	vertexOpt := vertex.WithGoogleAuth(ctx, location, project)
 	sdkClient := sdk.NewClient(vertexOpt)
 
+	cacheMode := cfg.CacheMode
+	switch cacheMode {
+	case CacheModeExplicit, CacheModeExplicitStablePrefixWithAutomatic, CacheModeDisabled:
+		// supported
+	default:
+		// Preserve Vertex's historical default and avoid automatic mode here.
+		cacheMode = CacheModeExplicit
+	}
+
 	return &Client{
 		client:         sdkClient,
 		model:          model,
@@ -69,7 +82,7 @@ func NewVertex(ctx context.Context, cfg VertexConfig) (client *Client, err error
 		thinkingMode:   thinkingMode,
 		thinkingEffort: thinkingEffort,
 		thinkingBgt:    thinkingBgt,
-		cacheMode:      CacheModeExplicit,
+		cacheMode:      cacheMode,
 		cacheTTL:       parseCacheTTL(cfg.CacheTTL),
 	}, nil
 }
@@ -118,5 +131,6 @@ func NewFromVertexEnv() (*Client, error) {
 		ThinkingEffort: thinkingEffort,
 		ThinkingBgt:    thinkingBgt,
 		CacheTTL:       envTrimmed("ANTHROPIC_CACHE_TTL"),
+		CacheMode:      parseCacheMode(envTrimmed("ANTHROPIC_CACHE_MODE")),
 	})
 }
