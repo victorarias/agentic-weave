@@ -49,36 +49,9 @@ func applyPromptCaching(req *anthropic.MessageNewParams, mode CacheMode, ttl ant
 //  3. Last content block in the final message
 func applyExplicitCacheBreakpoints(req *anthropic.MessageNewParams, ttl anthropic.CacheControlEphemeralTTL) {
 	cc := newCacheControl(ttl)
-
-	// 1. Last system prompt block.
-	if n := len(req.System); n > 0 {
-		req.System[n-1].CacheControl = cc
-	}
-
-	// 2. Last tool definition.
-	if n := len(req.Tools); n > 0 {
-		last := req.Tools[n-1]
-		if last.OfTool != nil {
-			last.OfTool.CacheControl = cc
-			req.Tools[n-1] = last
-		}
-	}
-
-	// 3. Last content block in the final message.
-	if n := len(req.Messages); n > 0 {
-		blocks := req.Messages[n-1].Content
-		if nb := len(blocks); nb > 0 {
-			last := &blocks[nb-1]
-			switch {
-			case last.OfText != nil:
-				last.OfText.CacheControl = cc
-			case last.OfToolUse != nil:
-				last.OfToolUse.CacheControl = cc
-			case last.OfToolResult != nil:
-				last.OfToolResult.CacheControl = cc
-			}
-		}
-	}
+	setSystemCacheControl(req, cc)
+	setToolsCacheControl(req, cc)
+	setMessageBlockCacheControl(req, len(req.Messages)-1, cc)
 }
 
 // applyExplicitStablePrefixBreakpoints marks up to 3 cache breakpoints on the
@@ -93,32 +66,73 @@ func applyExplicitCacheBreakpoints(req *anthropic.MessageNewParams, ttl anthropi
 // breakpoint on transient final-message content.
 func applyExplicitStablePrefixBreakpoints(req *anthropic.MessageNewParams, ttl anthropic.CacheControlEphemeralTTL) {
 	cc := newCacheControl(ttl)
-
-	if n := len(req.System); n > 0 {
-		req.System[n-1].CacheControl = cc
+	setSystemCacheControl(req, cc)
+	setToolsCacheControl(req, cc)
+	if len(req.Messages) >= 2 {
+		setMessageBlockCacheControl(req, len(req.Messages)-2, cc)
 	}
+}
 
-	if n := len(req.Tools); n > 0 {
-		last := req.Tools[n-1]
-		if last.OfTool != nil {
-			last.OfTool.CacheControl = cc
-			req.Tools[n-1] = last
-		}
-	}
-
-	if len(req.Messages) < 2 {
+// setSystemCacheControl replaces the last system block with a copy that has
+// cache_control set. Reconstructing the block avoids any potential mutation
+// issues with the SDK's omitzero serialization.
+func setSystemCacheControl(req *anthropic.MessageNewParams, cc anthropic.CacheControlEphemeralParam) {
+	n := len(req.System)
+	if n == 0 {
 		return
 	}
-	blocks := req.Messages[len(req.Messages)-2].Content
-	if nb := len(blocks); nb > 0 {
-		last := &blocks[nb-1]
-		switch {
-		case last.OfText != nil:
-			last.OfText.CacheControl = cc
-		case last.OfToolUse != nil:
-			last.OfToolUse.CacheControl = cc
-		case last.OfToolResult != nil:
-			last.OfToolResult.CacheControl = cc
-		}
+	original := req.System[n-1]
+	req.System[n-1] = anthropic.TextBlockParam{
+		Text:         original.Text,
+		CacheControl: cc,
+		Citations:    original.Citations,
 	}
+}
+
+// setToolsCacheControl replaces the last tool definition with a copy that has
+// cache_control set.
+func setToolsCacheControl(req *anthropic.MessageNewParams, cc anthropic.CacheControlEphemeralParam) {
+	n := len(req.Tools)
+	if n == 0 {
+		return
+	}
+	last := req.Tools[n-1]
+	if last.OfTool == nil {
+		return
+	}
+	replacement := *last.OfTool
+	replacement.CacheControl = cc
+	last.OfTool = &replacement
+	req.Tools[n-1] = last
+}
+
+// setMessageBlockCacheControl replaces the last content block in the given
+// message with a copy that has cache_control set.
+func setMessageBlockCacheControl(req *anthropic.MessageNewParams, msgIdx int, cc anthropic.CacheControlEphemeralParam) {
+	if msgIdx < 0 || msgIdx >= len(req.Messages) {
+		return
+	}
+	blocks := req.Messages[msgIdx].Content
+	nb := len(blocks)
+	if nb == 0 {
+		return
+	}
+	last := blocks[nb-1]
+	switch {
+	case last.OfText != nil:
+		replacement := *last.OfText
+		replacement.CacheControl = cc
+		last.OfText = &replacement
+	case last.OfToolUse != nil:
+		replacement := *last.OfToolUse
+		replacement.CacheControl = cc
+		last.OfToolUse = &replacement
+	case last.OfToolResult != nil:
+		replacement := *last.OfToolResult
+		replacement.CacheControl = cc
+		last.OfToolResult = &replacement
+	default:
+		return
+	}
+	req.Messages[msgIdx].Content[nb-1] = last
 }

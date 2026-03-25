@@ -374,3 +374,69 @@ func TestParseCacheMode(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyPromptCaching_ExplicitBreakpoints_SerializeCorrectly(t *testing.T) {
+	toolSchema := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)
+	req := anthropic.MessageNewParams{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: 1024,
+		System:    []anthropic.TextBlockParam{{Text: "system prompt"}},
+		Tools: []anthropic.ToolUnionParam{
+			{OfTool: &anthropic.ToolParam{Name: "search", InputSchema: schemaFromRaw(toolSchema), Description: anthropic.String("search")}},
+		},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock("msg1")),
+			anthropic.NewAssistantMessage(anthropic.NewTextBlock("reply1")),
+			anthropic.NewUserMessage(anthropic.NewTextBlock("msg2")),
+		},
+	}
+
+	modes := []struct {
+		name    string
+		mode    CacheMode
+		wantMin int // minimum expected cache_control occurrences in serialized JSON
+	}{
+		{"explicit", CacheModeExplicit, 3},                        // system + tools + last message
+		{"hybrid", CacheModeExplicitStablePrefixWithAutomatic, 4}, // system + tools + penultimate + top-level
+	}
+
+	for _, tt := range modes {
+		t.Run(tt.name, func(t *testing.T) {
+			r := cloneMessageNewParams(req)
+			applyPromptCaching(&r, tt.mode, anthropic.CacheControlEphemeralTTLTTL1h)
+
+			raw, err := json.Marshal(r)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			jsonStr := string(raw)
+			ccCount := strings.Count(jsonStr, `"cache_control"`)
+			if ccCount < tt.wantMin {
+				t.Errorf("expected at least %d cache_control in JSON, got %d\nJSON: %s", tt.wantMin, ccCount, jsonStr)
+			}
+
+			// Verify block-level breakpoints survive JSONB-style round-trip (parse + re-serialize).
+			var parsed json.RawMessage
+			if err := json.Unmarshal(raw, &parsed); err != nil {
+				t.Fatalf("unmarshal round-trip: %v", err)
+			}
+			roundTripped, err := json.Marshal(parsed)
+			if err != nil {
+				t.Fatalf("marshal round-trip: %v", err)
+			}
+			rtCount := strings.Count(string(roundTripped), `"cache_control"`)
+			if rtCount != ccCount {
+				t.Errorf("round-trip changed cache_control count: %d → %d", ccCount, rtCount)
+			}
+		})
+	}
+}
+
+// cloneMessageNewParams creates a shallow copy safe for independent mutation.
+func cloneMessageNewParams(src anthropic.MessageNewParams) anthropic.MessageNewParams {
+	dst := src
+	dst.System = append([]anthropic.TextBlockParam(nil), src.System...)
+	dst.Tools = append([]anthropic.ToolUnionParam(nil), src.Tools...)
+	dst.Messages = append([]anthropic.MessageParam(nil), src.Messages...)
+	return dst
+}
