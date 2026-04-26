@@ -370,6 +370,58 @@ func TestExtractCacheWriteTokens_NotPresent(t *testing.T) {
 
 // ---------- error chunk tests ----------
 
+// closeCountingTransport wraps a base transport so tests can observe whether
+// the response body's Close() was called. Used to prove early-exit paths
+// (e.g. mid-stream finish_reason=error) don't leak HTTP connections.
+type closeCountingTransport struct {
+	base   http.RoundTripper
+	closes int
+}
+
+func (t *closeCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	resp.Body = &countingReadCloser{ReadCloser: resp.Body, onClose: func() { t.closes++ }}
+	return resp, nil
+}
+
+type countingReadCloser struct {
+	io.ReadCloser
+	onClose func()
+}
+
+func (c *countingReadCloser) Close() error {
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.ReadCloser.Close()
+}
+
+func TestStream_FinishReasonErrorClosesUpstream(t *testing.T) {
+	chunks := []string{
+		`data: {"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"error"}],"error":{"message":"boom"}}` + "\n\n",
+		`data: [DONE]` + "\n\n",
+	}
+	cs := newCaptureServer(t, chunks)
+
+	counter := &closeCountingTransport{base: http.DefaultTransport}
+	c, err := New(Config{
+		APIKey:     "test",
+		Model:      "test",
+		BaseURL:    cs.server.URL,
+		HTTPClient: &http.Client{Transport: counter},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainStream(t, c, providers.Input{UserMessage: "hi"})
+	if counter.closes < 1 {
+		t.Errorf("expected upstream body to be Close()'d on finish_reason=error path; closes=%d", counter.closes)
+	}
+}
+
 func TestStream_FinishReasonErrorEmitsErrorEvent(t *testing.T) {
 	chunks := []string{
 		`data: {"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"error"}],"error":{"message":"upstream rate limit"}}` + "\n\n",

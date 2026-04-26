@@ -270,6 +270,12 @@ func (c *Client) requestExtensionOptions(messages []oai.ChatCompletionMessagePar
 
 // collectStream reads the OpenAI streaming response and emits provider events.
 func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk], events chan<- providers.StreamEvent) {
+	// Close on every exit path. The stream owns the HTTP response body; an
+	// early break (e.g. mid-stream finish_reason="error") that doesn't close
+	// it would leak connections back into the pool only when GC eventually
+	// runs.
+	defer stream.Close()
+
 	// Tool call accumulator: OpenAI streams tool calls in deltas
 	// identified by index, so we must reassemble them.
 	toolAccums := map[int64]*toolAccum{}

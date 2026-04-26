@@ -65,31 +65,16 @@ func newSSECommentFilter(src io.ReadCloser) io.ReadCloser {
 
 func (f *sseCommentFilter) Read(p []byte) (int, error) {
 	for f.out.Len() == 0 && !f.eof {
-		line, err := f.br.ReadBytes('\n')
+		line, err := f.readLine()
 		if len(line) > 0 {
-			trimmed := strings.TrimRight(string(line), "\r\n")
-			switch {
-			case trimmed == "":
-				// Event terminator. Flush only when we accumulated data.
-				if f.hasData {
-					f.out.Write(f.block.Bytes())
-					f.out.Write(line)
-				}
-				f.block.Reset()
-				f.hasData = false
-			case strings.HasPrefix(trimmed, ":"):
-				// Comment line. Keep it so a mixed event still terminates correctly,
-				// but do not flip hasData.
-				f.block.Write(line)
-			default:
-				f.block.Write(line)
-				f.hasData = true
-			}
+			f.absorbLine(line)
 		}
 		switch err {
 		case nil:
 			continue
 		case io.EOF:
+			// No trailing terminator: emit any pending non-comment data so the
+			// downstream decoder still sees the final event.
 			if f.block.Len() > 0 && f.hasData {
 				f.out.Write(f.block.Bytes())
 				f.block.Reset()
@@ -100,6 +85,47 @@ func (f *sseCommentFilter) Read(p []byte) (int, error) {
 		}
 	}
 	return f.out.Read(p)
+}
+
+// readLine returns the next full SSE line including the trailing newline if
+// the source provided one. Coalesces bufio.ErrBufferFull continuations so a
+// line longer than the bufio buffer (e.g. a tool-call JSON argument bigger
+// than 4 KiB) does not abort the whole stream.
+func (f *sseCommentFilter) readLine() ([]byte, error) {
+	var buf []byte
+	for {
+		chunk, err := f.br.ReadBytes('\n')
+		buf = append(buf, chunk...)
+		switch err {
+		case nil:
+			return buf, nil
+		case bufio.ErrBufferFull:
+			continue
+		default:
+			return buf, err
+		}
+	}
+}
+
+func (f *sseCommentFilter) absorbLine(line []byte) {
+	trimmed := strings.TrimRight(string(line), "\r\n")
+	switch {
+	case trimmed == "":
+		// Event terminator. Flush only when we accumulated data.
+		if f.hasData {
+			f.out.Write(f.block.Bytes())
+			f.out.Write(line)
+		}
+		f.block.Reset()
+		f.hasData = false
+	case strings.HasPrefix(trimmed, ":"):
+		// Comment line. Keep it so a mixed event still terminates correctly,
+		// but do not flip hasData.
+		f.block.Write(line)
+	default:
+		f.block.Write(line)
+		f.hasData = true
+	}
 }
 
 func (f *sseCommentFilter) Close() error {

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bufio"
 	"io"
 	"strings"
 	"testing"
@@ -47,6 +48,30 @@ func TestSSECommentFilter_HandlesMultipleConsecutiveCommentEvents(t *testing.T) 
 	want := "data: {\"x\":1}\n\n"
 	if got := filterSSE(t, in); got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSSECommentFilter_HandlesLineLongerThanBufioBuffer(t *testing.T) {
+	// A single SSE data line that exceeds the default bufio buffer (4 KiB)
+	// would cause bufio.Reader.ReadBytes to internally see ErrBufferFull
+	// across multiple ReadSlice calls. Confirm the filter coalesces those
+	// reads instead of aborting the stream when one line is huge — e.g. a
+	// tool-call JSON arguments blob.
+	const bufSize = 16
+	huge := strings.Repeat("x", bufSize*8) // far larger than the small bufio buffer
+	in := "data: " + huge + "\n\n"
+
+	r := &sseCommentFilter{
+		src: io.NopCloser(strings.NewReader(in)),
+		br:  bufio.NewReaderSize(strings.NewReader(in), bufSize),
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(out) != in {
+		t.Errorf("got %d bytes, want %d (long line should pass through unchanged)", len(out), len(in))
 	}
 }
 
