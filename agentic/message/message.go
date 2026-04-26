@@ -45,8 +45,16 @@ func (m AgentMessage) BudgetRole() string {
 
 // BudgetContent implements budget.Budgetable.
 // Returns all content concatenated for token estimation.
+//
+// ReasoningContent is included because providers that round-trip it (DeepSeek,
+// OpenRouter reasoning models) send it back on the wire as part of the prior
+// assistant turn — leaving it out would undercount prompt size and skip
+// compaction when the hidden trace is what's pushing past the budget.
 func (m AgentMessage) BudgetContent() string {
 	content := m.Content
+	if m.ReasoningContent != "" {
+		content += m.ReasoningContent
+	}
 	for _, tc := range m.ToolCalls {
 		content += tc.Name + string(tc.Input)
 	}
