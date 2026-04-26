@@ -10,9 +10,12 @@ import (
 )
 
 func TestBuildMessages_SystemPrompt(t *testing.T) {
-	msgs := buildMessages("You are helpful.", nil, "Hello")
+	msgs, reasonings := buildMessages("You are helpful.", nil, "Hello")
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if len(reasonings) != len(msgs) {
+		t.Fatalf("reasonings slice must align with messages: got %d vs %d", len(reasonings), len(msgs))
 	}
 }
 
@@ -23,10 +26,13 @@ func TestBuildMessages_History(t *testing.T) {
 		{Role: message.RoleTool, ToolResults: []agentic.ToolResult{{ID: "tc1", Output: []byte(`"ok"`)}}},
 		{Role: message.RoleSystem, Content: "Summary of conversation so far."},
 	}
-	msgs := buildMessages("system", history, "Follow up")
+	msgs, reasonings := buildMessages("system", history, "Follow up")
 	// system + 4 history + 1 user = 6
 	if len(msgs) != 6 {
 		t.Fatalf("expected 6 messages, got %d", len(msgs))
+	}
+	if len(reasonings) != len(msgs) {
+		t.Fatalf("reasonings slice must align with messages: got %d vs %d", len(reasonings), len(msgs))
 	}
 }
 
@@ -42,10 +48,52 @@ func TestBuildMessages_AssistantWithToolCalls(t *testing.T) {
 		},
 		{Role: message.RoleTool, ToolResults: []agentic.ToolResult{{ID: "tc1", Output: []byte(`"Sunny"`)}}},
 	}
-	msgs := buildMessages("", history, "Thanks")
+	msgs, reasonings := buildMessages("", history, "Thanks")
 	// 3 history + 1 user = 4
 	if len(msgs) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+	if len(reasonings) != len(msgs) {
+		t.Fatalf("reasonings slice must align with messages: got %d vs %d", len(reasonings), len(msgs))
+	}
+}
+
+func TestBuildMessages_ReasoningContentAlignedToAssistantSlot(t *testing.T) {
+	history := []message.AgentMessage{
+		{Role: message.RoleUser, Content: "Solve 2+2"},
+		{Role: message.RoleAssistant, Content: "4", ReasoningContent: "two plus two is four"},
+		{Role: message.RoleUser, Content: "Now 3+3"},
+		{Role: message.RoleAssistant, Content: "6"},
+	}
+	msgs, reasonings := buildMessages("", history, "again?")
+	if len(msgs) != len(reasonings) {
+		t.Fatalf("misaligned: %d msgs vs %d reasonings", len(msgs), len(reasonings))
+	}
+	for i, m := range msgs {
+		if m.OfAssistant == nil {
+			if reasonings[i] != "" {
+				t.Errorf("non-assistant slot %d carries reasoning %q", i, reasonings[i])
+			}
+			continue
+		}
+	}
+	// Two assistant slots, one with reasoning and one without.
+	var withReasoning, withoutReasoning int
+	for i, m := range msgs {
+		if m.OfAssistant == nil {
+			continue
+		}
+		if reasonings[i] != "" {
+			withReasoning++
+			if reasonings[i] != "two plus two is four" {
+				t.Errorf("assistant slot %d reasoning = %q", i, reasonings[i])
+			}
+		} else {
+			withoutReasoning++
+		}
+	}
+	if withReasoning != 1 || withoutReasoning != 1 {
+		t.Errorf("expected 1 assistant w/ reasoning + 1 w/o, got %d / %d", withReasoning, withoutReasoning)
 	}
 }
 

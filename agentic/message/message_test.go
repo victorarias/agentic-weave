@@ -36,3 +36,21 @@ func TestToolErrorsIncludedInBudget(t *testing.T) {
 		t.Errorf("expected tool error in content, got %q", content)
 	}
 }
+
+func TestReasoningContentCountedInBudget(t *testing.T) {
+	// Reasoning traces are round-tripped on the wire for DeepSeek-style
+	// providers, so they must contribute to the budget — otherwise a long
+	// hidden trace can skip compaction and blow past the provider's context
+	// limit on the next turn.
+	msg := AgentMessage{
+		Role:             RoleAssistant,
+		Content:          "answer",
+		ReasoningContent: "long internal reasoning trace",
+	}
+
+	content := msg.BudgetContent()
+
+	if content != "answerlong internal reasoning trace" {
+		t.Errorf("expected reasoning trace folded into budget content, got %q", content)
+	}
+}
