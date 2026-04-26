@@ -96,10 +96,12 @@ type Config struct {
 	Headers http.Header
 
 	// RequiresReasoningContentOnAssistantMessages pads each assistant history
-	// message with an empty "reasoning_content" string when it has none.
-	// DeepSeek V4 Pro (direct or via OpenRouter) returns 400 if a multi-turn
-	// request omits reasoning_content on a prior assistant turn that produced
-	// reasoning. Padding with "" satisfies the schema for turns that didn't.
+	// message with an empty "reasoning_content" string when no
+	// AgentMessage.ReasoningContent is set on it. DeepSeek V4 Pro (direct or
+	// via OpenRouter) returns 400 if a multi-turn request omits
+	// reasoning_content on a prior assistant turn that produced reasoning.
+	// AgentMessage.ReasoningContent always wins when non-empty; the pad only
+	// covers turns that didn't produce reasoning.
 	RequiresReasoningContentOnAssistantMessages bool
 }
 
@@ -169,7 +171,7 @@ func New(cfg Config) (*Client, error) {
 
 // Stream implements providers.Streamer.
 func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan providers.StreamEvent, error) {
-	messages := buildMessages(input.SystemPrompt, input.History, input.UserMessage)
+	messages, reasonings := buildMessages(input.SystemPrompt, input.History, input.UserMessage)
 
 	params := oai.ChatCompletionNewParams{
 		Model:    c.model,
@@ -224,7 +226,7 @@ func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan prov
 	// Per-request extensions for OpenRouter / OpenAI-completions-compatible
 	// providers. Each WithJSONSet rewrites the serialized request body via sjson,
 	// so they apply on top of the openai-go-rendered struct.
-	reqOpts := c.requestExtensionOptions(messages)
+	reqOpts := c.requestExtensionOptions(messages, reasonings)
 
 	stream := c.client.Chat.Completions.NewStreaming(ctx, params, reqOpts...)
 
@@ -239,8 +241,16 @@ func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan prov
 
 // requestExtensionOptions builds the per-request options that inject OpenRouter-
 // style extension fields (reasoning, provider routing, fallback models), custom
-// headers, and reasoning_content padding into the rendered request body.
-func (c *Client) requestExtensionOptions(messages []oai.ChatCompletionMessageParamUnion) []option.RequestOption {
+// headers, and per-assistant reasoning_content into the rendered request body.
+//
+// reasonings is a parallel slice to messages: reasonings[i] holds the
+// AgentMessage.ReasoningContent that produced messages[i] (empty for non-
+// assistant slots, or assistants without stored reasoning). For each assistant
+// slot we inject reasoning_content when:
+//   - the slot has a non-empty stored value (always — caller asked us to
+//     round-trip the prior reasoning trace); or
+//   - padReasoningEmpty is on (DeepSeek-style schema requirement: pad with "").
+func (c *Client) requestExtensionOptions(messages []oai.ChatCompletionMessageParamUnion, reasonings []string) []option.RequestOption {
 	var opts []option.RequestOption
 
 	if c.reasoning != nil {
@@ -257,11 +267,19 @@ func (c *Client) requestExtensionOptions(messages []oai.ChatCompletionMessagePar
 			opts = append(opts, option.WithHeader(key, v))
 		}
 	}
-	if c.padReasoningEmpty {
-		for i, msg := range messages {
-			if msg.OfAssistant != nil {
-				opts = append(opts, option.WithJSONSet(fmt.Sprintf("messages.%d.reasoning_content", i), ""))
-			}
+	for i, msg := range messages {
+		if msg.OfAssistant == nil {
+			continue
+		}
+		var stored string
+		if i < len(reasonings) {
+			stored = reasonings[i]
+		}
+		switch {
+		case stored != "":
+			opts = append(opts, option.WithJSONSet(fmt.Sprintf("messages.%d.reasoning_content", i), stored))
+		case c.padReasoningEmpty:
+			opts = append(opts, option.WithJSONSet(fmt.Sprintf("messages.%d.reasoning_content", i), ""))
 		}
 	}
 
@@ -588,12 +606,24 @@ func responseFormatFromSchema(schemaRaw json.RawMessage) (oai.ChatCompletionNewP
 }
 
 // buildMessages converts the provider-agnostic input into OpenAI message params.
-func buildMessages(systemPrompt string, history []message.AgentMessage, userMessage string) []oai.ChatCompletionMessageParamUnion {
+//
+// Returns a parallel slice of per-slot reasoning content: reasonings[i] is the
+// ReasoningContent of the AgentMessage that produced messages[i], or "" for
+// slots without one (system prompts, user messages, tool messages, or
+// assistant messages without stored reasoning). Callers use this to round-trip
+// reasoning traces back to providers that require them on multi-turn replay.
+func buildMessages(systemPrompt string, history []message.AgentMessage, userMessage string) ([]oai.ChatCompletionMessageParamUnion, []string) {
 	messages := make([]oai.ChatCompletionMessageParamUnion, 0, len(history)+2)
+	reasonings := make([]string, 0, len(history)+2)
+
+	appendMsg := func(m oai.ChatCompletionMessageParamUnion, reasoning string) {
+		messages = append(messages, m)
+		reasonings = append(reasonings, reasoning)
+	}
 
 	// System prompt.
 	if system := strings.TrimSpace(systemPrompt); system != "" {
-		messages = append(messages, oai.SystemMessage(system))
+		appendMsg(oai.SystemMessage(system), "")
 	}
 
 	// History.
@@ -602,12 +632,12 @@ func buildMessages(systemPrompt string, history []message.AgentMessage, userMess
 		switch msg.Role {
 		case message.RoleUser:
 			if strings.TrimSpace(msg.Content) != "" {
-				messages = append(messages, oai.UserMessage(msg.Content))
+				appendMsg(oai.UserMessage(msg.Content), "")
 			}
 
 		case message.RoleAssistant:
 			if len(msg.ToolCalls) == 0 {
-				messages = append(messages, oai.AssistantMessage(msg.Content))
+				appendMsg(oai.AssistantMessage(msg.Content), msg.ReasoningContent)
 			} else {
 				// Assistant message with tool calls.
 				toolCalls := make([]oai.ChatCompletionMessageToolCallUnionParam, 0, len(msg.ToolCalls))
@@ -630,9 +660,9 @@ func buildMessages(systemPrompt string, history []message.AgentMessage, userMess
 						OfString: oai.String(msg.Content),
 					}
 				}
-				messages = append(messages, oai.ChatCompletionMessageParamUnion{
+				appendMsg(oai.ChatCompletionMessageParamUnion{
 					OfAssistant: &assistantMsg,
-				})
+				}, msg.ReasoningContent)
 			}
 
 		case message.RoleTool:
@@ -643,23 +673,23 @@ func buildMessages(systemPrompt string, history []message.AgentMessage, userMess
 				if toolID == "" {
 					toolID = result.Name
 				}
-				messages = append(messages, oai.ToolMessage(content, toolID))
+				appendMsg(oai.ToolMessage(content, toolID), "")
 			}
 
 		case message.RoleSystem:
 			// Compacted history summaries should remain low-trust history, not privileged system instructions.
 			if strings.TrimSpace(msg.Content) != "" {
-				messages = append(messages, oai.UserMessage("[Context Summary] "+msg.Content))
+				appendMsg(oai.UserMessage("[Context Summary] "+msg.Content), "")
 			}
 		}
 	}
 
 	// Current user message.
 	if userMsg := strings.TrimSpace(userMessage); userMsg != "" {
-		messages = append(messages, oai.UserMessage(userMsg))
+		appendMsg(oai.UserMessage(userMsg), "")
 	}
 
-	return messages
+	return messages, reasonings
 }
 
 func toolDefsToOpenAI(tools []agentic.ToolDefinition) []oai.ChatCompletionToolUnionParam {

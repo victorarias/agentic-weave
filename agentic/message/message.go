@@ -26,6 +26,16 @@ type AgentMessage struct {
 	ToolResults []agentic.ToolResult
 	InlineData  []agentic.InlineData // User-provided images; not counted in BudgetContent.
 	Timestamp   time.Time
+
+	// ReasoningContent is the textual reasoning trace produced by a prior
+	// assistant turn on a reasoning model (DeepSeek-style "reasoning_content",
+	// OpenRouter's normalized "reasoning"). Set only on assistant messages.
+	//
+	// Providers that need the field on the wire (e.g. DeepSeek V4 Pro will 400
+	// on multi-turn replay if a prior assistant turn that produced reasoning
+	// is sent back without it) MUST round-trip this through to the upstream
+	// request. Providers that do not are free to ignore it.
+	ReasoningContent string
 }
 
 // BudgetRole implements budget.Budgetable.

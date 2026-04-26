@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/message"
 	"github.com/victorarias/agentic-weave/agentic/providers"
 	"github.com/victorarias/agentic-weave/agentic/usage"
@@ -278,6 +279,126 @@ func TestStream_ReasoningContentPaddingOff(t *testing.T) {
 	if strings.Contains(string(cs.bodyRaw), "reasoning_content") {
 		t.Errorf("rendered body must not contain reasoning_content when flag is off; body=%s", string(cs.bodyRaw))
 	}
+}
+
+func TestStream_ReasoningContentRoundTripsWithoutPadFlag(t *testing.T) {
+	// AgentMessage.ReasoningContent is the round-trip mechanism for INV-4:
+	// even with padReasoningEmpty off, a non-empty stored value MUST land on
+	// the wire so providers like DeepSeek V4 Pro do not 400 on multi-turn.
+	cs := newCaptureServer(t, minimalDoneSSE())
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []message.AgentMessage{
+		{Role: message.RoleUser, Content: "Solve 2+2"},
+		{Role: message.RoleAssistant, Content: "4", ReasoningContent: "two plus two is four"},
+	}
+	drainStream(t, c, providers.Input{History: history, UserMessage: "Now 3+3"})
+
+	messages, ok := cs.bodyJSON["messages"].([]any)
+	if !ok {
+		t.Fatalf("expected messages array; body=%s", string(cs.bodyRaw))
+	}
+	var rcs []any
+	for _, m := range messages {
+		msg, _ := m.(map[string]any)
+		if msg["role"] != "assistant" {
+			continue
+		}
+		rcs = append(rcs, msg["reasoning_content"])
+	}
+	if len(rcs) != 1 {
+		t.Fatalf("expected exactly one assistant slot, got %d (%v)", len(rcs), rcs)
+	}
+	if rcs[0] != "two plus two is four" {
+		t.Errorf("assistant.reasoning_content = %v, want %q", rcs[0], "two plus two is four")
+	}
+}
+
+func TestStream_ReasoningContentMixedWithPad(t *testing.T) {
+	// padReasoningEmpty + per-message ReasoningContent: the assistant turn that
+	// carries reasoning gets the actual text; the bare assistant turn gets the
+	// "" pad. Both must end up with the field present.
+	cs := newCaptureServer(t, minimalDoneSSE())
+	c, err := New(Config{
+		APIKey:  "test",
+		Model:   "test",
+		BaseURL: cs.server.URL,
+		RequiresReasoningContentOnAssistantMessages: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []message.AgentMessage{
+		{Role: message.RoleUser, Content: "Solve 2+2"},
+		{Role: message.RoleAssistant, Content: "4", ReasoningContent: "two plus two is four"},
+		{Role: message.RoleUser, Content: "Now 3+3"},
+		{Role: message.RoleAssistant, Content: "6"}, // no stored reasoning
+	}
+	drainStream(t, c, providers.Input{History: history, UserMessage: "again?"})
+
+	messages, ok := cs.bodyJSON["messages"].([]any)
+	if !ok {
+		t.Fatalf("expected messages array; body=%s", string(cs.bodyRaw))
+	}
+	var seen []any
+	for _, m := range messages {
+		msg, _ := m.(map[string]any)
+		if msg["role"] != "assistant" {
+			continue
+		}
+		rc, present := msg["reasoning_content"]
+		if !present {
+			t.Errorf("assistant slot missing reasoning_content with padReasoningEmpty on: %v", msg)
+		}
+		seen = append(seen, rc)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected 2 assistant slots, got %d (%v)", len(seen), seen)
+	}
+	if seen[0] != "two plus two is four" {
+		t.Errorf("first assistant.reasoning_content = %v, want round-tripped text", seen[0])
+	}
+	if seen[1] != "" {
+		t.Errorf("second assistant.reasoning_content = %v, want \"\" pad", seen[1])
+	}
+}
+
+func TestStream_ReasoningContentOnAssistantWithToolCalls(t *testing.T) {
+	// Tool-calling assistants are rendered through the OfAssistant branch with
+	// a different shape; the round-trip must still work.
+	cs := newCaptureServer(t, minimalDoneSSE())
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []message.AgentMessage{
+		{Role: message.RoleUser, Content: "weather?"},
+		{
+			Role:             message.RoleAssistant,
+			Content:          "checking",
+			ReasoningContent: "I should call the weather tool",
+			ToolCalls: []agentic.ToolCall{
+				{ID: "tc1", Name: "get_weather", Input: json.RawMessage(`{"city":"NYC"}`)},
+			},
+		},
+		{Role: message.RoleTool, ToolResults: []agentic.ToolResult{{ID: "tc1", Output: json.RawMessage(`"sunny"`)}}},
+	}
+	drainStream(t, c, providers.Input{History: history, UserMessage: "thanks"})
+
+	messages, _ := cs.bodyJSON["messages"].([]any)
+	for _, m := range messages {
+		msg, _ := m.(map[string]any)
+		if msg["role"] != "assistant" {
+			continue
+		}
+		if msg["reasoning_content"] != "I should call the weather tool" {
+			t.Errorf("tool-calling assistant reasoning_content = %v, want round-tripped text; msg=%v", msg["reasoning_content"], msg)
+		}
+		return
+	}
+	t.Fatalf("no assistant slot found; body=%s", string(cs.bodyRaw))
 }
 
 // ---------- reasoning ingestion tests ----------
