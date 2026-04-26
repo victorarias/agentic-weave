@@ -166,6 +166,90 @@ func TestStreamingLoopDecider_OnDecisionIncludesUsageAndStep(t *testing.T) {
 	}
 }
 
+func TestCollectDecision_AccumulatesReasoning(t *testing.T) {
+	ch := make(chan StreamEvent, 4)
+	ch <- ReasoningDeltaEvent{Delta: "thinking..."}
+	ch <- ReasoningDeltaEvent{Delta: " then more thinking"}
+	ch <- TextDeltaEvent{Delta: "the answer"}
+	ch <- DoneEvent{StopReason: "stop", Usage: &usage.Usage{Input: 1, Output: 1}}
+	close(ch)
+
+	decision, err := CollectDecision(context.Background(), ch)
+	if err != nil {
+		t.Fatalf("CollectDecision returned error: %v", err)
+	}
+	if decision.Reply != "the answer" {
+		t.Errorf("Reply = %q, want %q", decision.Reply, "the answer")
+	}
+	if decision.Reasoning != "thinking... then more thinking" {
+		t.Errorf("Reasoning = %q, want concatenated trace", decision.Reasoning)
+	}
+}
+
+func TestCollectDecision_OnReasoningDeltaCallback(t *testing.T) {
+	ch := make(chan StreamEvent, 3)
+	ch <- ReasoningDeltaEvent{Delta: "step 1 "}
+	ch <- ReasoningDeltaEvent{Delta: "step 2"}
+	ch <- DoneEvent{StopReason: "stop"}
+	close(ch)
+
+	var fragments []string
+	_, err := CollectDecision(context.Background(), ch,
+		WithOnReasoningDelta(func(s string) { fragments = append(fragments, s) }),
+	)
+	if err != nil {
+		t.Fatalf("CollectDecision returned error: %v", err)
+	}
+	if len(fragments) != 2 || fragments[0] != "step 1 " || fragments[1] != "step 2" {
+		t.Errorf("fragments = %#v, want [step 1 , step 2]", fragments)
+	}
+}
+
+func TestCollectDecision_ReasoningWithoutCallbackStillAggregates(t *testing.T) {
+	// Caller doesn't subscribe to live deltas but still wants the trace on
+	// the returned Decision — this covers the persistence-only path.
+	ch := make(chan StreamEvent, 2)
+	ch <- ReasoningDeltaEvent{Delta: "internal monologue"}
+	ch <- DoneEvent{StopReason: "stop"}
+	close(ch)
+
+	decision, err := CollectDecision(context.Background(), ch)
+	if err != nil {
+		t.Fatalf("CollectDecision returned error: %v", err)
+	}
+	if decision.Reasoning != "internal monologue" {
+		t.Errorf("Reasoning = %q, want round-tripped text", decision.Reasoning)
+	}
+}
+
+func TestStreamingLoopDecider_OnReasoningDeltaForwardsLive(t *testing.T) {
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		ch := make(chan StreamEvent, 4)
+		ch <- ReasoningDeltaEvent{Delta: "weighing options"}
+		ch <- TextDeltaEvent{Delta: "go with A"}
+		ch <- DoneEvent{StopReason: "stop", Usage: &usage.Usage{Input: 1, Output: 1}}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	var liveReasoning []string
+	decider.OnReasoningDelta(func(s string) { liveReasoning = append(liveReasoning, s) })
+
+	var meta DecisionMeta
+	decider.OnDecision(func(m DecisionMeta) { meta = m })
+
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if len(liveReasoning) != 1 || liveReasoning[0] != "weighing options" {
+		t.Errorf("liveReasoning = %#v, want [weighing options]", liveReasoning)
+	}
+	if meta.Reasoning != "weighing options" {
+		t.Errorf("DecisionMeta.Reasoning = %q, want round-trip text", meta.Reasoning)
+	}
+}
+
 func TestCollectDecision_NormalizesAlreadyNormalizedStopReasons(t *testing.T) {
 	ch := make(chan StreamEvent, 1)
 	ch <- DoneEvent{StopReason: "tool"}
