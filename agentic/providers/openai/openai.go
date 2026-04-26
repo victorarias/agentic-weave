@@ -1,5 +1,20 @@
 // Package openai provides an OpenAI Chat Completions streaming adapter
 // that implements the providers.Streamer interface.
+//
+// Both vanilla OpenAI and OpenAI-completions-compatible providers (OpenRouter,
+// DeepSeek-direct, Fireworks, etc.) share the same wire shape, so this client
+// also exposes optional extensions used by those providers:
+//
+//   - Reasoning + ReasoningEffort: OpenRouter-style reasoning configuration
+//   - ProviderRouting: OpenRouter's "provider" routing parameter
+//   - Models: OpenRouter's fallback model array
+//   - Headers: caller-supplied HTTP headers (HTTP-Referer, X-Title, etc.)
+//   - RequiresReasoningContentOnAssistantMessages: pad assistant history with
+//     empty "reasoning_content" so DeepSeek-style multi-turn replay does not 400
+//
+// Reasoning ingestion accepts the streaming variants emitted by reasoning models
+// behind OpenRouter ("reasoning_content", "reasoning", "reasoning_text") and
+// surfaces them via providers.ReasoningDeltaEvent.
 package openai
 
 import (
@@ -21,6 +36,38 @@ import (
 	"github.com/victorarias/agentic-weave/agentic/usage"
 )
 
+// Reasoning is the OpenRouter-shaped reasoning request parameter.
+//
+// Mirrors https://openrouter.ai/docs/use-cases/reasoning-tokens. Set Effort or
+// MaxTokens (provider-dependent) to opt the model into reasoning. Exclude=true
+// asks the provider to drop the reasoning trace from the response. Enabled is
+// for providers that gate reasoning behind a boolean (DeepSeek V4 Pro is one).
+type Reasoning struct {
+	Effort    string `json:"effort,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+	Exclude   *bool  `json:"exclude,omitempty"`
+	Enabled   *bool  `json:"enabled,omitempty"`
+}
+
+// ProviderRouting mirrors OpenRouter's "provider" parameter:
+// https://openrouter.ai/docs/features/provider-routing.
+//
+// Order pins which upstream providers OpenRouter tries (and in what order).
+// Setting Order disables OpenRouter's sticky routing for prompt caching, which
+// is why callers who care about cache hit rate must NOT populate it. The field
+// exists here because agentic-weave is a general-purpose SDK; the policy lives
+// in the caller.
+type ProviderRouting struct {
+	Order             []string `json:"order,omitempty"`
+	AllowFallbacks    *bool    `json:"allow_fallbacks,omitempty"`
+	RequireParameters *bool    `json:"require_parameters,omitempty"`
+	DataCollection    string   `json:"data_collection,omitempty"`
+	Only              []string `json:"only,omitempty"`
+	Ignore            []string `json:"ignore,omitempty"`
+	Quantizations     []string `json:"quantizations,omitempty"`
+	Sort              string   `json:"sort,omitempty"`
+}
+
 // Config controls an OpenAI streaming client.
 type Config struct {
 	APIKey          string
@@ -30,16 +77,45 @@ type Config struct {
 	Temperature     *float64
 	ReasoningEffort string // "none", "minimal", "low", "medium", "high", "xhigh"
 	HTTPClient      *http.Client
+
+	// Reasoning, when non-nil, is serialized as the top-level "reasoning" field
+	// on every request. Used by OpenRouter-routed reasoning models.
+	Reasoning *Reasoning
+
+	// ProviderRouting, when non-nil, is serialized as the top-level "provider"
+	// field on every request. OpenRouter only.
+	ProviderRouting *ProviderRouting
+
+	// Models is OpenRouter's fallback model array. When set, sent as the
+	// top-level "models" field; the primary Model is still required as the
+	// first attempt.
+	Models []string
+
+	// Headers are added to every request (e.g. HTTP-Referer, X-Title for
+	// OpenRouter attribution).
+	Headers http.Header
+
+	// RequiresReasoningContentOnAssistantMessages pads each assistant history
+	// message with an empty "reasoning_content" string when it has none.
+	// DeepSeek V4 Pro (direct or via OpenRouter) returns 400 if a multi-turn
+	// request omits reasoning_content on a prior assistant turn that produced
+	// reasoning. Padding with "" satisfies the schema for turns that didn't.
+	RequiresReasoningContentOnAssistantMessages bool
 }
 
 // Client calls the OpenAI Chat Completions API in streaming mode
 // and implements providers.Streamer.
 type Client struct {
-	client          oai.Client
-	model           shared.ChatModel
-	maxTokens       int
-	temperature     *float64
-	reasoningEffort shared.ReasoningEffort
+	client            oai.Client
+	model             shared.ChatModel
+	maxTokens         int
+	temperature       *float64
+	reasoningEffort   shared.ReasoningEffort
+	reasoning         *Reasoning
+	providerRouting   *ProviderRouting
+	models            []string
+	headers           http.Header
+	padReasoningEmpty bool
 }
 
 type toolAccum struct {
@@ -68,18 +144,26 @@ func New(cfg Config) (*Client, error) {
 	if baseURL := strings.TrimSpace(cfg.BaseURL); baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
-	if cfg.HTTPClient != nil {
-		opts = append(opts, option.WithHTTPClient(cfg.HTTPClient))
+	httpClient := cfg.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{}
 	}
+	httpClient = wrapHTTPClientWithSSEFilter(httpClient)
+	opts = append(opts, option.WithHTTPClient(httpClient))
 
 	client := oai.NewClient(opts...)
 
 	return &Client{
-		client:          client,
-		model:           shared.ChatModel(model),
-		maxTokens:       maxTokens,
-		temperature:     cfg.Temperature,
-		reasoningEffort: normalizeReasoningEffort(cfg.ReasoningEffort),
+		client:            client,
+		model:             shared.ChatModel(model),
+		maxTokens:         maxTokens,
+		temperature:       cfg.Temperature,
+		reasoningEffort:   normalizeReasoningEffort(cfg.ReasoningEffort),
+		reasoning:         cfg.Reasoning,
+		providerRouting:   cfg.ProviderRouting,
+		models:            append([]string(nil), cfg.Models...),
+		headers:           cfg.Headers.Clone(),
+		padReasoningEmpty: cfg.RequiresReasoningContentOnAssistantMessages,
 	}, nil
 }
 
@@ -137,7 +221,12 @@ func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan prov
 		IncludeUsage: oai.Bool(true),
 	}
 
-	stream := c.client.Chat.Completions.NewStreaming(ctx, params)
+	// Per-request extensions for OpenRouter / OpenAI-completions-compatible
+	// providers. Each WithJSONSet rewrites the serialized request body via sjson,
+	// so they apply on top of the openai-go-rendered struct.
+	reqOpts := c.requestExtensionOptions(messages)
+
+	stream := c.client.Chat.Completions.NewStreaming(ctx, params, reqOpts...)
 
 	events := make(chan providers.StreamEvent, 32)
 	go func() {
@@ -148,8 +237,45 @@ func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan prov
 	return events, nil
 }
 
+// requestExtensionOptions builds the per-request options that inject OpenRouter-
+// style extension fields (reasoning, provider routing, fallback models), custom
+// headers, and reasoning_content padding into the rendered request body.
+func (c *Client) requestExtensionOptions(messages []oai.ChatCompletionMessageParamUnion) []option.RequestOption {
+	var opts []option.RequestOption
+
+	if c.reasoning != nil {
+		opts = append(opts, option.WithJSONSet("reasoning", c.reasoning))
+	}
+	if c.providerRouting != nil {
+		opts = append(opts, option.WithJSONSet("provider", c.providerRouting))
+	}
+	if len(c.models) > 0 {
+		opts = append(opts, option.WithJSONSet("models", c.models))
+	}
+	for key, values := range c.headers {
+		for _, v := range values {
+			opts = append(opts, option.WithHeader(key, v))
+		}
+	}
+	if c.padReasoningEmpty {
+		for i, msg := range messages {
+			if msg.OfAssistant != nil {
+				opts = append(opts, option.WithJSONSet(fmt.Sprintf("messages.%d.reasoning_content", i), ""))
+			}
+		}
+	}
+
+	return opts
+}
+
 // collectStream reads the OpenAI streaming response and emits provider events.
 func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk], events chan<- providers.StreamEvent) {
+	// Close on every exit path. The stream owns the HTTP response body; an
+	// early break (e.g. mid-stream finish_reason="error") that doesn't close
+	// it would leak connections back into the pool only when GC eventually
+	// runs.
+	defer stream.Close()
+
 	// Tool call accumulator: OpenAI streams tool calls in deltas
 	// identified by index, so we must reassemble them.
 	toolAccums := map[int64]*toolAccum{}
@@ -157,6 +283,7 @@ func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk]
 
 	var (
 		finishReason string
+		errMessage   string
 		usageVal     *usage.Usage
 	)
 
@@ -165,16 +292,7 @@ func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk]
 
 		// Usage comes on the final chunk with stream_options.include_usage.
 		if chunk.Usage.TotalTokens > 0 {
-			u := usage.Usage{
-				Input:  int(chunk.Usage.PromptTokens),
-				Output: int(chunk.Usage.CompletionTokens),
-				Total:  int(chunk.Usage.TotalTokens),
-			}
-			// OpenAI reports cached tokens in prompt_tokens_details.
-			if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
-				u.CacheReadInput = int(chunk.Usage.PromptTokensDetails.CachedTokens)
-			}
-			usageVal = &u
+			usageVal = extractUsage(chunk.Usage)
 		}
 
 		if len(chunk.Choices) == 0 {
@@ -188,6 +306,20 @@ func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk]
 
 		if choice.Delta.Content != "" {
 			events <- providers.TextDeltaEvent{Delta: choice.Delta.Content}
+		}
+
+		// Reasoning delta: pulled from the delta's raw JSON because the openai-go
+		// typed struct does not surface OpenRouter / DeepSeek extension fields.
+		if event, ok := extractReasoningDelta(choice.Delta.RawJSON()); ok {
+			events <- event
+		}
+
+		// Mid-stream error: OpenRouter signals upstream failures with
+		// finish_reason: "error" plus an error blob on the chunk. Surface as
+		// ErrorEvent so callers do not interpret it as a clean DoneEvent.
+		if choice.FinishReason == "error" {
+			errMessage = extractErrorMessage(chunk.RawJSON())
+			break
 		}
 
 		for _, tc := range choice.Delta.ToolCalls {
@@ -223,6 +355,14 @@ func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk]
 		return
 	}
 
+	if finishReason == "error" {
+		if errMessage == "" {
+			errMessage = "upstream error"
+		}
+		events <- providers.ErrorEvent{Err: fmt.Errorf("openai stream: %s", errMessage)}
+		return
+	}
+
 	if finishReason == "tool_calls" {
 		if err := emitToolUseEvents(toolAccums, toolOrder, events); err != nil {
 			events <- providers.ErrorEvent{Err: err}
@@ -237,6 +377,169 @@ func (c *Client) collectStream(stream *ssestream.Stream[oai.ChatCompletionChunk]
 		StopReason: normalizeStopReason(finishReason),
 		Usage:      usageVal,
 	}
+}
+
+// extractReasoningDelta inspects a delta's raw JSON for a reasoning field
+// emitted by OpenRouter / DeepSeek / other reasoning providers. Returns the
+// delta event and true when a non-empty reasoning fragment is present.
+//
+// The order matters: "reasoning_content" is DeepSeek's native field and the
+// one we must round-trip; "reasoning" is OpenRouter's normalized field;
+// "reasoning_text" is used by some less common adapters. Whichever is
+// present first wins.
+func extractReasoningDelta(rawDelta string) (providers.ReasoningDeltaEvent, bool) {
+	if rawDelta == "" {
+		return providers.ReasoningDeltaEvent{}, false
+	}
+	var fields struct {
+		ReasoningContent json.RawMessage `json:"reasoning_content"`
+		Reasoning        json.RawMessage `json:"reasoning"`
+		ReasoningText    json.RawMessage `json:"reasoning_text"`
+	}
+	if err := json.Unmarshal([]byte(rawDelta), &fields); err != nil {
+		return providers.ReasoningDeltaEvent{}, false
+	}
+	for _, candidate := range []struct {
+		raw    json.RawMessage
+		format string
+	}{
+		{fields.ReasoningContent, "reasoning_content"},
+		{fields.Reasoning, "reasoning"},
+		{fields.ReasoningText, "reasoning_text"},
+	} {
+		if len(candidate.raw) == 0 || string(candidate.raw) == "null" {
+			continue
+		}
+		text := decodeReasoningPayload(candidate.raw)
+		if text == "" {
+			continue
+		}
+		return providers.ReasoningDeltaEvent{
+			Delta:  text,
+			Format: candidate.format,
+			Raw:    append(json.RawMessage(nil), candidate.raw...),
+		}, true
+	}
+	return providers.ReasoningDeltaEvent{}, false
+}
+
+// decodeReasoningPayload extracts the textual reasoning fragment from a
+// provider-shaped blob. Most providers send a string; some wrap it in
+// {"text": "..."} or an array of such objects (OpenRouter normalizes some of
+// these). Falls back to an empty string when no recognizable text is found —
+// the caller filters empty events.
+func decodeReasoningPayload(raw json.RawMessage) string {
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return asString
+	}
+	var asObject struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &asObject); err == nil && asObject.Text != "" {
+		return asObject.Text
+	}
+	var asArray []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &asArray); err == nil {
+		var b strings.Builder
+		for _, item := range asArray {
+			b.WriteString(item.Text)
+		}
+		return b.String()
+	}
+	return ""
+}
+
+// extractUsage converts the openai-go usage struct into our provider-neutral
+// shape, plus the OpenRouter cache-token reconciliation: OpenRouter reports
+// `cached_tokens` as the sum of cache reads and cache writes, while we want
+// only reads in CacheReadInput. When `cache_write_tokens` (or its alias
+// `cache_creation_input_tokens`) is present, it is moved to CacheCreationInput
+// and subtracted from CacheReadInput. On vanilla OpenAI requests these fields
+// are absent and the behaviour is unchanged.
+func extractUsage(u oai.CompletionUsage) *usage.Usage {
+	out := usage.Usage{
+		Input:  int(u.PromptTokens),
+		Output: int(u.CompletionTokens),
+		Total:  int(u.TotalTokens),
+	}
+	cached := int(u.PromptTokensDetails.CachedTokens)
+	cacheWrite := extractCacheWriteTokens(u.PromptTokensDetails.RawJSON(), u.RawJSON())
+	if cacheWrite > 0 {
+		out.CacheCreationInput = cacheWrite
+		if cached >= cacheWrite {
+			cached -= cacheWrite
+		}
+	}
+	if cached > 0 {
+		out.CacheReadInput = cached
+	}
+	return &out
+}
+
+// extractCacheWriteTokens looks for the cache-write count in the provider's
+// usage payload. OpenRouter (Anthropic-via-OpenRouter in particular) uses two
+// names depending on era: `cache_write_tokens` on prompt_tokens_details, or
+// `cache_creation_input_tokens` at the top level.
+func extractCacheWriteTokens(promptDetailsRaw, usageRaw string) int {
+	if v := readIntField(promptDetailsRaw, "cache_write_tokens"); v > 0 {
+		return v
+	}
+	if v := readIntField(usageRaw, "cache_creation_input_tokens"); v > 0 {
+		return v
+	}
+	return 0
+}
+
+func readIntField(rawJSON, field string) int {
+	if rawJSON == "" {
+		return 0
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(rawJSON), &fields); err != nil {
+		return 0
+	}
+	v, ok := fields[field]
+	if !ok {
+		return 0
+	}
+	var n int
+	if err := json.Unmarshal(v, &n); err != nil {
+		return 0
+	}
+	return n
+}
+
+// extractErrorMessage pulls the upstream error message from a finish_reason=error
+// chunk. OpenRouter places it under "error.message" on the choice or chunk.
+func extractErrorMessage(rawChunk string) string {
+	if rawChunk == "" {
+		return ""
+	}
+	var chunk struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Choices []struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(rawChunk), &chunk); err != nil {
+		return ""
+	}
+	if chunk.Error.Message != "" {
+		return chunk.Error.Message
+	}
+	for _, ch := range chunk.Choices {
+		if ch.Error.Message != "" {
+			return ch.Error.Message
+		}
+	}
+	return ""
 }
 
 func emitToolUseEvents(toolAccums map[int64]*toolAccum, toolOrder []int64, events chan<- providers.StreamEvent) error {

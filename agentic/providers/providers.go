@@ -83,6 +83,27 @@ type TextDeltaEvent struct{ Delta string }
 
 func (TextDeltaEvent) providerStreamEvent() {}
 
+// ReasoningDeltaEvent represents an incremental reasoning trace from the model.
+//
+// Different providers serialize reasoning differently:
+//   - DeepSeek (direct or via OpenRouter): "reasoning_content"
+//   - OpenRouter (most other reasoning models): "reasoning"
+//   - Some adapters: "reasoning_text"
+//
+// Provider clients normalize the textual delta into Delta. Format identifies
+// the wire field they read it from so callers that need to round-trip the
+// reasoning trace back to the same provider can preserve fidelity. Raw is
+// the verbatim provider blob from the streaming delta when callers want to
+// persist it for replay (e.g. DeepSeek requires the prior reasoning_content
+// on multi-turn calls or the request 400s).
+type ReasoningDeltaEvent struct {
+	Delta  string
+	Format string
+	Raw    json.RawMessage
+}
+
+func (ReasoningDeltaEvent) providerStreamEvent() {}
+
 // ToolUseEvent represents a fully-formed tool call requested by the model.
 type ToolUseEvent struct{ Call agentic.ToolCall }
 
