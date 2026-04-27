@@ -162,11 +162,11 @@ func TestStream_OpenRouterReasoningField(t *testing.T) {
 	cs := newCaptureServer(t, minimalDoneSSE())
 	exclude := true
 	c, err := New(Config{
-		APIKey:    "test",
-		Model:     "test",
-		BaseURL:   cs.server.URL,
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
 		MaxTokensField: MaxTokensFieldLegacy,
-		Reasoning: &Reasoning{Effort: "high", Exclude: &exclude},
+		Reasoning:      &Reasoning{Effort: "high", Exclude: &exclude},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +192,7 @@ func TestStream_RequireParametersTrue(t *testing.T) {
 		APIKey:          "test",
 		Model:           "test",
 		BaseURL:         cs.server.URL,
-		MaxTokensField: MaxTokensFieldLegacy,
+		MaxTokensField:  MaxTokensFieldLegacy,
 		ProviderRouting: &ProviderRouting{RequireParameters: &yes},
 	})
 	if err != nil {
@@ -219,7 +219,7 @@ func TestStream_ProviderOrderEmittedOnlyWhenSet(t *testing.T) {
 		APIKey:          "test",
 		Model:           "test",
 		BaseURL:         cs.server.URL,
-		MaxTokensField: MaxTokensFieldLegacy,
+		MaxTokensField:  MaxTokensFieldLegacy,
 		ProviderRouting: &ProviderRouting{Order: []string{"deepseek/deepseek-direct"}},
 	})
 	if err != nil {
@@ -237,11 +237,11 @@ func TestStream_ProviderOrderEmittedOnlyWhenSet(t *testing.T) {
 func TestStream_FallbackModelsArray(t *testing.T) {
 	cs := newCaptureServer(t, minimalDoneSSE())
 	c, err := New(Config{
-		APIKey:  "test",
-		Model:   "primary",
-		BaseURL: cs.server.URL,
+		APIKey:         "test",
+		Model:          "primary",
+		BaseURL:        cs.server.URL,
 		MaxTokensField: MaxTokensFieldLegacy,
-		Models:  []string{"primary", "fallback-a", "fallback-b"},
+		Models:         []string{"primary", "fallback-a", "fallback-b"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -263,11 +263,11 @@ func TestStream_HeadersAddedToRequest(t *testing.T) {
 	headers.Set("HTTP-Referer", "https://example.com")
 	headers.Set("X-Title", "agentic-weave-test")
 	c, err := New(Config{
-		APIKey:  "test",
-		Model:   "test",
-		BaseURL: cs.server.URL,
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
 		MaxTokensField: MaxTokensFieldLegacy,
-		Headers: headers,
+		Headers:        headers,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -285,9 +285,9 @@ func TestStream_HeadersAddedToRequest(t *testing.T) {
 func TestStream_ReasoningContentPaddingOnAssistant(t *testing.T) {
 	cs := newCaptureServer(t, minimalDoneSSE())
 	c, err := New(Config{
-		APIKey:  "test",
-		Model:   "test",
-		BaseURL: cs.server.URL,
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
 		MaxTokensField: MaxTokensFieldLegacy,
 		RequiresReasoningContentOnAssistantMessages: true,
 	})
@@ -386,9 +386,9 @@ func TestStream_ReasoningContentMixedWithPad(t *testing.T) {
 	// "" pad. Both must end up with the field present.
 	cs := newCaptureServer(t, minimalDoneSSE())
 	c, err := New(Config{
-		APIKey:  "test",
-		Model:   "test",
-		BaseURL: cs.server.URL,
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
 		MaxTokensField: MaxTokensFieldLegacy,
 		RequiresReasoningContentOnAssistantMessages: true,
 	})
@@ -594,11 +594,11 @@ func TestStream_FinishReasonErrorClosesUpstream(t *testing.T) {
 
 	counter := &closeCountingTransport{base: http.DefaultTransport}
 	c, err := New(Config{
-		APIKey:     "test",
-		Model:      "test",
-		BaseURL:    cs.server.URL,
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
 		MaxTokensField: MaxTokensFieldLegacy,
-		HTTPClient: &http.Client{Transport: counter},
+		HTTPClient:     &http.Client{Transport: counter},
 	})
 	if err != nil {
 		t.Fatal(err)
