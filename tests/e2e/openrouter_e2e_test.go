@@ -43,7 +43,8 @@ func TestOpenRouterE2E(t *testing.T) {
 			"HTTP-Referer": {"https://github.com/victorarias/agentic-weave"},
 			"X-Title":      {"agentic-weave-e2e"},
 		},
-		MaxTokens: 256,
+		MaxTokens:      256,
+		MaxTokensField: openai.MaxTokensFieldLegacy,
 	})
 	if err != nil {
 		t.Fatalf("client: %v", err)
