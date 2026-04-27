@@ -68,6 +68,29 @@ type ProviderRouting struct {
 	Sort              string   `json:"sort,omitempty"`
 }
 
+// MaxTokensField is the JSON field name to use for the output-token cap.
+//
+// The OpenAI Chat Completions wire shape carries two field names that mean the
+// same thing in practice; which one is accepted is per-model:
+//
+//   - "max_tokens" — the original. OpenAI still accepts it on non-reasoning
+//     models. Required by every other provider that mirrors the OpenAI wire
+//     (DeepSeek native and via OpenRouter, Kimi, Qwen, Anthropic-via-OpenRouter,
+//     etc.) — these list "max_tokens" in their advertised supported_parameters
+//     and reject "max_completion_tokens" when OpenRouter's
+//     provider.require_parameters is set.
+//
+//   - "max_completion_tokens" — added by OpenAI for o1/o3/GPT-5+ reasoning
+//     models, which reject "max_tokens" outright.
+//
+// Callers must pick the right one per model, e.g. via llmcatalog Compat.
+type MaxTokensField string
+
+const (
+	MaxTokensFieldLegacy     MaxTokensField = "max_tokens"
+	MaxTokensFieldCompletion MaxTokensField = "max_completion_tokens"
+)
+
 // Config controls an OpenAI streaming client.
 type Config struct {
 	APIKey          string
@@ -77,6 +100,11 @@ type Config struct {
 	Temperature     *float64
 	ReasoningEffort string // "none", "minimal", "low", "medium", "high", "xhigh"
 	HTTPClient      *http.Client
+
+	// MaxTokensField selects the JSON field name used to serialize MaxTokens.
+	// Required — empty string is rejected by New() so callers can't silently
+	// pick the wrong shape and 4xx for an opaque reason at request time.
+	MaxTokensField MaxTokensField
 
 	// Reasoning, when non-nil, is serialized as the top-level "reasoning" field
 	// on every request. Used by OpenRouter-routed reasoning models.
@@ -111,6 +139,7 @@ type Client struct {
 	client            oai.Client
 	model             shared.ChatModel
 	maxTokens         int
+	maxTokensField    MaxTokensField
 	temperature       *float64
 	reasoningEffort   shared.ReasoningEffort
 	reasoning         *Reasoning
@@ -142,6 +171,15 @@ func New(cfg Config) (*Client, error) {
 		maxTokens = 16384
 	}
 
+	maxTokensField := cfg.MaxTokensField
+	switch maxTokensField {
+	case MaxTokensFieldLegacy, MaxTokensFieldCompletion:
+	case "":
+		return nil, errors.New("openai: MaxTokensField is required (use MaxTokensFieldLegacy for OpenRouter and most non-OpenAI providers, MaxTokensFieldCompletion for OpenAI reasoning models)")
+	default:
+		return nil, fmt.Errorf("openai: invalid MaxTokensField %q", maxTokensField)
+	}
+
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
 	if baseURL := strings.TrimSpace(cfg.BaseURL); baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
@@ -159,6 +197,7 @@ func New(cfg Config) (*Client, error) {
 		client:            client,
 		model:             shared.ChatModel(model),
 		maxTokens:         maxTokens,
+		maxTokensField:    maxTokensField,
 		temperature:       cfg.Temperature,
 		reasoningEffort:   normalizeReasoningEffort(cfg.ReasoningEffort),
 		reasoning:         cfg.Reasoning,
@@ -178,12 +217,20 @@ func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan prov
 		Messages: messages,
 	}
 
-	// Set max tokens.
+	// Set max tokens. The JSON field name is per-model: most non-OpenAI
+	// providers (DeepSeek, Kimi, Qwen, Anthropic-via-OpenRouter, ...) reject
+	// "max_completion_tokens" when OpenRouter's provider.require_parameters
+	// is on; OpenAI reasoning models reject "max_tokens".
 	maxTokens := c.maxTokens
 	if input.MaxTokens > 0 {
 		maxTokens = input.MaxTokens
 	}
-	params.MaxCompletionTokens = oai.Int(int64(maxTokens))
+	switch c.maxTokensField {
+	case MaxTokensFieldCompletion:
+		params.MaxCompletionTokens = oai.Int(int64(maxTokens))
+	default: // MaxTokensFieldLegacy
+		params.MaxTokens = oai.Int(int64(maxTokens))
+	}
 
 	// Set temperature.
 	temperature := c.temperature

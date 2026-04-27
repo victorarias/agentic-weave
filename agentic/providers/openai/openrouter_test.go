@@ -85,9 +85,67 @@ func drainStream(t *testing.T, c *Client, input providers.Input) []providers.Str
 
 // ---------- request-body guard tests ----------
 
+// TestNew_RejectsMissingMaxTokensField guards against a silent default. The
+// JSON field name is per-model (OpenAI reasoning models reject "max_tokens";
+// almost everyone else rejects "max_completion_tokens" when OpenRouter's
+// provider.require_parameters is set), so we want New() to surface the
+// misconfiguration at construction time, not as a 4xx at request time.
+func TestNew_RejectsMissingMaxTokensField(t *testing.T) {
+	if _, err := New(Config{APIKey: "test", Model: "test"}); err == nil {
+		t.Fatal("New must reject Config without MaxTokensField")
+	}
+	if _, err := New(Config{APIKey: "test", Model: "test", MaxTokensField: "bogus"}); err == nil {
+		t.Fatal("New must reject unknown MaxTokensField values")
+	}
+}
+
+func TestStream_MaxTokensFieldLegacy_SerializesMaxTokens(t *testing.T) {
+	cs := newCaptureServer(t, minimalDoneSSE())
+	c, err := New(Config{
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokens:      512,
+		MaxTokensField: MaxTokensFieldLegacy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainStream(t, c, providers.Input{UserMessage: "hi"})
+
+	if _, ok := cs.bodyJSON["max_tokens"]; !ok {
+		t.Errorf("expected max_tokens on the wire; body=%s", string(cs.bodyRaw))
+	}
+	if _, ok := cs.bodyJSON["max_completion_tokens"]; ok {
+		t.Errorf("max_completion_tokens must not appear when MaxTokensField is legacy; body=%s", string(cs.bodyRaw))
+	}
+}
+
+func TestStream_MaxTokensFieldCompletion_SerializesMaxCompletionTokens(t *testing.T) {
+	cs := newCaptureServer(t, minimalDoneSSE())
+	c, err := New(Config{
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokens:      512,
+		MaxTokensField: MaxTokensFieldCompletion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainStream(t, c, providers.Input{UserMessage: "hi"})
+
+	if _, ok := cs.bodyJSON["max_completion_tokens"]; !ok {
+		t.Errorf("expected max_completion_tokens on the wire; body=%s", string(cs.bodyRaw))
+	}
+	if _, ok := cs.bodyJSON["max_tokens"]; ok {
+		t.Errorf("max_tokens must not appear when MaxTokensField is completion; body=%s", string(cs.bodyRaw))
+	}
+}
+
 func TestStream_NoExtensionsByDefault(t *testing.T) {
 	cs := newCaptureServer(t, minimalDoneSSE())
-	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL, MaxTokensField: MaxTokensFieldLegacy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,10 +162,11 @@ func TestStream_OpenRouterReasoningField(t *testing.T) {
 	cs := newCaptureServer(t, minimalDoneSSE())
 	exclude := true
 	c, err := New(Config{
-		APIKey:    "test",
-		Model:     "test",
-		BaseURL:   cs.server.URL,
-		Reasoning: &Reasoning{Effort: "high", Exclude: &exclude},
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokensField: MaxTokensFieldLegacy,
+		Reasoning:      &Reasoning{Effort: "high", Exclude: &exclude},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +192,7 @@ func TestStream_RequireParametersTrue(t *testing.T) {
 		APIKey:          "test",
 		Model:           "test",
 		BaseURL:         cs.server.URL,
+		MaxTokensField:  MaxTokensFieldLegacy,
 		ProviderRouting: &ProviderRouting{RequireParameters: &yes},
 	})
 	if err != nil {
@@ -159,6 +219,7 @@ func TestStream_ProviderOrderEmittedOnlyWhenSet(t *testing.T) {
 		APIKey:          "test",
 		Model:           "test",
 		BaseURL:         cs.server.URL,
+		MaxTokensField:  MaxTokensFieldLegacy,
 		ProviderRouting: &ProviderRouting{Order: []string{"deepseek/deepseek-direct"}},
 	})
 	if err != nil {
@@ -176,10 +237,11 @@ func TestStream_ProviderOrderEmittedOnlyWhenSet(t *testing.T) {
 func TestStream_FallbackModelsArray(t *testing.T) {
 	cs := newCaptureServer(t, minimalDoneSSE())
 	c, err := New(Config{
-		APIKey:  "test",
-		Model:   "primary",
-		BaseURL: cs.server.URL,
-		Models:  []string{"primary", "fallback-a", "fallback-b"},
+		APIKey:         "test",
+		Model:          "primary",
+		BaseURL:        cs.server.URL,
+		MaxTokensField: MaxTokensFieldLegacy,
+		Models:         []string{"primary", "fallback-a", "fallback-b"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,10 +263,11 @@ func TestStream_HeadersAddedToRequest(t *testing.T) {
 	headers.Set("HTTP-Referer", "https://example.com")
 	headers.Set("X-Title", "agentic-weave-test")
 	c, err := New(Config{
-		APIKey:  "test",
-		Model:   "test",
-		BaseURL: cs.server.URL,
-		Headers: headers,
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokensField: MaxTokensFieldLegacy,
+		Headers:        headers,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -222,9 +285,10 @@ func TestStream_HeadersAddedToRequest(t *testing.T) {
 func TestStream_ReasoningContentPaddingOnAssistant(t *testing.T) {
 	cs := newCaptureServer(t, minimalDoneSSE())
 	c, err := New(Config{
-		APIKey:  "test",
-		Model:   "test",
-		BaseURL: cs.server.URL,
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokensField: MaxTokensFieldLegacy,
 		RequiresReasoningContentOnAssistantMessages: true,
 	})
 	if err != nil {
@@ -266,7 +330,7 @@ func TestStream_ReasoningContentPaddingOnAssistant(t *testing.T) {
 func TestStream_ReasoningContentPaddingOff(t *testing.T) {
 	// Default (flag false): no reasoning_content key should be injected.
 	cs := newCaptureServer(t, minimalDoneSSE())
-	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL, MaxTokensField: MaxTokensFieldLegacy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +350,7 @@ func TestStream_ReasoningContentRoundTripsWithoutPadFlag(t *testing.T) {
 	// even with padReasoningEmpty off, a non-empty stored value MUST land on
 	// the wire so providers like DeepSeek V4 Pro do not 400 on multi-turn.
 	cs := newCaptureServer(t, minimalDoneSSE())
-	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL, MaxTokensField: MaxTokensFieldLegacy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,9 +386,10 @@ func TestStream_ReasoningContentMixedWithPad(t *testing.T) {
 	// "" pad. Both must end up with the field present.
 	cs := newCaptureServer(t, minimalDoneSSE())
 	c, err := New(Config{
-		APIKey:  "test",
-		Model:   "test",
-		BaseURL: cs.server.URL,
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokensField: MaxTokensFieldLegacy,
 		RequiresReasoningContentOnAssistantMessages: true,
 	})
 	if err != nil {
@@ -369,7 +434,7 @@ func TestStream_ReasoningContentOnAssistantWithToolCalls(t *testing.T) {
 	// Tool-calling assistants are rendered through the OfAssistant branch with
 	// a different shape; the round-trip must still work.
 	cs := newCaptureServer(t, minimalDoneSSE())
-	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL, MaxTokensField: MaxTokensFieldLegacy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,10 +594,11 @@ func TestStream_FinishReasonErrorClosesUpstream(t *testing.T) {
 
 	counter := &closeCountingTransport{base: http.DefaultTransport}
 	c, err := New(Config{
-		APIKey:     "test",
-		Model:      "test",
-		BaseURL:    cs.server.URL,
-		HTTPClient: &http.Client{Transport: counter},
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokensField: MaxTokensFieldLegacy,
+		HTTPClient:     &http.Client{Transport: counter},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -549,7 +615,7 @@ func TestStream_FinishReasonErrorEmitsErrorEvent(t *testing.T) {
 		`data: [DONE]` + "\n\n",
 	}
 	cs := newCaptureServer(t, chunks)
-	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL, MaxTokensField: MaxTokensFieldLegacy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +662,7 @@ func TestStream_ReasoningDeltaEmitted(t *testing.T) {
 		`data: [DONE]` + "\n\n",
 	}
 	cs := newCaptureServer(t, chunks)
-	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL, MaxTokensField: MaxTokensFieldLegacy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +692,7 @@ func TestStream_SSECommentsTolerated(t *testing.T) {
 		`data: [DONE]` + "\n\n",
 	}
 	cs := newCaptureServer(t, chunks)
-	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL, MaxTokensField: MaxTokensFieldLegacy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +721,7 @@ func TestStream_CacheReconciliation(t *testing.T) {
 		`data: [DONE]` + "\n\n",
 	}
 	cs := newCaptureServer(t, chunks)
-	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL})
+	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL, MaxTokensField: MaxTokensFieldLegacy})
 	if err != nil {
 		t.Fatal(err)
 	}

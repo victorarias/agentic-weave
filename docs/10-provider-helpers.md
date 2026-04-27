@@ -22,8 +22,9 @@ This keeps application repositories from re-implementing:
 
 ```go
 streamer, err := openai.New(openai.Config{
-    APIKey: os.Getenv("OPENAI_API_KEY"),
-    Model:  "gpt-5",
+    APIKey:         os.Getenv("OPENAI_API_KEY"),
+    Model:          "gpt-5",
+    MaxTokensField: openai.MaxTokensFieldCompletion, // OpenAI reasoning models reject "max_tokens"
 })
 if err != nil {
     log.Fatal(err)
@@ -74,3 +75,20 @@ compactor := providers.NewStreamingCompactor(
   `agentic/providers/anthropic` and `agentic/providers/openai`.
 - Application code can switch providers without rewriting loop-decider or
   compaction glue.
+
+## openai.Config.MaxTokensField
+
+The OpenAI Chat Completions wire shape carries two field names that mean the
+same thing in practice, and which one a model accepts is per-model:
+
+- **`MaxTokensFieldLegacy`** (`max_tokens`) — required by every non-OpenAI
+  provider that mirrors the OpenAI wire (DeepSeek native and via OpenRouter,
+  Kimi, Qwen, Anthropic-via-OpenRouter, ...). These advertise `max_tokens` in
+  their `supported_parameters` and reject `max_completion_tokens` outright when
+  OpenRouter's `provider.require_parameters` is set.
+- **`MaxTokensFieldCompletion`** (`max_completion_tokens`) — required by
+  OpenAI o1/o3/GPT-5+ reasoning models, which conversely reject `max_tokens`.
+
+`openai.New(...)` rejects an empty or unknown value at construction time so
+the misconfiguration surfaces synchronously rather than as an opaque 4xx at
+request time.
