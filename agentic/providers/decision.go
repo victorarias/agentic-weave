@@ -104,6 +104,10 @@ func CollectDecision(ctx context.Context, events <-chan StreamEvent, opts ...Col
 		case ReasoningDeltaEvent:
 			reasoning.WriteString(e.Delta)
 			onReasoningDelta(e.Delta)
+			// Reasoning counts as emitted output so callers see the accurate
+			// "stream ended without done event after emitting output" error
+			// when a stream fails mid-trace.
+			emittedOutput = true
 		case ToolUseEvent:
 			calls = append(calls, e.Call)
 			emittedOutput = true

@@ -278,6 +278,25 @@ func TestStreamingLoopDecider_RetainsRetryGuardWithoutReasoningCallback(t *testi
 	}
 }
 
+// TestCollectDecision_ReasoningCountsAsEmittedOutput pins the
+// CollectDecision-level guarantee that a reasoning-only stream which ends
+// without a Done event surfaces the "after emitting output" variant of the
+// terminal error. Direct callers of CollectDecision (not just the loop
+// decider) rely on this for accurate diagnostics.
+func TestCollectDecision_ReasoningCountsAsEmittedOutput(t *testing.T) {
+	ch := make(chan StreamEvent, 1)
+	ch <- ReasoningDeltaEvent{Delta: "thinking"}
+	close(ch)
+
+	_, err := CollectDecision(context.Background(), ch)
+	if err == nil {
+		t.Fatal("expected stream-ended error, got nil")
+	}
+	if !strings.Contains(err.Error(), "after emitting output") {
+		t.Errorf("error = %v, want it to mention 'after emitting output'", err)
+	}
+}
+
 func TestStreamingLoopDecider_OnReasoningDeltaForwardsLive(t *testing.T) {
 	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
 		ch := make(chan StreamEvent, 4)
