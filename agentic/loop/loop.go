@@ -34,8 +34,15 @@ type Input struct {
 }
 
 // Decision is the result of a decision step.
+//
+// Reasoning is the textual reasoning trace produced by the Decider on this
+// step. It is empty for non-reasoning models. The runner records it on the
+// resulting AgentMessage so the next turn can round-trip it (DeepSeek-style
+// providers 400 if a prior assistant turn that produced reasoning is replayed
+// without its reasoning_content).
 type Decision struct {
 	Reply      string
+	Reasoning  string
 	ToolCalls  []agentic.ToolCall
 	Usage      *usage.Usage
 	StopReason usage.StopReason
@@ -102,12 +109,13 @@ func (r *Runner) emit(e events.Event) {
 }
 
 // recordAssistantMessage stores an assistant message in history and emits MessageEnd.
-func (r *Runner) recordAssistantMessage(ctx context.Context, turn int, reply string, toolCalls []agentic.ToolCall, history *[]message.AgentMessage, isFinal bool) error {
+func (r *Runner) recordAssistantMessage(ctx context.Context, turn int, reply, reasoning string, toolCalls []agentic.ToolCall, history *[]message.AgentMessage, isFinal bool) error {
 	msg := message.AgentMessage{
-		Role:      message.RoleAssistant,
-		Content:   reply,
-		ToolCalls: toolCalls,
-		Timestamp: time.Now(),
+		Role:             message.RoleAssistant,
+		Content:          reply,
+		ReasoningContent: reasoning,
+		ToolCalls:        toolCalls,
+		Timestamp:        time.Now(),
 	}
 	*history = append(*history, msg)
 	if err := r.appendHistory(ctx, msg); err != nil {
@@ -211,7 +219,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		if len(decision.ToolCalls) == 0 {
-			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, nil, &historyMessages, true); err != nil {
+			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
 				return Result{}, err
 			}
 
@@ -229,7 +237,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		if turn >= r.cfg.MaxTurns {
-			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.ToolCalls, &historyMessages, true); err != nil {
+			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, true); err != nil {
 				return Result{}, err
 			}
 			return Result{
@@ -249,7 +257,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{}, errors.New("loop: tool calls requested but no executor configured")
 		}
 
-		if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.ToolCalls, &historyMessages, false); err != nil {
+		if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, false); err != nil {
 			return Result{}, err
 		}
 

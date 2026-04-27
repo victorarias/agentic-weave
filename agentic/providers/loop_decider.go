@@ -15,6 +15,7 @@ import (
 // DecisionMeta captures one completed provider decision step.
 type DecisionMeta struct {
 	Reply     string
+	Reasoning string
 	ToolCalls []agentic.ToolCall
 	Usage     *usage.Usage
 	Step      int
@@ -26,9 +27,10 @@ type DecisionMeta struct {
 // Decide() call, so this adapter intentionally leaves Input.UserMessage empty to
 // avoid duplicating the latest user turn in providers that accept both fields.
 type StreamingLoopDecider struct {
-	streamer   Streamer
-	onDelta    func(string)
-	onDecision func(DecisionMeta)
+	streamer         Streamer
+	onDelta          func(string)
+	onReasoningDelta func(string)
+	onDecision       func(DecisionMeta)
 }
 
 // NewStreamingLoopDecider creates a loop decider backed by a provider Streamer.
@@ -45,6 +47,14 @@ func NewStreamingLoopDecider(streamer Streamer, onDelta func(string)) *Streaming
 // OnDecision registers a callback invoked after each successful decision step.
 func (d *StreamingLoopDecider) OnDecision(fn func(DecisionMeta)) {
 	d.onDecision = fn
+}
+
+// OnReasoningDelta registers a callback invoked for each reasoning fragment as
+// it streams in. Callers use this to surface a live reasoning trace in their
+// UI alongside the existing onDelta text stream. The accumulated reasoning is
+// also delivered in DecisionMeta.Reasoning at step boundaries.
+func (d *StreamingLoopDecider) OnReasoningDelta(fn func(string)) {
+	d.onReasoningDelta = fn
 }
 
 // Decide implements loop.Decider.
@@ -71,10 +81,17 @@ func (d *StreamingLoopDecider) Decide(ctx context.Context, in loop.Input) (loop.
 		}
 
 		if d.onDecision != nil {
-			d.onDecision(DecisionMeta{Reply: decision.Reply, ToolCalls: decision.ToolCalls, Usage: decision.Usage, Step: in.Turn + 1})
+			d.onDecision(DecisionMeta{
+				Reply:     decision.Reply,
+				Reasoning: decision.Reasoning,
+				ToolCalls: decision.ToolCalls,
+				Usage:     decision.Usage,
+				Step:      in.Turn + 1,
+			})
 		}
 		return loop.Decision{
 			Reply:      decision.Reply,
+			Reasoning:  decision.Reasoning,
 			ToolCalls:  decision.ToolCalls,
 			Usage:      decision.Usage,
 			StopReason: decision.StopReason,
@@ -96,10 +113,22 @@ func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (D
 	}
 
 	var emittedOutput bool
-	decision, err := CollectDecision(ctx, stream, func(delta string) {
-		d.onDelta(delta)
-		emittedOutput = true
-	})
+	opts := []CollectOption{
+		WithOnDelta(func(delta string) {
+			d.onDelta(delta)
+			emittedOutput = true
+		}),
+		// Reasoning deltas count as emitted output: replaying them would
+		// duplicate fragments already shown to the live callback (UI), and
+		// some providers expect a single reasoning trace per turn.
+		WithOnReasoningDelta(func(delta string) {
+			if d.onReasoningDelta != nil {
+				d.onReasoningDelta(delta)
+			}
+			emittedOutput = true
+		}),
+	}
+	decision, err := CollectDecision(ctx, stream, opts...)
 	if len(decision.ToolCalls) > 0 {
 		emittedOutput = true
 	}

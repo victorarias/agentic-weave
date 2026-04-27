@@ -166,6 +166,165 @@ func TestStreamingLoopDecider_OnDecisionIncludesUsageAndStep(t *testing.T) {
 	}
 }
 
+func TestCollectDecision_AccumulatesReasoning(t *testing.T) {
+	ch := make(chan StreamEvent, 4)
+	ch <- ReasoningDeltaEvent{Delta: "thinking..."}
+	ch <- ReasoningDeltaEvent{Delta: " then more thinking"}
+	ch <- TextDeltaEvent{Delta: "the answer"}
+	ch <- DoneEvent{StopReason: "stop", Usage: &usage.Usage{Input: 1, Output: 1}}
+	close(ch)
+
+	decision, err := CollectDecision(context.Background(), ch)
+	if err != nil {
+		t.Fatalf("CollectDecision returned error: %v", err)
+	}
+	if decision.Reply != "the answer" {
+		t.Errorf("Reply = %q, want %q", decision.Reply, "the answer")
+	}
+	if decision.Reasoning != "thinking... then more thinking" {
+		t.Errorf("Reasoning = %q, want concatenated trace", decision.Reasoning)
+	}
+}
+
+func TestCollectDecision_OnReasoningDeltaCallback(t *testing.T) {
+	ch := make(chan StreamEvent, 3)
+	ch <- ReasoningDeltaEvent{Delta: "step 1 "}
+	ch <- ReasoningDeltaEvent{Delta: "step 2"}
+	ch <- DoneEvent{StopReason: "stop"}
+	close(ch)
+
+	var fragments []string
+	_, err := CollectDecision(context.Background(), ch,
+		WithOnReasoningDelta(func(s string) { fragments = append(fragments, s) }),
+	)
+	if err != nil {
+		t.Fatalf("CollectDecision returned error: %v", err)
+	}
+	if len(fragments) != 2 || fragments[0] != "step 1 " || fragments[1] != "step 2" {
+		t.Errorf("fragments = %#v, want [step 1 , step 2]", fragments)
+	}
+}
+
+func TestCollectDecision_ReasoningWithoutCallbackStillAggregates(t *testing.T) {
+	// Caller doesn't subscribe to live deltas but still wants the trace on
+	// the returned Decision — this covers the persistence-only path.
+	ch := make(chan StreamEvent, 2)
+	ch <- ReasoningDeltaEvent{Delta: "internal monologue"}
+	ch <- DoneEvent{StopReason: "stop"}
+	close(ch)
+
+	decision, err := CollectDecision(context.Background(), ch)
+	if err != nil {
+		t.Fatalf("CollectDecision returned error: %v", err)
+	}
+	if decision.Reasoning != "internal monologue" {
+		t.Errorf("Reasoning = %q, want round-tripped text", decision.Reasoning)
+	}
+}
+
+// TestStreamingLoopDecider_DoesNotRetryAfterReasoningEmitted guards against
+// duplicate reasoning traces when the stream errors mid-flight: reasoning
+// fragments count as emitted output, so a transient error must NOT cause
+// the decider to replay the call (which would replay reasoning to the UI).
+func TestStreamingLoopDecider_DoesNotRetryAfterReasoningEmitted(t *testing.T) {
+	calls := 0
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		calls++
+		ch := make(chan StreamEvent, 2)
+		ch <- ReasoningDeltaEvent{Delta: "thinking"}
+		ch <- ErrorEvent{Err: errors.New("rate limit")}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	var liveReasoning []string
+	decider.OnReasoningDelta(func(s string) { liveReasoning = append(liveReasoning, s) })
+
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err == nil {
+		t.Fatal("expected error from rate-limit, got nil")
+	}
+	if calls != 1 {
+		t.Errorf("attempts = %d, want 1 (reasoning is emitted output, retry would duplicate)", calls)
+	}
+	if len(liveReasoning) != 1 {
+		t.Errorf("liveReasoning fragments = %d, want 1 (no replay)", len(liveReasoning))
+	}
+}
+
+// TestStreamingLoopDecider_RetainsReasoningEvenWithoutCallback confirms the
+// retry guard still kicks in when the caller hasn't subscribed to live
+// reasoning — emittedOutput must be set whether or not OnReasoningDelta was
+// configured.
+func TestStreamingLoopDecider_RetainsRetryGuardWithoutReasoningCallback(t *testing.T) {
+	calls := 0
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		calls++
+		ch := make(chan StreamEvent, 2)
+		ch <- ReasoningDeltaEvent{Delta: "thinking"}
+		ch <- ErrorEvent{Err: errors.New("rate limit")}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	// Deliberately no OnReasoningDelta configured.
+
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err == nil {
+		t.Fatal("expected error from rate-limit, got nil")
+	}
+	if calls != 1 {
+		t.Errorf("attempts = %d, want 1 (reasoning is still emitted output even without a live callback)", calls)
+	}
+}
+
+// TestCollectDecision_ReasoningCountsAsEmittedOutput pins the
+// CollectDecision-level guarantee that a reasoning-only stream which ends
+// without a Done event surfaces the "after emitting output" variant of the
+// terminal error. Direct callers of CollectDecision (not just the loop
+// decider) rely on this for accurate diagnostics.
+func TestCollectDecision_ReasoningCountsAsEmittedOutput(t *testing.T) {
+	ch := make(chan StreamEvent, 1)
+	ch <- ReasoningDeltaEvent{Delta: "thinking"}
+	close(ch)
+
+	_, err := CollectDecision(context.Background(), ch)
+	if err == nil {
+		t.Fatal("expected stream-ended error, got nil")
+	}
+	if !strings.Contains(err.Error(), "after emitting output") {
+		t.Errorf("error = %v, want it to mention 'after emitting output'", err)
+	}
+}
+
+func TestStreamingLoopDecider_OnReasoningDeltaForwardsLive(t *testing.T) {
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		ch := make(chan StreamEvent, 4)
+		ch <- ReasoningDeltaEvent{Delta: "weighing options"}
+		ch <- TextDeltaEvent{Delta: "go with A"}
+		ch <- DoneEvent{StopReason: "stop", Usage: &usage.Usage{Input: 1, Output: 1}}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	var liveReasoning []string
+	decider.OnReasoningDelta(func(s string) { liveReasoning = append(liveReasoning, s) })
+
+	var meta DecisionMeta
+	decider.OnDecision(func(m DecisionMeta) { meta = m })
+
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if len(liveReasoning) != 1 || liveReasoning[0] != "weighing options" {
+		t.Errorf("liveReasoning = %#v, want [weighing options]", liveReasoning)
+	}
+	if meta.Reasoning != "weighing options" {
+		t.Errorf("DecisionMeta.Reasoning = %q, want round-trip text", meta.Reasoning)
+	}
+}
+
 func TestCollectDecision_NormalizesAlreadyNormalizedStopReasons(t *testing.T) {
 	ch := make(chan StreamEvent, 1)
 	ch <- DoneEvent{StopReason: "tool"}
