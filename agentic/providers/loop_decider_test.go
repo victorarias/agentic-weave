@@ -222,6 +222,62 @@ func TestCollectDecision_ReasoningWithoutCallbackStillAggregates(t *testing.T) {
 	}
 }
 
+// TestStreamingLoopDecider_DoesNotRetryAfterReasoningEmitted guards against
+// duplicate reasoning traces when the stream errors mid-flight: reasoning
+// fragments count as emitted output, so a transient error must NOT cause
+// the decider to replay the call (which would replay reasoning to the UI).
+func TestStreamingLoopDecider_DoesNotRetryAfterReasoningEmitted(t *testing.T) {
+	calls := 0
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		calls++
+		ch := make(chan StreamEvent, 2)
+		ch <- ReasoningDeltaEvent{Delta: "thinking"}
+		ch <- ErrorEvent{Err: errors.New("rate limit")}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	var liveReasoning []string
+	decider.OnReasoningDelta(func(s string) { liveReasoning = append(liveReasoning, s) })
+
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err == nil {
+		t.Fatal("expected error from rate-limit, got nil")
+	}
+	if calls != 1 {
+		t.Errorf("attempts = %d, want 1 (reasoning is emitted output, retry would duplicate)", calls)
+	}
+	if len(liveReasoning) != 1 {
+		t.Errorf("liveReasoning fragments = %d, want 1 (no replay)", len(liveReasoning))
+	}
+}
+
+// TestStreamingLoopDecider_RetainsReasoningEvenWithoutCallback confirms the
+// retry guard still kicks in when the caller hasn't subscribed to live
+// reasoning — emittedOutput must be set whether or not OnReasoningDelta was
+// configured.
+func TestStreamingLoopDecider_RetainsRetryGuardWithoutReasoningCallback(t *testing.T) {
+	calls := 0
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		calls++
+		ch := make(chan StreamEvent, 2)
+		ch <- ReasoningDeltaEvent{Delta: "thinking"}
+		ch <- ErrorEvent{Err: errors.New("rate limit")}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	// Deliberately no OnReasoningDelta configured.
+
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err == nil {
+		t.Fatal("expected error from rate-limit, got nil")
+	}
+	if calls != 1 {
+		t.Errorf("attempts = %d, want 1 (reasoning is still emitted output even without a live callback)", calls)
+	}
+}
+
 func TestStreamingLoopDecider_OnReasoningDeltaForwardsLive(t *testing.T) {
 	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
 		ch := make(chan StreamEvent, 4)

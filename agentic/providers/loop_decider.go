@@ -91,6 +91,7 @@ func (d *StreamingLoopDecider) Decide(ctx context.Context, in loop.Input) (loop.
 		}
 		return loop.Decision{
 			Reply:      decision.Reply,
+			Reasoning:  decision.Reasoning,
 			ToolCalls:  decision.ToolCalls,
 			Usage:      decision.Usage,
 			StopReason: decision.StopReason,
@@ -117,9 +118,15 @@ func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (D
 			d.onDelta(delta)
 			emittedOutput = true
 		}),
-	}
-	if d.onReasoningDelta != nil {
-		opts = append(opts, WithOnReasoningDelta(d.onReasoningDelta))
+		// Reasoning deltas count as emitted output: replaying them would
+		// duplicate fragments already shown to the live callback (UI), and
+		// some providers expect a single reasoning trace per turn.
+		WithOnReasoningDelta(func(delta string) {
+			if d.onReasoningDelta != nil {
+				d.onReasoningDelta(delta)
+			}
+			emittedOutput = true
+		}),
 	}
 	decision, err := CollectDecision(ctx, stream, opts...)
 	if len(decision.ToolCalls) > 0 {
