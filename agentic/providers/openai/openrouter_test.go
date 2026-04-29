@@ -185,6 +185,54 @@ func TestStream_OpenRouterReasoningField(t *testing.T) {
 	}
 }
 
+func TestStream_DeepSeekThinkingField(t *testing.T) {
+	cs := newCaptureServer(t, minimalDoneSSE())
+	c, err := New(Config{
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokensField: MaxTokensFieldLegacy,
+		Thinking:       &Thinking{Type: "enabled", ReasoningEffort: "high"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainStream(t, c, providers.Input{UserMessage: "hi"})
+
+	thinking, ok := cs.bodyJSON["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected thinking field as object, got %v; body=%s", cs.bodyJSON["thinking"], string(cs.bodyRaw))
+	}
+	if thinking["type"] != "enabled" {
+		t.Errorf("thinking.type = %v, want enabled", thinking["type"])
+	}
+	if thinking["reasoning_effort"] != "high" {
+		t.Errorf("thinking.reasoning_effort = %v, want high", thinking["reasoning_effort"])
+	}
+	// Confirm the OpenRouter-shaped field is NOT also emitted.
+	if _, ok := cs.bodyJSON["reasoning"]; ok {
+		t.Errorf("reasoning field must not appear when only Thinking is set; body=%s", string(cs.bodyRaw))
+	}
+}
+
+func TestStream_DeepSeekThinkingOmittedWhenNil(t *testing.T) {
+	cs := newCaptureServer(t, minimalDoneSSE())
+	c, err := New(Config{
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokensField: MaxTokensFieldLegacy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainStream(t, c, providers.Input{UserMessage: "hi"})
+
+	if _, ok := cs.bodyJSON["thinking"]; ok {
+		t.Errorf("thinking field must not appear when Thinking is nil; body=%s", string(cs.bodyRaw))
+	}
+}
+
 func TestStream_RequireParametersTrue(t *testing.T) {
 	cs := newCaptureServer(t, minimalDoneSSE())
 	yes := true
