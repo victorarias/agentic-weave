@@ -49,6 +49,15 @@ type Reasoning struct {
 	Enabled   *bool  `json:"enabled,omitempty"`
 }
 
+// Thinking is the DeepSeek-direct reasoning request parameter, serialized as
+// the top-level "thinking" field on the request body. DeepSeek's native API
+// does NOT accept the OpenRouter-shaped "reasoning" field — V4 Pro requires
+// {"type": "enabled", "reasoning_effort": "high" | "max"} instead.
+type Thinking struct {
+	Type            string `json:"type,omitempty"`             // "enabled" | "disabled"
+	ReasoningEffort string `json:"reasoning_effort,omitempty"` // "high" | "max" on V4 Pro
+}
+
 // ProviderRouting mirrors OpenRouter's "provider" parameter:
 // https://openrouter.ai/docs/features/provider-routing.
 //
@@ -110,6 +119,12 @@ type Config struct {
 	// on every request. Used by OpenRouter-routed reasoning models.
 	Reasoning *Reasoning
 
+	// Thinking, when non-nil, is serialized as the top-level "thinking" field
+	// on every request. Used by DeepSeek-direct reasoning models (V4 Pro
+	// gates reasoning behind {"type":"enabled","reasoning_effort":...} rather
+	// than the OpenRouter-shaped "reasoning" field).
+	Thinking *Thinking
+
 	// ProviderRouting, when non-nil, is serialized as the top-level "provider"
 	// field on every request. OpenRouter only.
 	ProviderRouting *ProviderRouting
@@ -143,6 +158,7 @@ type Client struct {
 	temperature       *float64
 	reasoningEffort   shared.ReasoningEffort
 	reasoning         *Reasoning
+	thinking          *Thinking
 	providerRouting   *ProviderRouting
 	models            []string
 	headers           http.Header
@@ -201,6 +217,7 @@ func New(cfg Config) (*Client, error) {
 		temperature:       cfg.Temperature,
 		reasoningEffort:   normalizeReasoningEffort(cfg.ReasoningEffort),
 		reasoning:         cfg.Reasoning,
+		thinking:          cfg.Thinking,
 		providerRouting:   cfg.ProviderRouting,
 		models:            append([]string(nil), cfg.Models...),
 		headers:           cfg.Headers.Clone(),
@@ -302,6 +319,9 @@ func (c *Client) requestExtensionOptions(messages []oai.ChatCompletionMessagePar
 
 	if c.reasoning != nil {
 		opts = append(opts, option.WithJSONSet("reasoning", c.reasoning))
+	}
+	if c.thinking != nil {
+		opts = append(opts, option.WithJSONSet("thinking", c.thinking))
 	}
 	if c.providerRouting != nil {
 		opts = append(opts, option.WithJSONSet("provider", c.providerRouting))
