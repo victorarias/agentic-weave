@@ -21,6 +21,19 @@ type Decider interface {
 	Decide(ctx context.Context, in Input) (Decision, error)
 }
 
+// BeforeNextModelCallHook can append externally sourced messages immediately
+// before the runner asks the model for another decision.
+type BeforeNextModelCallHook interface {
+	BeforeNextModelCall(ctx context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error)
+}
+
+// BeforeNextModelCallHookFunc adapts a function to BeforeNextModelCallHook.
+type BeforeNextModelCallHookFunc func(ctx context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error)
+
+func (f BeforeNextModelCallHookFunc) BeforeNextModelCall(ctx context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+	return f(ctx, in)
+}
+
 // Input captures state for a single decision step.
 type Input struct {
 	SystemPrompt   string
@@ -31,6 +44,18 @@ type Input struct {
 	ToolResults    []agentic.ToolResult
 	UserInlineData []agentic.InlineData // Images from the initial user message (first turn only).
 	Turn           int
+}
+
+// BeforeNextModelCallInput captures the loop state visible to a pre-model hook.
+type BeforeNextModelCallInput struct {
+	SystemPrompt string
+	UserMessage  string
+	History      []message.AgentMessage
+	Tools        []agentic.ToolDefinition
+	ToolCalls    []agentic.ToolCall
+	ToolResults  []agentic.ToolResult
+	Turn         int
+	CanContinue  bool
 }
 
 // Decision is the result of a decision step.
@@ -50,15 +75,16 @@ type Decision struct {
 
 // Config controls the loop behavior.
 type Config struct {
-	Decider        Decider
-	Executor       agentic.ToolExecutor
-	HistoryStore   history.Store
-	Budget         *budget.Manager
-	Truncation     *truncate.Options
-	TruncationMode truncate.Mode
-	Events         events.Sink
-	MaxTurns       int
-	ToolCallerType string
+	Decider             Decider
+	Executor            agentic.ToolExecutor
+	HistoryStore        history.Store
+	Budget              *budget.Manager
+	Truncation          *truncate.Options
+	TruncationMode      truncate.Mode
+	Events              events.Sink
+	BeforeNextModelCall BeforeNextModelCallHook
+	MaxTurns            int
+	ToolCallerType      string
 }
 
 // Request provides the conversation input.
@@ -183,13 +209,35 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	toolCalls, toolResults := extractToolsFromHistory(historyMessages)
 
 	var aggregatedUsage usage.Usage
-	turn := 0
+	step := 0
+	toolTurns := 0
+	hookContinuations := 0
 	runID := time.Now().UnixNano()
 	for {
+		hookMessages, err := r.beforeNextModelCall(ctx, BeforeNextModelCallInput{
+			SystemPrompt: req.SystemPrompt,
+			UserMessage:  userMessage,
+			History:      historyMessages,
+			Tools:        tools,
+			ToolCalls:    toolCalls,
+			ToolResults:  toolResults,
+			Turn:         step,
+			CanContinue:  true,
+		})
+		if err != nil {
+			return Result{}, err
+		}
+		if len(hookMessages) > 0 {
+			if err := r.appendMessages(ctx, hookMessages, &historyMessages); err != nil {
+				return Result{}, err
+			}
+			toolCalls, toolResults = extractToolsFromHistory(historyMessages)
+		}
+
 		// Only pass user inline data on the first Decide() call — after
 		// that it's already in history as part of the user message.
 		var turnInlineData []agentic.InlineData
-		if turn == 0 {
+		if step == 0 {
 			turnInlineData = req.UserInlineData
 		}
 
@@ -201,7 +249,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			ToolCalls:      toolCalls,
 			ToolResults:    toolResults,
 			UserInlineData: turnInlineData,
-			Turn:           turn,
+			Turn:           step,
 		})
 		if err != nil {
 			return Result{}, err
@@ -211,7 +259,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		for i := range decision.ToolCalls {
 			if decision.ToolCalls[i].ID == "" {
-				decision.ToolCalls[i].ID = fmt.Sprintf("call-%d-%d-%d", runID, turn, i)
+				decision.ToolCalls[i].ID = fmt.Sprintf("call-%d-%d-%d", runID, step, i)
 			}
 			if decision.ToolCalls[i].Caller == nil {
 				decision.ToolCalls[i].Caller = &agentic.ToolCaller{Type: r.cfg.ToolCallerType}
@@ -219,7 +267,56 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		if len(decision.ToolCalls) == 0 {
-			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
+			canContinue := hookContinuations < r.cfg.MaxTurns
+			pendingAssistant := message.AgentMessage{
+				Role:             message.RoleAssistant,
+				Content:          decision.Reply,
+				ReasoningContent: decision.Reasoning,
+				Timestamp:        time.Now(),
+			}
+			hookMessages, err := r.beforeNextModelCall(ctx, BeforeNextModelCallInput{
+				SystemPrompt: req.SystemPrompt,
+				UserMessage:  userMessage,
+				History:      append(historyMessages, pendingAssistant),
+				Tools:        tools,
+				ToolCalls:    toolCalls,
+				ToolResults:  toolResults,
+				Turn:         step,
+				CanContinue:  canContinue,
+			})
+			if err != nil {
+				return Result{}, err
+			}
+			if len(hookMessages) > 0 {
+				if !canContinue {
+					if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
+						return Result{}, err
+					}
+					return Result{
+						Reply:       decision.Reply,
+						History:     historyMessages,
+						Summary:     summary,
+						ToolCalls:   toolCalls,
+						ToolResults: toolResults,
+						Usage:       &aggregatedUsage,
+						StopReason:  decision.StopReason,
+						Exhausted:   true,
+						Steps:       step + 1,
+					}, nil
+				}
+				if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, nil, &historyMessages, false); err != nil {
+					return Result{}, err
+				}
+				if err := r.appendMessages(ctx, hookMessages, &historyMessages); err != nil {
+					return Result{}, err
+				}
+				toolCalls, toolResults = extractToolsFromHistory(historyMessages)
+				hookContinuations++
+				step++
+				continue
+			}
+
+			if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
 				return Result{}, err
 			}
 
@@ -232,12 +329,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				Usage:       &aggregatedUsage,
 				StopReason:  decision.StopReason,
 				Exhausted:   false,
-				Steps:       turn + 1,
+				Steps:       step + 1,
 			}, nil
 		}
 
-		if turn >= r.cfg.MaxTurns {
-			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, true); err != nil {
+		if toolTurns >= r.cfg.MaxTurns {
+			if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, true); err != nil {
 				return Result{}, err
 			}
 			return Result{
@@ -249,7 +346,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				Usage:       &aggregatedUsage,
 				StopReason:  decision.StopReason,
 				Exhausted:   true,
-				Steps:       turn + 1,
+				Steps:       step + 1,
 			}, nil
 		}
 
@@ -257,7 +354,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{}, errors.New("loop: tool calls requested but no executor configured")
 		}
 
-		if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, false); err != nil {
+		if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, false); err != nil {
 			return Result{}, err
 		}
 
@@ -308,7 +405,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				return Result{}, err
 			}
 		}
-		turn++
+		toolTurns++
+		step++
 	}
 }
 
@@ -354,6 +452,114 @@ func (r *Runner) appendHistory(ctx context.Context, msg message.AgentMessage) er
 		return nil
 	}
 	return r.cfg.HistoryStore.Append(ctx, msg)
+}
+
+func (r *Runner) appendMessages(ctx context.Context, messages []message.AgentMessage, history *[]message.AgentMessage) error {
+	for _, msg := range messages {
+		*history = append(*history, msg)
+		if err := r.appendHistory(ctx, msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runner) beforeNextModelCall(ctx context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+	if r.cfg.BeforeNextModelCall == nil {
+		return nil, nil
+	}
+	in.History = cloneAgentMessages(in.History)
+	in.Tools = cloneToolDefinitions(in.Tools)
+	in.ToolCalls = cloneToolCalls(in.ToolCalls)
+	in.ToolResults = cloneToolResults(in.ToolResults)
+	return r.cfg.BeforeNextModelCall.BeforeNextModelCall(ctx, in)
+}
+
+func cloneAgentMessages(messages []message.AgentMessage) []message.AgentMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]message.AgentMessage, len(messages))
+	for i, msg := range messages {
+		out[i] = msg
+		out[i].ToolCalls = cloneToolCalls(msg.ToolCalls)
+		out[i].ToolResults = cloneToolResults(msg.ToolResults)
+		out[i].InlineData = cloneInlineData(msg.InlineData)
+	}
+	return out
+}
+
+func cloneToolDefinitions(defs []agentic.ToolDefinition) []agentic.ToolDefinition {
+	if len(defs) == 0 {
+		return nil
+	}
+	out := make([]agentic.ToolDefinition, len(defs))
+	for i, def := range defs {
+		out[i] = def
+		out[i].InputSchema = cloneBytes(def.InputSchema)
+		out[i].AllowedCallers = append([]string(nil), def.AllowedCallers...)
+		if len(def.Examples) > 0 {
+			out[i].Examples = make([]agentic.ToolExample, len(def.Examples))
+			for j, ex := range def.Examples {
+				out[i].Examples[j] = ex
+				out[i].Examples[j].Input = cloneBytes(ex.Input)
+				out[i].Examples[j].Output = cloneBytes(ex.Output)
+			}
+		}
+	}
+	return out
+}
+
+func cloneToolCalls(calls []agentic.ToolCall) []agentic.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]agentic.ToolCall, len(calls))
+	for i, call := range calls {
+		out[i] = call
+		out[i].Input = cloneBytes(call.Input)
+		if call.Caller != nil {
+			caller := *call.Caller
+			out[i].Caller = &caller
+		}
+	}
+	return out
+}
+
+func cloneToolResults(results []agentic.ToolResult) []agentic.ToolResult {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]agentic.ToolResult, len(results))
+	for i, result := range results {
+		out[i] = result
+		out[i].Output = cloneBytes(result.Output)
+		out[i].InlineData = cloneInlineData(result.InlineData)
+		if result.Error != nil {
+			toolErr := *result.Error
+			out[i].Error = &toolErr
+		}
+	}
+	return out
+}
+
+func cloneInlineData(data []agentic.InlineData) []agentic.InlineData {
+	if len(data) == 0 {
+		return nil
+	}
+	out := make([]agentic.InlineData, len(data))
+	for i, item := range data {
+		out[i] = item
+		out[i].Data = cloneBytes(item.Data)
+	}
+	return out
+}
+
+func cloneBytes[T ~[]byte](data T) T {
+	if len(data) == 0 {
+		return nil
+	}
+	return T(append([]byte(nil), data...))
 }
 
 func (r *Runner) applyCompaction(ctx context.Context, messages []message.AgentMessage) (string, []message.AgentMessage, error) {

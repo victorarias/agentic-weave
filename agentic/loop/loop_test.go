@@ -395,6 +395,247 @@ func TestRunReturnsErrorWhenHistoryReplaceFails(t *testing.T) {
 	}
 }
 
+func TestRunBeforeNextModelCallAppendsHookMessagesBeforeDecide(t *testing.T) {
+	store := history.NewMemoryStore()
+	decider := &capturingDecider{replies: []string{"done"}}
+	hookReturned := false
+	runner := New(Config{
+		Decider:      decider,
+		HistoryStore: store,
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+			if hookReturned {
+				return nil, nil
+			}
+			hookReturned = true
+			if in.Turn != 0 {
+				t.Fatalf("expected turn 0, got %d", in.Turn)
+			}
+			if len(in.History) != 1 || in.History[0].Content != "hi" {
+				t.Fatalf("expected initial user message in hook history, got %#v", in.History)
+			}
+			in.History[0].Content = "mutated by hook"
+			return []message.AgentMessage{{Role: message.RoleUser, Content: "steer now"}}, nil
+		}),
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reply != "done" {
+		t.Fatalf("unexpected reply: %q", result.Reply)
+	}
+	if len(decider.inputs) != 1 {
+		t.Fatalf("expected one decide call, got %d", len(decider.inputs))
+	}
+	gotHistory := decider.inputs[0].History
+	if len(gotHistory) != 2 || gotHistory[0].Content != "hi" || gotHistory[1].Content != "steer now" {
+		t.Fatalf("expected hook message appended before decide, got %#v", gotHistory)
+	}
+
+	stored, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load store: %v", err)
+	}
+	if len(stored) != 3 || stored[1].Content != "steer now" || stored[2].Content != "done" {
+		t.Fatalf("expected hook message persisted before final assistant, got %#v", stored)
+	}
+}
+
+func TestRunBeforeNextModelCallDeepCopiesHookInput(t *testing.T) {
+	decider := &nestedHistoryAssertingDecider{t: t}
+	hookReturned := false
+	runner := New(Config{
+		Decider:  decider,
+		Executor: schemaExecutor{},
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+			if hookReturned {
+				return nil, nil
+			}
+			hookReturned = true
+
+			in.History[0].ToolCalls[0].Input[0] = 'X'
+			in.History[0].ToolCalls[0].Caller.Type = "mutated"
+			in.History[1].ToolResults[0].Output[0] = 'X'
+			in.History[1].ToolResults[0].InlineData[0].Data[0] = 9
+			in.History[1].ToolResults[0].Error.Message = "mutated"
+			in.Tools[0].InputSchema[0] = 'X'
+			in.Tools[0].Examples[0].Input[0] = 'X'
+			in.Tools[0].Examples[0].Output[0] = 'X'
+			in.ToolCalls[0].Input[0] = 'X'
+			in.ToolResults[0].Output[0] = 'X'
+			return nil, nil
+		}),
+	})
+
+	_, err := runner.Run(context.Background(), Request{
+		UserMessage: "hi",
+		History: []message.AgentMessage{
+			{
+				Role: message.RoleAssistant,
+				ToolCalls: []agentic.ToolCall{{
+					ID:     "prior-1",
+					Name:   "prior",
+					Input:  json.RawMessage(`{"a":1}`),
+					Caller: &agentic.ToolCaller{Type: "original"},
+				}},
+			},
+			{
+				Role: message.RoleTool,
+				ToolResults: []agentic.ToolResult{{
+					ID:         "prior-1",
+					Name:       "prior",
+					Output:     json.RawMessage(`{"ok":true}`),
+					InlineData: []agentic.InlineData{{MIMEType: "image/png", Data: []byte{1, 2, 3}}},
+					Error:      &agentic.ToolError{Message: "original"},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunBeforeNextModelCallContinuesAfterFinalReplyWhenHookReturnsMessages(t *testing.T) {
+	decider := &capturingDecider{replies: []string{"first reply", "second reply"}}
+	hookCalls := 0
+	runner := New(Config{
+		Decider: decider,
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+			hookCalls++
+			if hookCalls == 2 {
+				last := in.History[len(in.History)-1]
+				if last.Role != message.RoleAssistant || last.Content != "first reply" {
+					t.Fatalf("expected post-final hook history to include pending assistant reply, got %#v", last)
+				}
+				return []message.AgentMessage{{Role: message.RoleUser, Content: "steer after first reply"}}, nil
+			}
+			return nil, nil
+		}),
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reply != "second reply" {
+		t.Fatalf("expected second reply, got %q", result.Reply)
+	}
+	if result.Steps != 2 {
+		t.Fatalf("expected two decide calls, got %d", result.Steps)
+	}
+	if len(decider.inputs) != 2 {
+		t.Fatalf("expected two captured inputs, got %d", len(decider.inputs))
+	}
+
+	secondHistory := decider.inputs[1].History
+	if len(secondHistory) != 3 {
+		t.Fatalf("expected user, first assistant, steer before second decide; got %#v", secondHistory)
+	}
+	if secondHistory[1].Role != message.RoleAssistant || secondHistory[1].Content != "first reply" {
+		t.Fatalf("expected first assistant reply to remain in history, got %#v", secondHistory[1])
+	}
+	if secondHistory[2].Role != message.RoleUser || secondHistory[2].Content != "steer after first reply" {
+		t.Fatalf("expected steering message before second decide, got %#v", secondHistory[2])
+	}
+}
+
+func TestRunBeforeNextModelCallDoesNotSpendToolBudget(t *testing.T) {
+	decider := &replyThenToolDecider{}
+	hookCalls := 0
+	runner := New(Config{
+		Decider:  decider,
+		Executor: stubExecutor{},
+		MaxTurns: 1,
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+			hookCalls++
+			if hookCalls == 2 {
+				if !in.CanContinue {
+					t.Fatal("expected continuation budget after first reply")
+				}
+				return []message.AgentMessage{{Role: message.RoleUser, Content: "steer into tools"}}, nil
+			}
+			return nil, nil
+		}),
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reply != "done" {
+		t.Fatalf("expected final reply, got %q", result.Reply)
+	}
+	if result.Exhausted {
+		t.Fatal("expected hook-only continuation not to exhaust tool budget")
+	}
+	if result.Steps != 3 {
+		t.Fatalf("expected first reply, tool decision, final reply; got %d steps", result.Steps)
+	}
+	if len(result.ToolResults) != 1 {
+		t.Fatalf("expected tool call after steering to execute, got %d results", len(result.ToolResults))
+	}
+}
+
+func TestRunBeforeNextModelCallStopsRogueHookAtContinuationLimit(t *testing.T) {
+	decider := &capturingDecider{replies: []string{"first reply", "second reply", "third reply"}}
+	hookCalls := 0
+	sawContinuationBlocked := false
+	runner := New(Config{
+		Decider:  decider,
+		MaxTurns: 1,
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+			hookCalls++
+			if !in.CanContinue {
+				sawContinuationBlocked = true
+			}
+			if hookCalls%2 == 0 {
+				return []message.AgentMessage{{Role: message.RoleUser, Content: "keep going"}}, nil
+			}
+			return nil, nil
+		}),
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reply != "second reply" {
+		t.Fatalf("expected second reply, got %q", result.Reply)
+	}
+	if !result.Exhausted {
+		t.Fatal("expected exhausted result when hook continuation reaches MaxTurns")
+	}
+	if result.Steps != 2 {
+		t.Fatalf("expected two decide calls, got %d", result.Steps)
+	}
+	if len(decider.inputs) != 2 {
+		t.Fatalf("expected hook to stop before a third decide call, got %d", len(decider.inputs))
+	}
+	if hookCalls != 4 {
+		t.Fatalf("expected final hook call to expose blocked continuation budget, got %d calls", hookCalls)
+	}
+	if !sawContinuationBlocked {
+		t.Fatal("expected hook input to report no continuation budget")
+	}
+}
+
+func TestRunBeforeNextModelCallReturnsError(t *testing.T) {
+	hookErr := errors.New("hook failed")
+	runner := New(Config{
+		Decider: &replyDecider{reply: "done"},
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(context.Context, BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+			return nil, hookErr
+		}),
+	})
+
+	_, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if !errors.Is(err, hookErr) {
+		t.Fatalf("expected hook error, got %v", err)
+	}
+}
+
 type alwaysCallToolDecider struct{}
 
 func (d *alwaysCallToolDecider) Decide(ctx context.Context, in Input) (Decision, error) {
@@ -412,6 +653,97 @@ type replyDecider struct {
 
 func (r *replyDecider) Decide(ctx context.Context, in Input) (Decision, error) {
 	return Decision{Reply: r.reply}, nil
+}
+
+type capturingDecider struct {
+	replies []string
+	inputs  []Input
+}
+
+func (d *capturingDecider) Decide(_ context.Context, in Input) (Decision, error) {
+	in.History = append([]message.AgentMessage(nil), in.History...)
+	in.Tools = append([]agentic.ToolDefinition(nil), in.Tools...)
+	in.ToolCalls = append([]agentic.ToolCall(nil), in.ToolCalls...)
+	in.ToolResults = append([]agentic.ToolResult(nil), in.ToolResults...)
+	d.inputs = append(d.inputs, in)
+	if len(d.replies) == 0 {
+		return Decision{Reply: "done"}, nil
+	}
+	reply := d.replies[0]
+	d.replies = d.replies[1:]
+	return Decision{Reply: reply}, nil
+}
+
+type replyThenToolDecider struct {
+	calls int
+}
+
+func (d *replyThenToolDecider) Decide(_ context.Context, _ Input) (Decision, error) {
+	d.calls++
+	switch d.calls {
+	case 1:
+		return Decision{Reply: "first reply"}, nil
+	case 2:
+		return Decision{ToolCalls: []agentic.ToolCall{{Name: "echo"}}}, nil
+	default:
+		return Decision{Reply: "done"}, nil
+	}
+}
+
+type nestedHistoryAssertingDecider struct {
+	t *testing.T
+}
+
+func (d *nestedHistoryAssertingDecider) Decide(_ context.Context, in Input) (Decision, error) {
+	if got := string(in.History[0].ToolCalls[0].Input); got != `{"a":1}` {
+		d.t.Fatalf("expected original history tool input, got %q", got)
+	}
+	if got := in.History[0].ToolCalls[0].Caller.Type; got != "original" {
+		d.t.Fatalf("expected original caller type, got %q", got)
+	}
+	if got := string(in.History[1].ToolResults[0].Output); got != `{"ok":true}` {
+		d.t.Fatalf("expected original history tool output, got %q", got)
+	}
+	if got := in.History[1].ToolResults[0].InlineData[0].Data[0]; got != 1 {
+		d.t.Fatalf("expected original inline data, got %d", got)
+	}
+	if got := in.History[1].ToolResults[0].Error.Message; got != "original" {
+		d.t.Fatalf("expected original tool error, got %q", got)
+	}
+	if got := string(in.Tools[0].InputSchema); got != `{"type":"object"}` {
+		d.t.Fatalf("expected original tool schema, got %q", got)
+	}
+	if got := string(in.Tools[0].Examples[0].Input); got != `{"input":true}` {
+		d.t.Fatalf("expected original tool example input, got %q", got)
+	}
+	if got := string(in.Tools[0].Examples[0].Output); got != `{"output":true}` {
+		d.t.Fatalf("expected original tool example output, got %q", got)
+	}
+	if got := string(in.ToolCalls[0].Input); got != `{"a":1}` {
+		d.t.Fatalf("expected original extracted tool input, got %q", got)
+	}
+	if got := string(in.ToolResults[0].Output); got != `{"ok":true}` {
+		d.t.Fatalf("expected original extracted tool output, got %q", got)
+	}
+	return Decision{Reply: "done"}, nil
+}
+
+type schemaExecutor struct{}
+
+func (schemaExecutor) ListTools(context.Context) ([]agentic.ToolDefinition, error) {
+	return []agentic.ToolDefinition{{
+		Name:        "schema",
+		Description: "schema tool",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Examples: []agentic.ToolExample{{
+			Input:  json.RawMessage(`{"input":true}`),
+			Output: json.RawMessage(`{"output":true}`),
+		}},
+	}}, nil
+}
+
+func (schemaExecutor) Execute(context.Context, agentic.ToolCall) (agentic.ToolResult, error) {
+	return agentic.ToolResult{}, nil
 }
 
 type recordingCompactor struct {
