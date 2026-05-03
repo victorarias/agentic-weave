@@ -107,6 +107,10 @@ func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (D
 		UserMessage:  "",
 		History:      in.History,
 		Tools:        in.Tools,
+		// The loop has already appended the current user turn, including
+		// inline data, into History. Passing UserInlineData here would send
+		// the same images twice for providers that also accept current-turn
+		// inline data directly.
 	})
 	if err != nil {
 		return Decision{}, err, false

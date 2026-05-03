@@ -53,8 +53,51 @@ func TestAppendHistoryToolResultWithInlineData(t *testing.T) {
 	if !contains(rawStr, "call-img") {
 		t.Errorf("expected tool_use_id in output, got: %s", rawStr)
 	}
+	if !contains(rawStr, "Here is the image") {
+		t.Errorf("expected successful tool result text in output, got: %s", rawStr)
+	}
 	if !contains(rawStr, "base64") {
 		t.Errorf("expected base64 source type in output, got: %s", rawStr)
+	}
+}
+
+func TestAppendHistoryToolResultWithInlineDataAndEmptyOutputKeepsTextPart(t *testing.T) {
+	history := []message.AgentMessage{
+		{
+			Role: message.RoleAssistant,
+			ToolCalls: []agentic.ToolCall{
+				{ID: "call-img-empty", Name: "evaluate_image", Input: json.RawMessage(`{"ref":"img-1"}`)},
+			},
+		},
+		{
+			Role: message.RoleTool,
+			ToolResults: []agentic.ToolResult{
+				{
+					ID:   "call-img-empty",
+					Name: "evaluate_image",
+					InlineData: []agentic.InlineData{
+						{MIMEType: "image/png", Data: []byte("fake-png-data")},
+					},
+				},
+			},
+		},
+	}
+
+	messages := appendHistory(nil, history)
+
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(messages))
+	}
+	raw, err := json.Marshal(messages[1])
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	rawStr := string(raw)
+	if !contains(rawStr, `"text":"null"`) {
+		t.Errorf("expected fallback null text part in output, got: %s", rawStr)
+	}
+	if !contains(rawStr, "image/png") {
+		t.Errorf("expected image/png media type in serialized output, got: %s", rawStr)
 	}
 }
 
@@ -84,6 +127,50 @@ func TestAppendHistoryToolResultWithoutInlineData(t *testing.T) {
 	_, err := json.Marshal(messages[1])
 	if err != nil {
 		t.Fatalf("marshal error: %v", err)
+	}
+}
+
+func TestAppendHistoryUserInlineData(t *testing.T) {
+	history := []message.AgentMessage{
+		{
+			Role:       message.RoleUser,
+			Content:    "Describe this image",
+			InlineData: []agentic.InlineData{{MIMEType: "image/png", Data: []byte("fake-png-data")}},
+		},
+	}
+
+	messages := appendHistory(nil, history)
+
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	raw, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	rawStr := string(raw)
+	if !contains(rawStr, "Describe this image") {
+		t.Errorf("expected text content in serialized output, got: %s", rawStr)
+	}
+	if !contains(rawStr, "image/png") {
+		t.Errorf("expected image/png media type in serialized output, got: %s", rawStr)
+	}
+	if !contains(rawStr, "base64") {
+		t.Errorf("expected base64 source type in output, got: %s", rawStr)
+	}
+}
+
+func TestUserMessageParamAllowsImageOnly(t *testing.T) {
+	msg, ok := userMessageParam("", []agentic.InlineData{{MIMEType: "image/jpeg", Data: []byte("jpg")}})
+	if !ok {
+		t.Fatal("expected image-only user message")
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if !contains(string(raw), "image/jpeg") {
+		t.Fatalf("expected image/jpeg payload, got %s", string(raw))
 	}
 }
 

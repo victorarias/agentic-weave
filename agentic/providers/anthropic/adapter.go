@@ -24,6 +24,7 @@ func (a *StreamerAdapter) Stream(ctx context.Context, input providers.Input) (<-
 		UserMessage:      input.UserMessage,
 		History:          input.History,
 		Tools:            input.Tools,
+		UserInlineData:   input.UserInlineData,
 		MaxTokens:        input.MaxTokens,
 		Temperature:      input.Temperature,
 		OutputJSONSchema: input.OutputJSONSchema,

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -10,7 +11,7 @@ import (
 )
 
 func TestBuildMessages_SystemPrompt(t *testing.T) {
-	msgs, reasonings := buildMessages("You are helpful.", nil, "Hello")
+	msgs, reasonings := buildMessages("You are helpful.", nil, "Hello", nil)
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
@@ -26,7 +27,7 @@ func TestBuildMessages_History(t *testing.T) {
 		{Role: message.RoleTool, ToolResults: []agentic.ToolResult{{ID: "tc1", Output: []byte(`"ok"`)}}},
 		{Role: message.RoleSystem, Content: "Summary of conversation so far."},
 	}
-	msgs, reasonings := buildMessages("system", history, "Follow up")
+	msgs, reasonings := buildMessages("system", history, "Follow up", nil)
 	// system + 4 history + 1 user = 6
 	if len(msgs) != 6 {
 		t.Fatalf("expected 6 messages, got %d", len(msgs))
@@ -48,7 +49,7 @@ func TestBuildMessages_AssistantWithToolCalls(t *testing.T) {
 		},
 		{Role: message.RoleTool, ToolResults: []agentic.ToolResult{{ID: "tc1", Output: []byte(`"Sunny"`)}}},
 	}
-	msgs, reasonings := buildMessages("", history, "Thanks")
+	msgs, reasonings := buildMessages("", history, "Thanks", nil)
 	// 3 history + 1 user = 4
 	if len(msgs) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(msgs))
@@ -65,7 +66,7 @@ func TestBuildMessages_ReasoningContentAlignedToAssistantSlot(t *testing.T) {
 		{Role: message.RoleUser, Content: "Now 3+3"},
 		{Role: message.RoleAssistant, Content: "6"},
 	}
-	msgs, reasonings := buildMessages("", history, "again?")
+	msgs, reasonings := buildMessages("", history, "again?", nil)
 	if len(msgs) != len(reasonings) {
 		t.Fatalf("misaligned: %d msgs vs %d reasonings", len(msgs), len(reasonings))
 	}
@@ -94,6 +95,51 @@ func TestBuildMessages_ReasoningContentAlignedToAssistantSlot(t *testing.T) {
 	}
 	if withReasoning != 1 || withoutReasoning != 1 {
 		t.Errorf("expected 1 assistant w/ reasoning + 1 w/o, got %d / %d", withReasoning, withoutReasoning)
+	}
+}
+
+func TestBuildMessages_UserInlineData(t *testing.T) {
+	msgs, reasonings := buildMessages("", nil, "Describe this", []agentic.InlineData{
+		{MIMEType: "image/png", Data: []byte("fake-png-data")},
+	})
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if len(reasonings) != len(msgs) {
+		t.Fatalf("reasonings slice must align with messages: got %d vs %d", len(reasonings), len(msgs))
+	}
+	raw, err := json.Marshal(msgs[0])
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	rawStr := string(raw)
+	if !strings.Contains(rawStr, `"type":"image_url"`) {
+		t.Fatalf("expected image_url content part, got %s", rawStr)
+	}
+	if !strings.Contains(rawStr, "data:image/png;base64,ZmFrZS1wbmctZGF0YQ==") {
+		t.Fatalf("expected data URL image payload, got %s", rawStr)
+	}
+}
+
+func TestBuildMessages_HistoryUserInlineData(t *testing.T) {
+	history := []message.AgentMessage{
+		{
+			Role:       message.RoleUser,
+			Content:    "Earlier image",
+			InlineData: []agentic.InlineData{{MIMEType: "image/jpeg", Data: []byte("jpeg")}},
+		},
+	}
+	msgs, _ := buildMessages("", history, "", nil)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	raw, err := json.Marshal(msgs[0])
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	rawStr := string(raw)
+	if !strings.Contains(rawStr, "data:image/jpeg;base64,anBlZw==") {
+		t.Fatalf("expected historical image payload, got %s", rawStr)
 	}
 }
 

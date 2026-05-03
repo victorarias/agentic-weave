@@ -2,6 +2,14 @@
 
 This file tracks current work items and progress.
 
+## Active Initiative: User message image forwarding
+
+### Family: multimodal-input
+- [ ] PR: forward user inline images through all providers
+  - Description: Carry `InlineData` from loop/provider inputs into provider requests for user messages and history.
+  - Progress log:
+    - [x] 2026-05-02 23:35 CEST — implemented provider contract and serialization update for Anthropic, OpenAI, and Vertex coverage
+
 ## Active Initiative: Heartbeat cache breakpoints (branch family: fix-heartbeat-cache-*)
 
 ### Family: heartbeat-cache

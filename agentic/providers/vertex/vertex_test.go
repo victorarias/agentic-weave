@@ -747,6 +747,59 @@ func TestBuildRequestAddsUserMessageWhenProvided(t *testing.T) {
 	}
 }
 
+func TestBuildRequestIncludesUserInlineData(t *testing.T) {
+	imageBytes := []byte("fake-png-data")
+	client := &Client{
+		project:     "test-project",
+		location:    "us-central1",
+		model:       "gemini-pro",
+		temperature: 0.5,
+		maxTokens:   1024,
+	}
+
+	reqBody, err := client.buildRequest(Input{
+		UserMessage: "describe this",
+		UserInlineData: []agentic.InlineData{
+			{MIMEType: "image/png", Data: imageBytes},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+
+	var req vertexRequest
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+	if len(req.Contents) != 1 {
+		t.Fatalf("expected 1 content, got %d", len(req.Contents))
+	}
+	content := req.Contents[0]
+	if content.Role != "user" {
+		t.Fatalf("expected user role, got %q", content.Role)
+	}
+	if len(content.Parts) != 2 {
+		t.Fatalf("expected text + inlineData parts, got %#v", content.Parts)
+	}
+	if content.Parts[0].Text != "describe this" {
+		t.Fatalf("unexpected text part: %#v", content.Parts[0])
+	}
+	inlinePart := content.Parts[1]
+	if inlinePart.InlineData == nil {
+		t.Fatal("expected inline data part")
+	}
+	if inlinePart.InlineData.MIMEType != "image/png" {
+		t.Fatalf("expected image/png MIME type, got %q", inlinePart.InlineData.MIMEType)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(inlinePart.InlineData.Data)
+	if err != nil {
+		t.Fatalf("decode inline data: %v", err)
+	}
+	if string(decoded) != string(imageBytes) {
+		t.Fatalf("decoded image data mismatch: got %q want %q", decoded, imageBytes)
+	}
+}
+
 func TestAppendHistoryToolResultWithInlineData(t *testing.T) {
 	imageBytes := []byte("fake-png-data")
 	history := []message.AgentMessage{

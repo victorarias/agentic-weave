@@ -39,7 +39,8 @@ type ToolCall struct {
 	ThoughtSignature string          `json:"thought_signature,omitempty"`
 }
 
-// InlineData carries binary content (e.g., images) alongside a tool result.
+// InlineData carries binary content (e.g., images) alongside user messages or
+// tool results.
 type InlineData struct {
 	MIMEType string `json:"mime_type"`
 	Data     []byte `json:"data"`
