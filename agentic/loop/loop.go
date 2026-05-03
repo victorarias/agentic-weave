@@ -462,11 +462,98 @@ func (r *Runner) beforeNextModelCall(ctx context.Context, in BeforeNextModelCall
 	if r.cfg.BeforeNextModelCall == nil {
 		return nil, nil
 	}
-	in.History = append([]message.AgentMessage(nil), in.History...)
-	in.Tools = append([]agentic.ToolDefinition(nil), in.Tools...)
-	in.ToolCalls = append([]agentic.ToolCall(nil), in.ToolCalls...)
-	in.ToolResults = append([]agentic.ToolResult(nil), in.ToolResults...)
+	in.History = cloneAgentMessages(in.History)
+	in.Tools = cloneToolDefinitions(in.Tools)
+	in.ToolCalls = cloneToolCalls(in.ToolCalls)
+	in.ToolResults = cloneToolResults(in.ToolResults)
 	return r.cfg.BeforeNextModelCall.BeforeNextModelCall(ctx, in)
+}
+
+func cloneAgentMessages(messages []message.AgentMessage) []message.AgentMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]message.AgentMessage, len(messages))
+	for i, msg := range messages {
+		out[i] = msg
+		out[i].ToolCalls = cloneToolCalls(msg.ToolCalls)
+		out[i].ToolResults = cloneToolResults(msg.ToolResults)
+		out[i].InlineData = cloneInlineData(msg.InlineData)
+	}
+	return out
+}
+
+func cloneToolDefinitions(defs []agentic.ToolDefinition) []agentic.ToolDefinition {
+	if len(defs) == 0 {
+		return nil
+	}
+	out := make([]agentic.ToolDefinition, len(defs))
+	for i, def := range defs {
+		out[i] = def
+		out[i].InputSchema = cloneBytes(def.InputSchema)
+		out[i].AllowedCallers = append([]string(nil), def.AllowedCallers...)
+		if len(def.Examples) > 0 {
+			out[i].Examples = make([]agentic.ToolExample, len(def.Examples))
+			for j, ex := range def.Examples {
+				out[i].Examples[j] = ex
+				out[i].Examples[j].Input = cloneBytes(ex.Input)
+				out[i].Examples[j].Output = cloneBytes(ex.Output)
+			}
+		}
+	}
+	return out
+}
+
+func cloneToolCalls(calls []agentic.ToolCall) []agentic.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]agentic.ToolCall, len(calls))
+	for i, call := range calls {
+		out[i] = call
+		out[i].Input = cloneBytes(call.Input)
+		if call.Caller != nil {
+			caller := *call.Caller
+			out[i].Caller = &caller
+		}
+	}
+	return out
+}
+
+func cloneToolResults(results []agentic.ToolResult) []agentic.ToolResult {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]agentic.ToolResult, len(results))
+	for i, result := range results {
+		out[i] = result
+		out[i].Output = cloneBytes(result.Output)
+		out[i].InlineData = cloneInlineData(result.InlineData)
+		if result.Error != nil {
+			toolErr := *result.Error
+			out[i].Error = &toolErr
+		}
+	}
+	return out
+}
+
+func cloneInlineData(data []agentic.InlineData) []agentic.InlineData {
+	if len(data) == 0 {
+		return nil
+	}
+	out := make([]agentic.InlineData, len(data))
+	for i, item := range data {
+		out[i] = item
+		out[i].Data = cloneBytes(item.Data)
+	}
+	return out
+}
+
+func cloneBytes[T ~[]byte](data T) T {
+	if len(data) == 0 {
+		return nil
+	}
+	return T(append([]byte(nil), data...))
 }
 
 func (r *Runner) applyCompaction(ctx context.Context, messages []message.AgentMessage) (string, []message.AgentMessage, error) {

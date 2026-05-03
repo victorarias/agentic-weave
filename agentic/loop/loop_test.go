@@ -442,6 +442,61 @@ func TestRunBeforeNextModelCallAppendsHookMessagesBeforeDecide(t *testing.T) {
 	}
 }
 
+func TestRunBeforeNextModelCallDeepCopiesHookInput(t *testing.T) {
+	decider := &nestedHistoryAssertingDecider{t: t}
+	hookReturned := false
+	runner := New(Config{
+		Decider:  decider,
+		Executor: schemaExecutor{},
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+			if hookReturned {
+				return nil, nil
+			}
+			hookReturned = true
+
+			in.History[0].ToolCalls[0].Input[0] = 'X'
+			in.History[0].ToolCalls[0].Caller.Type = "mutated"
+			in.History[1].ToolResults[0].Output[0] = 'X'
+			in.History[1].ToolResults[0].InlineData[0].Data[0] = 9
+			in.History[1].ToolResults[0].Error.Message = "mutated"
+			in.Tools[0].InputSchema[0] = 'X'
+			in.Tools[0].Examples[0].Input[0] = 'X'
+			in.Tools[0].Examples[0].Output[0] = 'X'
+			in.ToolCalls[0].Input[0] = 'X'
+			in.ToolResults[0].Output[0] = 'X'
+			return nil, nil
+		}),
+	})
+
+	_, err := runner.Run(context.Background(), Request{
+		UserMessage: "hi",
+		History: []message.AgentMessage{
+			{
+				Role: message.RoleAssistant,
+				ToolCalls: []agentic.ToolCall{{
+					ID:     "prior-1",
+					Name:   "prior",
+					Input:  json.RawMessage(`{"a":1}`),
+					Caller: &agentic.ToolCaller{Type: "original"},
+				}},
+			},
+			{
+				Role: message.RoleTool,
+				ToolResults: []agentic.ToolResult{{
+					ID:         "prior-1",
+					Name:       "prior",
+					Output:     json.RawMessage(`{"ok":true}`),
+					InlineData: []agentic.InlineData{{MIMEType: "image/png", Data: []byte{1, 2, 3}}},
+					Error:      &agentic.ToolError{Message: "original"},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunBeforeNextModelCallContinuesAfterFinalReplyWhenHookReturnsMessages(t *testing.T) {
 	decider := &capturingDecider{replies: []string{"first reply", "second reply"}}
 	hookCalls := 0
@@ -629,6 +684,62 @@ func (d *replyThenToolDecider) Decide(_ context.Context, _ Input) (Decision, err
 	default:
 		return Decision{Reply: "done"}, nil
 	}
+}
+
+type nestedHistoryAssertingDecider struct {
+	t *testing.T
+}
+
+func (d *nestedHistoryAssertingDecider) Decide(_ context.Context, in Input) (Decision, error) {
+	if got := string(in.History[0].ToolCalls[0].Input); got != `{"a":1}` {
+		d.t.Fatalf("expected original history tool input, got %q", got)
+	}
+	if got := in.History[0].ToolCalls[0].Caller.Type; got != "original" {
+		d.t.Fatalf("expected original caller type, got %q", got)
+	}
+	if got := string(in.History[1].ToolResults[0].Output); got != `{"ok":true}` {
+		d.t.Fatalf("expected original history tool output, got %q", got)
+	}
+	if got := in.History[1].ToolResults[0].InlineData[0].Data[0]; got != 1 {
+		d.t.Fatalf("expected original inline data, got %d", got)
+	}
+	if got := in.History[1].ToolResults[0].Error.Message; got != "original" {
+		d.t.Fatalf("expected original tool error, got %q", got)
+	}
+	if got := string(in.Tools[0].InputSchema); got != `{"type":"object"}` {
+		d.t.Fatalf("expected original tool schema, got %q", got)
+	}
+	if got := string(in.Tools[0].Examples[0].Input); got != `{"input":true}` {
+		d.t.Fatalf("expected original tool example input, got %q", got)
+	}
+	if got := string(in.Tools[0].Examples[0].Output); got != `{"output":true}` {
+		d.t.Fatalf("expected original tool example output, got %q", got)
+	}
+	if got := string(in.ToolCalls[0].Input); got != `{"a":1}` {
+		d.t.Fatalf("expected original extracted tool input, got %q", got)
+	}
+	if got := string(in.ToolResults[0].Output); got != `{"ok":true}` {
+		d.t.Fatalf("expected original extracted tool output, got %q", got)
+	}
+	return Decision{Reply: "done"}, nil
+}
+
+type schemaExecutor struct{}
+
+func (schemaExecutor) ListTools(context.Context) ([]agentic.ToolDefinition, error) {
+	return []agentic.ToolDefinition{{
+		Name:        "schema",
+		Description: "schema tool",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Examples: []agentic.ToolExample{{
+			Input:  json.RawMessage(`{"input":true}`),
+			Output: json.RawMessage(`{"output":true}`),
+		}},
+	}}, nil
+}
+
+func (schemaExecutor) Execute(context.Context, agentic.ToolCall) (agentic.ToolResult, error) {
+	return agentic.ToolResult{}, nil
 }
 
 type recordingCompactor struct {
