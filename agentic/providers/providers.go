@@ -15,12 +15,13 @@ import (
 
 // Input represents a provider-agnostic LLM request.
 type Input struct {
-	SystemPrompt string
-	UserMessage  string
-	History      []message.AgentMessage
-	Tools        []agentic.ToolDefinition
-	MaxTokens    int
-	Temperature  *float64
+	SystemPrompt   string
+	UserMessage    string
+	History        []message.AgentMessage
+	Tools          []agentic.ToolDefinition
+	UserInlineData []agentic.InlineData
+	MaxTokens      int
+	Temperature    *float64
 
 	// OutputJSONSchema, if set, instructs the model to produce structured JSON output.
 	OutputJSONSchema json.RawMessage

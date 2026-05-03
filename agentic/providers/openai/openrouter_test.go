@@ -143,6 +143,60 @@ func TestStream_MaxTokensFieldCompletion_SerializesMaxCompletionTokens(t *testin
 	}
 }
 
+func TestStream_UserInlineDataSerializesImageURLParts(t *testing.T) {
+	cs := newCaptureServer(t, minimalDoneSSE())
+	c, err := New(Config{
+		APIKey:         "test",
+		Model:          "test",
+		BaseURL:        cs.server.URL,
+		MaxTokensField: MaxTokensFieldLegacy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainStream(t, c, providers.Input{
+		UserMessage: "describe this",
+		UserInlineData: []agentic.InlineData{
+			{MIMEType: "image/png", Data: []byte("fake-png-data")},
+		},
+	})
+
+	var body struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				ImageURL *struct {
+					URL string `json:"url"`
+				} `json:"image_url"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(cs.bodyRaw, &body); err != nil {
+		t.Fatalf("decode request body: %v body=%s", err, string(cs.bodyRaw))
+	}
+	if len(body.Messages) != 1 {
+		t.Fatalf("expected one user message, got %d body=%s", len(body.Messages), string(cs.bodyRaw))
+	}
+	if body.Messages[0].Role != "user" {
+		t.Fatalf("expected user role, got %q", body.Messages[0].Role)
+	}
+	if len(body.Messages[0].Content) != 2 {
+		t.Fatalf("expected text + image parts, got %#v", body.Messages[0].Content)
+	}
+	if body.Messages[0].Content[0].Type != "text" || body.Messages[0].Content[0].Text != "describe this" {
+		t.Fatalf("unexpected text part: %#v", body.Messages[0].Content[0])
+	}
+	imagePart := body.Messages[0].Content[1]
+	if imagePart.Type != "image_url" || imagePart.ImageURL == nil {
+		t.Fatalf("unexpected image part: %#v", imagePart)
+	}
+	if imagePart.ImageURL.URL != "data:image/png;base64,ZmFrZS1wbmctZGF0YQ==" {
+		t.Fatalf("unexpected image data URL: %q", imagePart.ImageURL.URL)
+	}
+}
+
 func TestStream_NoExtensionsByDefault(t *testing.T) {
 	cs := newCaptureServer(t, minimalDoneSSE())
 	c, err := New(Config{APIKey: "test", Model: "test", BaseURL: cs.server.URL, MaxTokensField: MaxTokensFieldLegacy})

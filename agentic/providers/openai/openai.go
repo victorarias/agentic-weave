@@ -19,6 +19,7 @@ package openai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -227,7 +228,7 @@ func New(cfg Config) (*Client, error) {
 
 // Stream implements providers.Streamer.
 func (c *Client) Stream(ctx context.Context, input providers.Input) (<-chan providers.StreamEvent, error) {
-	messages, reasonings := buildMessages(input.SystemPrompt, input.History, input.UserMessage)
+	messages, reasonings := buildMessages(input.SystemPrompt, input.History, input.UserMessage, input.UserInlineData)
 
 	params := oai.ChatCompletionNewParams{
 		Model:    c.model,
@@ -679,7 +680,7 @@ func responseFormatFromSchema(schemaRaw json.RawMessage) (oai.ChatCompletionNewP
 // slots without one (system prompts, user messages, tool messages, or
 // assistant messages without stored reasoning). Callers use this to round-trip
 // reasoning traces back to providers that require them on multi-turn replay.
-func buildMessages(systemPrompt string, history []message.AgentMessage, userMessage string) ([]oai.ChatCompletionMessageParamUnion, []string) {
+func buildMessages(systemPrompt string, history []message.AgentMessage, userMessage string, userInlineData []agentic.InlineData) ([]oai.ChatCompletionMessageParamUnion, []string) {
 	messages := make([]oai.ChatCompletionMessageParamUnion, 0, len(history)+2)
 	reasonings := make([]string, 0, len(history)+2)
 
@@ -698,8 +699,8 @@ func buildMessages(systemPrompt string, history []message.AgentMessage, userMess
 		msg := history[i]
 		switch msg.Role {
 		case message.RoleUser:
-			if strings.TrimSpace(msg.Content) != "" {
-				appendMsg(oai.UserMessage(msg.Content), "")
+			if userMsg, ok := userMessageParam(msg.Content, msg.InlineData); ok {
+				appendMsg(userMsg, "")
 			}
 
 		case message.RoleAssistant:
@@ -752,11 +753,31 @@ func buildMessages(systemPrompt string, history []message.AgentMessage, userMess
 	}
 
 	// Current user message.
-	if userMsg := strings.TrimSpace(userMessage); userMsg != "" {
-		appendMsg(oai.UserMessage(userMsg), "")
+	if userMsg, ok := userMessageParam(userMessage, userInlineData); ok {
+		appendMsg(userMsg, "")
 	}
 
 	return messages, reasonings
+}
+
+func userMessageParam(content string, inlineData []agentic.InlineData) (oai.ChatCompletionMessageParamUnion, bool) {
+	text := strings.TrimSpace(content)
+	if text == "" && len(inlineData) == 0 {
+		return oai.ChatCompletionMessageParamUnion{}, false
+	}
+	if len(inlineData) == 0 {
+		return oai.UserMessage(text), true
+	}
+	parts := make([]oai.ChatCompletionContentPartUnionParam, 0, 1+len(inlineData))
+	if text != "" {
+		parts = append(parts, oai.TextContentPart(text))
+	}
+	for _, data := range inlineData {
+		parts = append(parts, oai.ImageContentPart(oai.ChatCompletionContentPartImageImageURLParam{
+			URL: "data:" + data.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(data.Data),
+		}))
+	}
+	return oai.UserMessage(parts), true
 }
 
 func toolDefsToOpenAI(tools []agentic.ToolDefinition) []oai.ChatCompletionToolUnionParam {

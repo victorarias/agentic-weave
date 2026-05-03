@@ -166,6 +166,37 @@ func TestStreamingLoopDecider_OnDecisionIncludesUsageAndStep(t *testing.T) {
 	}
 }
 
+func TestStreamingLoopDecider_PreservesHistoryInlineData(t *testing.T) {
+	imageData := []agentic.InlineData{{MIMEType: "image/png", Data: []byte("fake-png-data")}}
+	var captured Input
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		captured = input
+		ch := make(chan StreamEvent, 1)
+		ch <- DoneEvent{StopReason: "end_turn"}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	_, err := decider.Decide(context.Background(), loop.Input{
+		History: []message.AgentMessage{{
+			Role:       message.RoleUser,
+			Content:    "look",
+			InlineData: imageData,
+		}},
+		UserInlineData: imageData,
+	})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if len(captured.UserInlineData) != 0 {
+		t.Fatalf("expected loop adapter not to duplicate current-turn inline data, got %#v", captured.UserInlineData)
+	}
+	if len(captured.History) != 1 || len(captured.History[0].InlineData) != 1 {
+		t.Fatalf("expected history inline data to be preserved, got %#v", captured.History)
+	}
+}
+
 func TestCollectDecision_AccumulatesReasoning(t *testing.T) {
 	ch := make(chan StreamEvent, 4)
 	ch <- ReasoningDeltaEvent{Delta: "thinking..."}

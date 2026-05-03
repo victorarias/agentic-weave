@@ -27,6 +27,7 @@ type Input struct {
 	UserMessage      string
 	History          []message.AgentMessage
 	Tools            []agentic.ToolDefinition
+	UserInlineData   []agentic.InlineData
 	ToolChoice       *ToolChoice
 	OutputJSONSchema json.RawMessage
 	MaxTokens        int
@@ -241,9 +242,8 @@ func NewFromEnv() (*Client, error) {
 func (c *Client) Decide(ctx context.Context, input Input) (Decision, error) {
 	messages := appendHistory(nil, input.History)
 
-	userMessage := strings.TrimSpace(input.UserMessage)
-	if userMessage != "" {
-		messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(userMessage)))
+	if msg, ok := userMessageParam(input.UserMessage, input.UserInlineData); ok {
+		messages = append(messages, msg)
 	}
 
 	req := anthropic.MessageNewParams{
@@ -315,12 +315,8 @@ func appendHistory(messages []anthropic.MessageParam, history []message.AgentMes
 		msg := history[i]
 		switch msg.Role {
 		case message.RoleUser:
-			blocks := make([]anthropic.ContentBlockParamUnion, 0, 1)
-			if strings.TrimSpace(msg.Content) != "" {
-				blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
-			}
-			if len(blocks) > 0 {
-				messages = append(messages, anthropic.NewUserMessage(blocks...))
+			if userMsg, ok := userMessageParam(msg.Content, msg.InlineData); ok {
+				messages = append(messages, userMsg)
 			}
 
 		case message.RoleAssistant:
@@ -367,6 +363,21 @@ func appendHistory(messages []anthropic.MessageParam, history []message.AgentMes
 		}
 	}
 	return messages
+}
+
+func userMessageParam(content string, inlineData []agentic.InlineData) (anthropic.MessageParam, bool) {
+	text := strings.TrimSpace(content)
+	if text == "" && len(inlineData) == 0 {
+		return anthropic.MessageParam{}, false
+	}
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, 1+len(inlineData))
+	if text != "" {
+		blocks = append(blocks, anthropic.NewTextBlock(text))
+	}
+	for _, data := range inlineData {
+		blocks = append(blocks, inlineDataToImageBlock(data))
+	}
+	return anthropic.NewUserMessage(blocks...), true
 }
 
 func parseResponse(msg *anthropic.Message) (string, []agentic.ToolCall) {
@@ -472,14 +483,7 @@ func toolResultToBlock(result agentic.ToolResult, id string) anthropic.ContentBl
 	})
 	for _, data := range result.InlineData {
 		parts = append(parts, anthropic.ToolResultBlockParamContentUnion{
-			OfImage: &anthropic.ImageBlockParam{
-				Source: anthropic.ImageBlockParamSourceUnion{
-					OfBase64: &anthropic.Base64ImageSourceParam{
-						Data:      base64.StdEncoding.EncodeToString(data.Data),
-						MediaType: anthropic.Base64ImageSourceMediaType(data.MIMEType),
-					},
-				},
-			},
+			OfImage: inlineDataToImageBlock(data).OfImage,
 		})
 	}
 	return anthropic.ContentBlockParamUnion{
@@ -487,6 +491,19 @@ func toolResultToBlock(result agentic.ToolResult, id string) anthropic.ContentBl
 			ToolUseID: id,
 			Content:   parts,
 			IsError:   anthropic.Bool(isError),
+		},
+	}
+}
+
+func inlineDataToImageBlock(data agentic.InlineData) anthropic.ContentBlockParamUnion {
+	return anthropic.ContentBlockParamUnion{
+		OfImage: &anthropic.ImageBlockParam{
+			Source: anthropic.ImageBlockParamSourceUnion{
+				OfBase64: &anthropic.Base64ImageSourceParam{
+					Data:      base64.StdEncoding.EncodeToString(data.Data),
+					MediaType: anthropic.Base64ImageSourceMediaType(data.MIMEType),
+				},
+			},
 		},
 	}
 }

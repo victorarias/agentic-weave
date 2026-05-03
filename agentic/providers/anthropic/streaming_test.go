@@ -5,11 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/victorarias/agentic-weave/agentic"
 	"github.com/victorarias/agentic-weave/agentic/message"
+	providerspkg "github.com/victorarias/agentic-weave/agentic/providers"
 )
 
 func TestAppendHistory_ToolRoleBecomesUserToolResultMessage(t *testing.T) {
@@ -70,6 +75,71 @@ func TestAppendHistory_CoalescesConsecutiveToolMessages(t *testing.T) {
 		t.Fatalf("expected coalesced tool results to include both tool ids, got %s", string(raw))
 	}
 }
+
+func TestStream_UserInlineDataInProviderRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `event: error
+data: {"type":"error","error":{"type":"api_error","message":"stop after request capture"}}
+
+`)
+	}))
+	t.Cleanup(server.Close)
+
+	hook := &recordingProviderHook{}
+	client, err := New(Config{
+		APIKey:  "test",
+		Model:   "claude-test",
+		BaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream, err := client.Stream(context.Background(), Input{
+		UserMessage: "describe this",
+		UserInlineData: []agentic.InlineData{
+			{MIMEType: "image/png", Data: []byte("fake-png-data")},
+		},
+		Hook: hook,
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream {
+	}
+
+	if len(hook.requestJSON) == 0 {
+		t.Fatal("expected provider request hook to capture JSON")
+	}
+	raw := string(hook.requestJSON)
+	if !strings.Contains(raw, `"type":"image"`) {
+		t.Fatalf("expected image block in request JSON, got %s", raw)
+	}
+	if !strings.Contains(raw, `"media_type":"image/png"`) {
+		t.Fatalf("expected image/png media type, got %s", raw)
+	}
+	if !strings.Contains(raw, `"data":"ZmFrZS1wbmctZGF0YQ=="`) {
+		t.Fatalf("expected base64 image data, got %s", raw)
+	}
+	if !strings.Contains(raw, `"text":"describe this"`) {
+		t.Fatalf("expected text block, got %s", raw)
+	}
+}
+
+type recordingProviderHook struct {
+	requestJSON []byte
+}
+
+func (h *recordingProviderHook) BeforeProviderRequest(_ context.Context, event providerspkg.ProviderRequestEvent) {
+	h.requestJSON = append([]byte(nil), event.RequestJSON...)
+}
+
+func (h *recordingProviderHook) AfterProviderResponse(context.Context, providerspkg.ProviderResponseEvent) {
+}
+
+func (h *recordingProviderHook) OnProviderError(context.Context, providerspkg.ProviderErrorEvent) {}
 
 func TestCollectDecision_ErrorsOnNilChannel(t *testing.T) {
 	_, err := CollectDecision(nil)

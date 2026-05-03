@@ -57,9 +57,8 @@ func (ErrorEvent) anthropicStreamEvent() {}
 func (c *Client) Stream(ctx context.Context, input Input) (<-chan StreamEvent, error) {
 	messages := appendHistory(nil, input.History)
 
-	userMessage := strings.TrimSpace(input.UserMessage)
-	if userMessage != "" {
-		messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(userMessage)))
+	if msg, ok := userMessageParam(input.UserMessage, input.UserInlineData); ok {
+		messages = append(messages, msg)
 	}
 
 	req := anthropic.MessageNewParams{

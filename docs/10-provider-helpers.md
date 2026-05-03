@@ -41,6 +41,10 @@ if err != nil {
 fmt.Println(decision.Reply)
 ```
 
+`providers.Input.UserInlineData` carries images for the current user message.
+Provider adapters serialize those bytes into the provider's native vision format;
+historical user-message images are carried on `message.AgentMessage.InlineData`.
+
 ## Use a provider in the generic agent loop
 
 ```go
@@ -56,6 +60,11 @@ runner := loop.New(loop.Config{
 The loop decider retries transient stream failures before any output is emitted.
 Once text or tool calls have started streaming, failures are returned directly so
 callers do not accidentally replay a partially visible response.
+
+When used with `loop.Runner`, the current user turn is already present in
+history, including `InlineData`. `NewStreamingLoopDecider` therefore forwards
+images through history and does not duplicate them through
+`providers.Input.UserInlineData`.
 
 ## Use a provider for context compaction
 
