@@ -263,6 +263,23 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		if len(decision.ToolCalls) == 0 {
+			if r.cfg.BeforeNextModelCall != nil && turn >= r.cfg.MaxTurns {
+				if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
+					return Result{}, err
+				}
+				return Result{
+					Reply:       decision.Reply,
+					History:     historyMessages,
+					Summary:     summary,
+					ToolCalls:   toolCalls,
+					ToolResults: toolResults,
+					Usage:       &aggregatedUsage,
+					StopReason:  decision.StopReason,
+					Exhausted:   true,
+					Steps:       turn + 1,
+				}, nil
+			}
+
 			hookMessages, err := r.beforeNextModelCall(ctx, BeforeNextModelCallInput{
 				SystemPrompt: req.SystemPrompt,
 				UserMessage:  userMessage,

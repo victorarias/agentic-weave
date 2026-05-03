@@ -482,6 +482,42 @@ func TestRunBeforeNextModelCallContinuesAfterFinalReplyWhenHookReturnsMessages(t
 	}
 }
 
+func TestRunBeforeNextModelCallStopsAtMaxTurnsAfterFinalReply(t *testing.T) {
+	decider := &capturingDecider{replies: []string{"first reply", "second reply", "third reply"}}
+	hookCalls := 0
+	runner := New(Config{
+		Decider:  decider,
+		MaxTurns: 1,
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, _ BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+			hookCalls++
+			if hookCalls%2 == 0 {
+				return []message.AgentMessage{{Role: message.RoleUser, Content: "keep going"}}, nil
+			}
+			return nil, nil
+		}),
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reply != "second reply" {
+		t.Fatalf("expected second reply, got %q", result.Reply)
+	}
+	if !result.Exhausted {
+		t.Fatal("expected exhausted result when hook continuation reaches MaxTurns")
+	}
+	if result.Steps != 2 {
+		t.Fatalf("expected two decide calls, got %d", result.Steps)
+	}
+	if len(decider.inputs) != 2 {
+		t.Fatalf("expected hook to stop before a third decide call, got %d", len(decider.inputs))
+	}
+	if hookCalls != 3 {
+		t.Fatalf("expected hook not to be called after the final reply at MaxTurns, got %d calls", hookCalls)
+	}
+}
+
 func TestRunBeforeNextModelCallReturnsError(t *testing.T) {
 	hookErr := errors.New("hook failed")
 	runner := New(Config{
