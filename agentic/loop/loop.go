@@ -55,6 +55,7 @@ type BeforeNextModelCallInput struct {
 	ToolCalls    []agentic.ToolCall
 	ToolResults  []agentic.ToolResult
 	Turn         int
+	CanContinue  bool
 }
 
 // Decision is the result of a decision step.
@@ -208,7 +209,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	toolCalls, toolResults := extractToolsFromHistory(historyMessages)
 
 	var aggregatedUsage usage.Usage
-	turn := 0
+	step := 0
+	toolTurns := 0
+	hookContinuations := 0
 	runID := time.Now().UnixNano()
 	for {
 		hookMessages, err := r.beforeNextModelCall(ctx, BeforeNextModelCallInput{
@@ -218,7 +221,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			Tools:        tools,
 			ToolCalls:    toolCalls,
 			ToolResults:  toolResults,
-			Turn:         turn,
+			Turn:         step,
+			CanContinue:  true,
 		})
 		if err != nil {
 			return Result{}, err
@@ -233,7 +237,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		// Only pass user inline data on the first Decide() call — after
 		// that it's already in history as part of the user message.
 		var turnInlineData []agentic.InlineData
-		if turn == 0 {
+		if step == 0 {
 			turnInlineData = req.UserInlineData
 		}
 
@@ -245,7 +249,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			ToolCalls:      toolCalls,
 			ToolResults:    toolResults,
 			UserInlineData: turnInlineData,
-			Turn:           turn,
+			Turn:           step,
 		})
 		if err != nil {
 			return Result{}, err
@@ -255,7 +259,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		for i := range decision.ToolCalls {
 			if decision.ToolCalls[i].ID == "" {
-				decision.ToolCalls[i].ID = fmt.Sprintf("call-%d-%d-%d", runID, turn, i)
+				decision.ToolCalls[i].ID = fmt.Sprintf("call-%d-%d-%d", runID, step, i)
 			}
 			if decision.ToolCalls[i].Caller == nil {
 				decision.ToolCalls[i].Caller = &agentic.ToolCaller{Type: r.cfg.ToolCallerType}
@@ -263,23 +267,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		if len(decision.ToolCalls) == 0 {
-			if r.cfg.BeforeNextModelCall != nil && turn >= r.cfg.MaxTurns {
-				if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
-					return Result{}, err
-				}
-				return Result{
-					Reply:       decision.Reply,
-					History:     historyMessages,
-					Summary:     summary,
-					ToolCalls:   toolCalls,
-					ToolResults: toolResults,
-					Usage:       &aggregatedUsage,
-					StopReason:  decision.StopReason,
-					Exhausted:   true,
-					Steps:       turn + 1,
-				}, nil
-			}
-
+			canContinue := hookContinuations < r.cfg.MaxTurns
 			hookMessages, err := r.beforeNextModelCall(ctx, BeforeNextModelCallInput{
 				SystemPrompt: req.SystemPrompt,
 				UserMessage:  userMessage,
@@ -287,24 +275,42 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				Tools:        tools,
 				ToolCalls:    toolCalls,
 				ToolResults:  toolResults,
-				Turn:         turn,
+				Turn:         step,
+				CanContinue:  canContinue,
 			})
 			if err != nil {
 				return Result{}, err
 			}
 			if len(hookMessages) > 0 {
-				if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, nil, &historyMessages, false); err != nil {
+				if !canContinue {
+					if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
+						return Result{}, err
+					}
+					return Result{
+						Reply:       decision.Reply,
+						History:     historyMessages,
+						Summary:     summary,
+						ToolCalls:   toolCalls,
+						ToolResults: toolResults,
+						Usage:       &aggregatedUsage,
+						StopReason:  decision.StopReason,
+						Exhausted:   true,
+						Steps:       step + 1,
+					}, nil
+				}
+				if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, nil, &historyMessages, false); err != nil {
 					return Result{}, err
 				}
 				if err := r.appendMessages(ctx, hookMessages, &historyMessages); err != nil {
 					return Result{}, err
 				}
 				toolCalls, toolResults = extractToolsFromHistory(historyMessages)
-				turn++
+				hookContinuations++
+				step++
 				continue
 			}
 
-			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
+			if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
 				return Result{}, err
 			}
 
@@ -317,12 +323,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				Usage:       &aggregatedUsage,
 				StopReason:  decision.StopReason,
 				Exhausted:   false,
-				Steps:       turn + 1,
+				Steps:       step + 1,
 			}, nil
 		}
 
-		if turn >= r.cfg.MaxTurns {
-			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, true); err != nil {
+		if toolTurns >= r.cfg.MaxTurns {
+			if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, true); err != nil {
 				return Result{}, err
 			}
 			return Result{
@@ -334,7 +340,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				Usage:       &aggregatedUsage,
 				StopReason:  decision.StopReason,
 				Exhausted:   true,
-				Steps:       turn + 1,
+				Steps:       step + 1,
 			}, nil
 		}
 
@@ -342,7 +348,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			return Result{}, errors.New("loop: tool calls requested but no executor configured")
 		}
 
-		if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, false); err != nil {
+		if err := r.recordAssistantMessage(ctx, step, decision.Reply, decision.Reasoning, decision.ToolCalls, &historyMessages, false); err != nil {
 			return Result{}, err
 		}
 
@@ -393,7 +399,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 				return Result{}, err
 			}
 		}
-		turn++
+		toolTurns++
+		step++
 	}
 }
 

@@ -482,14 +482,55 @@ func TestRunBeforeNextModelCallContinuesAfterFinalReplyWhenHookReturnsMessages(t
 	}
 }
 
-func TestRunBeforeNextModelCallStopsAtMaxTurnsAfterFinalReply(t *testing.T) {
-	decider := &capturingDecider{replies: []string{"first reply", "second reply", "third reply"}}
+func TestRunBeforeNextModelCallDoesNotSpendToolBudget(t *testing.T) {
+	decider := &replyThenToolDecider{}
 	hookCalls := 0
 	runner := New(Config{
 		Decider:  decider,
+		Executor: stubExecutor{},
 		MaxTurns: 1,
-		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, _ BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
 			hookCalls++
+			if hookCalls == 2 {
+				if !in.CanContinue {
+					t.Fatal("expected continuation budget after first reply")
+				}
+				return []message.AgentMessage{{Role: message.RoleUser, Content: "steer into tools"}}, nil
+			}
+			return nil, nil
+		}),
+	})
+
+	result, err := runner.Run(context.Background(), Request{UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reply != "done" {
+		t.Fatalf("expected final reply, got %q", result.Reply)
+	}
+	if result.Exhausted {
+		t.Fatal("expected hook-only continuation not to exhaust tool budget")
+	}
+	if result.Steps != 3 {
+		t.Fatalf("expected first reply, tool decision, final reply; got %d steps", result.Steps)
+	}
+	if len(result.ToolResults) != 1 {
+		t.Fatalf("expected tool call after steering to execute, got %d results", len(result.ToolResults))
+	}
+}
+
+func TestRunBeforeNextModelCallStopsRogueHookAtContinuationLimit(t *testing.T) {
+	decider := &capturingDecider{replies: []string{"first reply", "second reply", "third reply"}}
+	hookCalls := 0
+	sawContinuationBlocked := false
+	runner := New(Config{
+		Decider:  decider,
+		MaxTurns: 1,
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+			hookCalls++
+			if !in.CanContinue {
+				sawContinuationBlocked = true
+			}
 			if hookCalls%2 == 0 {
 				return []message.AgentMessage{{Role: message.RoleUser, Content: "keep going"}}, nil
 			}
@@ -513,8 +554,11 @@ func TestRunBeforeNextModelCallStopsAtMaxTurnsAfterFinalReply(t *testing.T) {
 	if len(decider.inputs) != 2 {
 		t.Fatalf("expected hook to stop before a third decide call, got %d", len(decider.inputs))
 	}
-	if hookCalls != 3 {
-		t.Fatalf("expected hook not to be called after the final reply at MaxTurns, got %d calls", hookCalls)
+	if hookCalls != 4 {
+		t.Fatalf("expected final hook call to expose blocked continuation budget, got %d calls", hookCalls)
+	}
+	if !sawContinuationBlocked {
+		t.Fatal("expected hook input to report no continuation budget")
 	}
 }
 
@@ -569,6 +613,22 @@ func (d *capturingDecider) Decide(_ context.Context, in Input) (Decision, error)
 	reply := d.replies[0]
 	d.replies = d.replies[1:]
 	return Decision{Reply: reply}, nil
+}
+
+type replyThenToolDecider struct {
+	calls int
+}
+
+func (d *replyThenToolDecider) Decide(_ context.Context, _ Input) (Decision, error) {
+	d.calls++
+	switch d.calls {
+	case 1:
+		return Decision{Reply: "first reply"}, nil
+	case 2:
+		return Decision{ToolCalls: []agentic.ToolCall{{Name: "echo"}}}, nil
+	default:
+		return Decision{Reply: "done"}, nil
+	}
 }
 
 type recordingCompactor struct {
