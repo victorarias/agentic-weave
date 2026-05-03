@@ -268,10 +268,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 		if len(decision.ToolCalls) == 0 {
 			canContinue := hookContinuations < r.cfg.MaxTurns
+			pendingAssistant := message.AgentMessage{
+				Role:             message.RoleAssistant,
+				Content:          decision.Reply,
+				ReasoningContent: decision.Reasoning,
+				Timestamp:        time.Now(),
+			}
 			hookMessages, err := r.beforeNextModelCall(ctx, BeforeNextModelCallInput{
 				SystemPrompt: req.SystemPrompt,
 				UserMessage:  userMessage,
-				History:      historyMessages,
+				History:      append(historyMessages, pendingAssistant),
 				Tools:        tools,
 				ToolCalls:    toolCalls,
 				ToolResults:  toolResults,

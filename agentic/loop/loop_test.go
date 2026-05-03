@@ -502,9 +502,13 @@ func TestRunBeforeNextModelCallContinuesAfterFinalReplyWhenHookReturnsMessages(t
 	hookCalls := 0
 	runner := New(Config{
 		Decider: decider,
-		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, _ BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+		BeforeNextModelCall: BeforeNextModelCallHookFunc(func(_ context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
 			hookCalls++
 			if hookCalls == 2 {
+				last := in.History[len(in.History)-1]
+				if last.Role != message.RoleAssistant || last.Content != "first reply" {
+					t.Fatalf("expected post-final hook history to include pending assistant reply, got %#v", last)
+				}
 				return []message.AgentMessage{{Role: message.RoleUser, Content: "steer after first reply"}}, nil
 			}
 			return nil, nil
