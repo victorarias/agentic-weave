@@ -21,6 +21,19 @@ type Decider interface {
 	Decide(ctx context.Context, in Input) (Decision, error)
 }
 
+// BeforeNextModelCallHook can append externally sourced messages immediately
+// before the runner asks the model for another decision.
+type BeforeNextModelCallHook interface {
+	BeforeNextModelCall(ctx context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error)
+}
+
+// BeforeNextModelCallHookFunc adapts a function to BeforeNextModelCallHook.
+type BeforeNextModelCallHookFunc func(ctx context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error)
+
+func (f BeforeNextModelCallHookFunc) BeforeNextModelCall(ctx context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+	return f(ctx, in)
+}
+
 // Input captures state for a single decision step.
 type Input struct {
 	SystemPrompt   string
@@ -31,6 +44,17 @@ type Input struct {
 	ToolResults    []agentic.ToolResult
 	UserInlineData []agentic.InlineData // Images from the initial user message (first turn only).
 	Turn           int
+}
+
+// BeforeNextModelCallInput captures the loop state visible to a pre-model hook.
+type BeforeNextModelCallInput struct {
+	SystemPrompt string
+	UserMessage  string
+	History      []message.AgentMessage
+	Tools        []agentic.ToolDefinition
+	ToolCalls    []agentic.ToolCall
+	ToolResults  []agentic.ToolResult
+	Turn         int
 }
 
 // Decision is the result of a decision step.
@@ -50,15 +74,16 @@ type Decision struct {
 
 // Config controls the loop behavior.
 type Config struct {
-	Decider        Decider
-	Executor       agentic.ToolExecutor
-	HistoryStore   history.Store
-	Budget         *budget.Manager
-	Truncation     *truncate.Options
-	TruncationMode truncate.Mode
-	Events         events.Sink
-	MaxTurns       int
-	ToolCallerType string
+	Decider             Decider
+	Executor            agentic.ToolExecutor
+	HistoryStore        history.Store
+	Budget              *budget.Manager
+	Truncation          *truncate.Options
+	TruncationMode      truncate.Mode
+	Events              events.Sink
+	BeforeNextModelCall BeforeNextModelCallHook
+	MaxTurns            int
+	ToolCallerType      string
 }
 
 // Request provides the conversation input.
@@ -186,6 +211,25 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	turn := 0
 	runID := time.Now().UnixNano()
 	for {
+		hookMessages, err := r.beforeNextModelCall(ctx, BeforeNextModelCallInput{
+			SystemPrompt: req.SystemPrompt,
+			UserMessage:  userMessage,
+			History:      historyMessages,
+			Tools:        tools,
+			ToolCalls:    toolCalls,
+			ToolResults:  toolResults,
+			Turn:         turn,
+		})
+		if err != nil {
+			return Result{}, err
+		}
+		if len(hookMessages) > 0 {
+			if err := r.appendMessages(ctx, hookMessages, &historyMessages); err != nil {
+				return Result{}, err
+			}
+			toolCalls, toolResults = extractToolsFromHistory(historyMessages)
+		}
+
 		// Only pass user inline data on the first Decide() call — after
 		// that it's already in history as part of the user message.
 		var turnInlineData []agentic.InlineData
@@ -219,6 +263,30 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 
 		if len(decision.ToolCalls) == 0 {
+			hookMessages, err := r.beforeNextModelCall(ctx, BeforeNextModelCallInput{
+				SystemPrompt: req.SystemPrompt,
+				UserMessage:  userMessage,
+				History:      historyMessages,
+				Tools:        tools,
+				ToolCalls:    toolCalls,
+				ToolResults:  toolResults,
+				Turn:         turn,
+			})
+			if err != nil {
+				return Result{}, err
+			}
+			if len(hookMessages) > 0 {
+				if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, nil, &historyMessages, false); err != nil {
+					return Result{}, err
+				}
+				if err := r.appendMessages(ctx, hookMessages, &historyMessages); err != nil {
+					return Result{}, err
+				}
+				toolCalls, toolResults = extractToolsFromHistory(historyMessages)
+				turn++
+				continue
+			}
+
 			if err := r.recordAssistantMessage(ctx, turn, decision.Reply, decision.Reasoning, nil, &historyMessages, true); err != nil {
 				return Result{}, err
 			}
@@ -354,6 +422,27 @@ func (r *Runner) appendHistory(ctx context.Context, msg message.AgentMessage) er
 		return nil
 	}
 	return r.cfg.HistoryStore.Append(ctx, msg)
+}
+
+func (r *Runner) appendMessages(ctx context.Context, messages []message.AgentMessage, history *[]message.AgentMessage) error {
+	for _, msg := range messages {
+		*history = append(*history, msg)
+		if err := r.appendHistory(ctx, msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runner) beforeNextModelCall(ctx context.Context, in BeforeNextModelCallInput) ([]message.AgentMessage, error) {
+	if r.cfg.BeforeNextModelCall == nil {
+		return nil, nil
+	}
+	in.History = append([]message.AgentMessage(nil), in.History...)
+	in.Tools = append([]agentic.ToolDefinition(nil), in.Tools...)
+	in.ToolCalls = append([]agentic.ToolCall(nil), in.ToolCalls...)
+	in.ToolResults = append([]agentic.ToolResult(nil), in.ToolResults...)
+	return r.cfg.BeforeNextModelCall.BeforeNextModelCall(ctx, in)
 }
 
 func (r *Runner) applyCompaction(ctx context.Context, messages []message.AgentMessage) (string, []message.AgentMessage, error) {
