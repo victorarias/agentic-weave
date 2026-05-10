@@ -253,17 +253,27 @@ func TestCollectDecision_ReasoningWithoutCallbackStillAggregates(t *testing.T) {
 	}
 }
 
-// TestStreamingLoopDecider_DoesNotRetryAfterReasoningEmitted guards against
-// duplicate reasoning traces when the stream errors mid-flight: reasoning
-// fragments count as emitted output, so a transient error must NOT cause
-// the decider to replay the call (which would replay reasoning to the UI).
-func TestStreamingLoopDecider_DoesNotRetryAfterReasoningEmitted(t *testing.T) {
+// TestStreamingLoopDecider_RetriesAfterReasoningOnlyEmitted pins the recovery
+// behavior for transient mid-stream failures that interrupt a reasoning trace
+// before any text or tool calls land. A connection reset after the model has
+// streamed only reasoning fragments must NOT abort the turn — reasoning is
+// non-durable, so the second attempt can replay the trace from scratch.
+// Consumers that surface reasoning live can register OnReasoningReset to
+// clear their buffer between attempts (see the reset-callback test below).
+func TestStreamingLoopDecider_RetriesAfterReasoningOnlyEmitted(t *testing.T) {
 	calls := 0
 	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
 		calls++
-		ch := make(chan StreamEvent, 2)
-		ch <- ReasoningDeltaEvent{Delta: "thinking"}
-		ch <- ErrorEvent{Err: errors.New("rate limit")}
+		ch := make(chan StreamEvent, 3)
+		if calls == 1 {
+			ch <- ReasoningDeltaEvent{Delta: "first attempt thinking"}
+			ch <- ErrorEvent{Err: errors.New("read tcp 10.0.0.1:443->1.2.3.4:443: read: connection reset by peer")}
+			close(ch)
+			return ch, nil
+		}
+		ch <- ReasoningDeltaEvent{Delta: "retry thinking"}
+		ch <- TextDeltaEvent{Delta: "ok"}
+		ch <- DoneEvent{StopReason: "end_turn"}
 		close(ch)
 		return ch, nil
 	}}
@@ -272,40 +282,145 @@ func TestStreamingLoopDecider_DoesNotRetryAfterReasoningEmitted(t *testing.T) {
 	var liveReasoning []string
 	decider.OnReasoningDelta(func(s string) { liveReasoning = append(liveReasoning, s) })
 
-	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err == nil {
-		t.Fatal("expected error from rate-limit, got nil")
+	decision, err := decider.Decide(context.Background(), loop.Input{Turn: 0})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
 	}
-	if calls != 1 {
-		t.Errorf("attempts = %d, want 1 (reasoning is emitted output, retry would duplicate)", calls)
+	if calls != 2 {
+		t.Fatalf("attempts = %d, want 2 (transient mid-reasoning failure must retry)", calls)
 	}
-	if len(liveReasoning) != 1 {
-		t.Errorf("liveReasoning fragments = %d, want 1 (no replay)", len(liveReasoning))
+	if decision.Reply != "ok" {
+		t.Errorf("Reply = %q, want %q", decision.Reply, "ok")
+	}
+	if decision.Reasoning != "retry thinking" {
+		t.Errorf("Reasoning = %q, want only the successful attempt's trace", decision.Reasoning)
+	}
+	// Both attempts' live deltas reach the callback. With OnReasoningReset
+	// registered the consumer would clear in between; here we just pin that
+	// nothing is silently dropped.
+	if len(liveReasoning) != 2 {
+		t.Errorf("liveReasoning fragments = %d, want 2 (one per attempt)", len(liveReasoning))
 	}
 }
 
-// TestStreamingLoopDecider_RetainsReasoningEvenWithoutCallback confirms the
-// retry guard still kicks in when the caller hasn't subscribed to live
-// reasoning — emittedOutput must be set whether or not OnReasoningDelta was
-// configured.
-func TestStreamingLoopDecider_RetainsRetryGuardWithoutReasoningCallback(t *testing.T) {
+// TestStreamingLoopDecider_FiresReasoningResetBeforeRetry confirms the reset
+// callback fires when a retry is about to replay reasoning, so consumers that
+// surface live reasoning can clear their UI buffer before the second attempt
+// streams a fresh trace.
+func TestStreamingLoopDecider_FiresReasoningResetBeforeRetry(t *testing.T) {
 	calls := 0
 	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
 		calls++
-		ch := make(chan StreamEvent, 2)
-		ch <- ReasoningDeltaEvent{Delta: "thinking"}
-		ch <- ErrorEvent{Err: errors.New("rate limit")}
+		ch := make(chan StreamEvent, 3)
+		if calls == 1 {
+			ch <- ReasoningDeltaEvent{Delta: "discarded"}
+			ch <- ErrorEvent{Err: errors.New("connection reset by peer")}
+			close(ch)
+			return ch, nil
+		}
+		ch <- ReasoningDeltaEvent{Delta: "kept"}
+		ch <- TextDeltaEvent{Delta: "done"}
+		ch <- DoneEvent{StopReason: "end_turn"}
 		close(ch)
 		return ch, nil
 	}}
 
 	decider := NewStreamingLoopDecider(streamer, func(string) {})
-	// Deliberately no OnReasoningDelta configured.
 
-	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err == nil {
-		t.Fatal("expected error from rate-limit, got nil")
+	type event struct {
+		kind  string
+		value string
 	}
-	if calls != 1 {
-		t.Errorf("attempts = %d, want 1 (reasoning is still emitted output even without a live callback)", calls)
+	var events []event
+	decider.OnReasoningDelta(func(s string) { events = append(events, event{kind: "delta", value: s}) })
+	decider.OnReasoningReset(func() { events = append(events, event{kind: "reset"}) })
+
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("attempts = %d, want 2", calls)
+	}
+
+	want := []event{
+		{kind: "delta", value: "discarded"},
+		{kind: "reset"},
+		{kind: "delta", value: "kept"},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+	for i, ev := range events {
+		if ev != want[i] {
+			t.Errorf("events[%d] = %#v, want %#v", i, ev, want[i])
+		}
+	}
+}
+
+// TestStreamingLoopDecider_RetriesAfterReasoningEmittedWithoutResetCallback
+// pins that callers who don't subscribe to OnReasoningReset still get the
+// retry — the reset hook is purely a UI-clear signal, not a precondition for
+// recovery.
+func TestStreamingLoopDecider_RetriesAfterReasoningEmittedWithoutResetCallback(t *testing.T) {
+	calls := 0
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		calls++
+		ch := make(chan StreamEvent, 3)
+		if calls == 1 {
+			ch <- ReasoningDeltaEvent{Delta: "thinking"}
+			ch <- ErrorEvent{Err: errors.New("connection reset by peer")}
+			close(ch)
+			return ch, nil
+		}
+		ch <- TextDeltaEvent{Delta: "ok"}
+		ch <- DoneEvent{StopReason: "end_turn"}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	// Deliberately no OnReasoningDelta or OnReasoningReset configured.
+
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("attempts = %d, want 2 (reasoning is non-durable; retry should fire even without reset callback)", calls)
+	}
+}
+
+// TestStreamingLoopDecider_DoesNotFireResetWhenNoReasoningEmitted ensures the
+// reset callback is *only* fired when there's actually buffered reasoning to
+// discard. A retry triggered by a stream that never emitted reasoning leaves
+// the consumer's reasoning buffer untouched.
+func TestStreamingLoopDecider_DoesNotFireResetWhenNoReasoningEmitted(t *testing.T) {
+	calls := 0
+	streamer := stubStreamer{streamFn: func(ctx context.Context, input Input) (<-chan StreamEvent, error) {
+		calls++
+		ch := make(chan StreamEvent, 2)
+		if calls == 1 {
+			ch <- ErrorEvent{Err: errors.New("connection reset by peer")}
+			close(ch)
+			return ch, nil
+		}
+		ch <- TextDeltaEvent{Delta: "ok"}
+		ch <- DoneEvent{StopReason: "end_turn"}
+		close(ch)
+		return ch, nil
+	}}
+
+	decider := NewStreamingLoopDecider(streamer, func(string) {})
+	resetCalls := 0
+	decider.OnReasoningReset(func() { resetCalls++ })
+
+	if _, err := decider.Decide(context.Background(), loop.Input{Turn: 0}); err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("attempts = %d, want 2", calls)
+	}
+	if resetCalls != 0 {
+		t.Errorf("resetCalls = %d, want 0 (no reasoning was emitted, nothing to reset)", resetCalls)
 	}
 }
 
