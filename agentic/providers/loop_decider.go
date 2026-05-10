@@ -30,6 +30,7 @@ type StreamingLoopDecider struct {
 	streamer         Streamer
 	onDelta          func(string)
 	onReasoningDelta func(string)
+	onReasoningReset func()
 	onDecision       func(DecisionMeta)
 }
 
@@ -57,6 +58,18 @@ func (d *StreamingLoopDecider) OnReasoningDelta(fn func(string)) {
 	d.onReasoningDelta = fn
 }
 
+// OnReasoningReset registers a callback fired before a stream retry that will
+// replay reasoning fragments from scratch. Consumers that surface reasoning
+// live (via OnReasoningDelta) should clear their UI buffer here so the retry's
+// fresh trace doesn't concatenate with the discarded one. The decider will
+// retry transient stream failures even after reasoning was emitted, because
+// reasoning is not a durable side effect — only text and tool calls block
+// retry. Optional: callers that don't surface reasoning live can leave this
+// unset and the retries still happen, just without a UI-clear signal.
+func (d *StreamingLoopDecider) OnReasoningReset(fn func()) {
+	d.onReasoningReset = fn
+}
+
 // Decide implements loop.Decider.
 func (d *StreamingLoopDecider) Decide(ctx context.Context, in loop.Input) (loop.Decision, error) {
 	if d == nil || d.streamer == nil {
@@ -69,9 +82,12 @@ func (d *StreamingLoopDecider) Decide(ctx context.Context, in loop.Input) (loop.
 	)
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		decision, err, emittedOutput := d.decideOnce(ctx, in)
+		decision, err, signals := d.decideOnce(ctx, in)
 		if err != nil {
-			if shouldRetryStreamFailure(ctx, err, attempt, maxAttempts, emittedOutput) {
+			if shouldRetryStreamFailure(ctx, err, attempt, maxAttempts, signals.durable()) {
+				if signals.reasoning && d.onReasoningReset != nil {
+					d.onReasoningReset()
+				}
 				if waitErr := waitForRetryBackoff(ctx, attempt, baseBackoff); waitErr != nil {
 					return loop.Decision{}, waitErr
 				}
@@ -101,7 +117,20 @@ func (d *StreamingLoopDecider) Decide(ctx context.Context, in loop.Input) (loop.
 	return loop.Decision{}, errors.New("providers: llm stream failed after retries")
 }
 
-func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (Decision, error, bool) {
+// emittedSignals tracks what kinds of output the stream produced before it
+// errored or finished. Durable signals (text, tool calls) block retry because
+// replaying them would duplicate user-visible content or re-execute side
+// effects. Reasoning is non-durable: replaying it just shows another live
+// trace, and only the final attempt's reasoning is round-tripped.
+type emittedSignals struct {
+	text      bool
+	toolCalls bool
+	reasoning bool
+}
+
+func (s emittedSignals) durable() bool { return s.text || s.toolCalls }
+
+func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (Decision, error, emittedSignals) {
 	stream, err := d.streamer.Stream(ctx, Input{
 		SystemPrompt: in.SystemPrompt,
 		UserMessage:  "",
@@ -113,37 +142,39 @@ func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (D
 		// inline data directly.
 	})
 	if err != nil {
-		return Decision{}, err, false
+		return Decision{}, err, emittedSignals{}
 	}
 
-	var emittedOutput bool
+	var signals emittedSignals
 	opts := []CollectOption{
 		WithOnDelta(func(delta string) {
 			d.onDelta(delta)
-			emittedOutput = true
+			signals.text = true
 		}),
-		// Reasoning deltas count as emitted output: replaying them would
-		// duplicate fragments already shown to the live callback (UI), and
-		// some providers expect a single reasoning trace per turn.
 		WithOnReasoningDelta(func(delta string) {
 			if d.onReasoningDelta != nil {
 				d.onReasoningDelta(delta)
 			}
-			emittedOutput = true
+			signals.reasoning = true
 		}),
 	}
 	decision, err := CollectDecision(ctx, stream, opts...)
 	if len(decision.ToolCalls) > 0 {
-		emittedOutput = true
+		signals.toolCalls = true
 	}
 	if strings.TrimSpace(decision.Reply) != "" {
-		emittedOutput = true
+		signals.text = true
 	}
-	return decision, err, emittedOutput
+	return decision, err, signals
 }
 
-func shouldRetryStreamFailure(ctx context.Context, err error, attempt int, maxAttempts int, emittedOutput bool) bool {
-	if err == nil || attempt >= maxAttempts || emittedOutput {
+// shouldRetryStreamFailure decides whether a stream failure should be retried.
+// emittedDurableOutput is true when the stream emitted text or tool calls
+// before failing — replaying those would duplicate the visible reply or
+// re-trigger tool execution, so retry is blocked. Reasoning-only emissions do
+// NOT count as durable output (see emittedSignals.durable).
+func shouldRetryStreamFailure(ctx context.Context, err error, attempt int, maxAttempts int, emittedDurableOutput bool) bool {
+	if err == nil || attempt >= maxAttempts || emittedDurableOutput {
 		return false
 	}
 	if ctx.Err() != nil {
