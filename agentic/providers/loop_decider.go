@@ -82,7 +82,7 @@ func (d *StreamingLoopDecider) Decide(ctx context.Context, in loop.Input) (loop.
 	)
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		decision, err, signals := d.decideOnce(ctx, in)
+		decision, signals, err := d.decideOnce(ctx, in)
 		if err != nil {
 			if shouldRetryStreamFailure(ctx, err, attempt, maxAttempts, signals.durable()) {
 				if signals.reasoning && d.onReasoningReset != nil {
@@ -130,7 +130,7 @@ type emittedSignals struct {
 
 func (s emittedSignals) durable() bool { return s.text || s.toolCalls }
 
-func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (Decision, error, emittedSignals) {
+func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (Decision, emittedSignals, error) {
 	stream, err := d.streamer.Stream(ctx, Input{
 		SystemPrompt: in.SystemPrompt,
 		UserMessage:  "",
@@ -142,7 +142,7 @@ func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (D
 		// inline data directly.
 	})
 	if err != nil {
-		return Decision{}, err, emittedSignals{}
+		return Decision{}, emittedSignals{}, err
 	}
 
 	var signals emittedSignals
@@ -165,7 +165,7 @@ func (d *StreamingLoopDecider) decideOnce(ctx context.Context, in loop.Input) (D
 	if strings.TrimSpace(decision.Reply) != "" {
 		signals.text = true
 	}
-	return decision, err, signals
+	return decision, signals, err
 }
 
 // shouldRetryStreamFailure decides whether a stream failure should be retried.
